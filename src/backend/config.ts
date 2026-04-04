@@ -1,3 +1,7 @@
+// DEPRECATED: The Dexie configuration in this file is retained only for the
+// one-time IndexedDB → SQLite migration tool (migration-indexeddb-to-sqlite.ts).
+// The constants NUM_AUTO_BACKUPS and AUTO_BACKUP_TIMEOUT are still referenced by
+// sqlite-backup-scheduler.ts. This file will be split/removed in a future cleanup.
 import Dexie, { Transaction } from 'dexie';
 import fse from 'fs-extra';
 

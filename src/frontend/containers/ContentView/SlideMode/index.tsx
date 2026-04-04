@@ -336,13 +336,13 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
           }
         } else {
           // Fallback for when source is not ready - provide reasonable defaults for videos
-          const fallbackWidth = isFileExtensionVideo(fileExtension) 
-            ? (imgWidth || 1920) 
-            : (imgWidth || 0);
-          const fallbackHeight = isFileExtensionVideo(fileExtension) 
-            ? (imgHeight || 1080) 
-            : (imgHeight || 0);
-            
+          const fallbackWidth = isFileExtensionVideo(fileExtension)
+            ? imgWidth || 1920
+            : imgWidth || 0;
+          const fallbackHeight = isFileExtensionVideo(fileExtension)
+            ? imgHeight || 1080
+            : imgHeight || 0;
+
           return {
             src: thumbnailSrc || absolutePath,
             dimension: createDimension(fallbackWidth, fallbackHeight),
@@ -355,11 +355,11 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
       const isVideo = isFileExtensionVideo(file.extension);
       console.log(image.value.err);
       return (
-        <ImageFallback 
-          error={image.value.err} 
+        <ImageFallback
+          error={image.value.err}
           absolutePath={absolutePath}
           isVideo={isVideo}
-          customMessage={isVideo ? "Video metadata could not be read" : undefined}
+          customMessage={isVideo ? 'Video metadata could not be read' : undefined}
         />
       );
     } else {
@@ -480,22 +480,24 @@ interface ImageFallbackProps {
 const ImageFallback = ({ error, absolutePath, isVideo, customMessage }: ImageFallbackProps) => {
   const fileExtension = SysPath.extname(absolutePath).toLowerCase();
   const isVideoFile = isVideo || isFileExtensionVideo(fileExtension.slice(1));
-  
+
   const getErrorMessage = () => {
-    if (customMessage) return customMessage;
-    
+    if (customMessage) {
+      return customMessage;
+    }
+
     if (isVideoFile) {
       return 'Could not load video';
     }
-    
+
     return `Could not load ${error ? '' : 'full '}image`;
   };
-  
+
   const getHelpText = () => {
     if (isVideoFile) {
       return 'This may be due to video metadata issues or unsupported codec. Try opening in an external video player.';
     }
-    
+
     return 'Try opening in an external application to verify the file is not corrupted.';
   };
 
@@ -519,7 +521,7 @@ const ImageFallback = ({ error, absolutePath, isVideo, customMessage }: ImageFal
             .openExternal(encodeFilePath(absolutePath))
             .catch((e) => console.error(e, absolutePath))
         }
-        text={isVideoFile ? "Open in external video player" : "Open in external application"}
+        text={isVideoFile ? 'Open in external video player' : 'Open in external application'}
       />
     </div>
   );

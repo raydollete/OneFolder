@@ -6,16 +6,19 @@
 // in the HTML file
 import './style.scss';
 
-import Dexie from 'dexie';
 import fse from 'fs-extra';
 import { autorun, reaction, runInAction } from 'mobx';
+import path from 'path';
 import React from 'react';
 import { Root, createRoot } from 'react-dom/client';
 
 import { IS_DEV } from 'common/process';
 import { IS_PREVIEW_WINDOW, WINDOW_STORAGE_KEY } from 'common/window';
 import { RendererMessenger } from 'src/ipc/renderer';
-import Backend from './backend/backend';
+import SQLiteBackend from './backend/sqlite-backend';
+import SQLiteBackupScheduler from './backend/sqlite-backup-scheduler';
+import { sqliteInit, SQLITE_DB_FILENAME } from './backend/sqlite-config';
+import { migrateIfNeeded } from './backend/migration-indexeddb-to-sqlite';
 import App from './frontend/App';
 import SplashScreen from './frontend/containers/SplashScreen';
 import StoreProvider from './frontend/contexts/StoreContext';
@@ -24,8 +27,6 @@ import PreviewApp from './frontend/Preview';
 import { FILE_STORAGE_KEY } from './frontend/stores/FileStore';
 import RootStore from './frontend/stores/RootStore';
 import { PREFERENCES_STORAGE_KEY } from './frontend/stores/UiStore';
-import BackupScheduler from './backend/backup-scheduler';
-import { DB_NAME, dbInit } from './backend/config';
 
 async function main(): Promise<void> {
   console.groupCollapsed('Initializing OneFolder');
@@ -40,21 +41,45 @@ async function main(): Promise<void> {
 
   root.render(<SplashScreen />);
 
-  const db = dbInit(DB_NAME);
+  // Determine the on-disk path for the SQLite database.
+  const userDataPath = await RendererMessenger.getPath('userData');
+  const dbPath = path.join(userDataPath, SQLITE_DB_FILENAME);
+
+  // Run the one-time IndexedDB → SQLite migration before opening the backend.
+  // migrateIfNeeded is idempotent and no-ops after the first successful run.
+  try {
+    const migrated = await migrateIfNeeded(dbPath);
+    if (migrated) {
+      console.info('renderer: IndexedDB → SQLite migration completed successfully.');
+    }
+  } catch (e) {
+    // Migration failure is non-fatal: the app continues with the SQLite backend.
+    // The migration will be retried on the next launch.
+    console.error('renderer: IndexedDB → SQLite migration failed — continuing with SQLite.', e);
+  }
+
+  const db = sqliteInit(dbPath);
 
   if (!IS_PREVIEW_WINDOW) {
-    await runMainApp(db, root);
+    await runMainApp(db, dbPath, root);
   } else {
     await runPreviewApp(db, root);
   }
   console.groupEnd();
 }
 
-async function runMainApp(db: Dexie, root: Root): Promise<void> {
+async function runMainApp(
+  db: import('better-sqlite3').Database,
+  dbPath: string,
+  root: Root,
+): Promise<void> {
   const defaultBackupDirectory = await RendererMessenger.getDefaultBackupDirectory();
-  const backup = new BackupScheduler(db, defaultBackupDirectory);
+  // Initialize backup scheduler first so its reference is available to the
+  // backend's notifyChange callback. SQLiteBackupScheduler.init only creates
+  // the backup directory, so this is fast.
+  const backup = await SQLiteBackupScheduler.init(db, dbPath, defaultBackupDirectory);
   const [backend] = await Promise.all([
-    Backend.init(db, () => backup.schedule()),
+    SQLiteBackend.init(db, () => backup.schedule()),
     fse.ensureDir(defaultBackupDirectory),
   ]);
 
@@ -218,9 +243,11 @@ async function runMainApp(db: Dexie, root: Root): Promise<void> {
   }
 }
 
-async function runPreviewApp(db: Dexie, root: Root): Promise<void> {
-  const backend = new Backend(db, () => {});
-  const rootStore = await RootStore.preview(backend, new BackupScheduler(db, ''));
+async function runPreviewApp(db: import('better-sqlite3').Database, root: Root): Promise<void> {
+  // Preview window is read-only: no-op callbacks for change notification and
+  // backup scheduling keep the interface compatible without touching the disk.
+  const backend = new SQLiteBackend(db, () => {});
+  const rootStore = await RootStore.preview(backend, new SQLiteBackupScheduler(db, '', ''));
 
   RendererMessenger.initialized();
 

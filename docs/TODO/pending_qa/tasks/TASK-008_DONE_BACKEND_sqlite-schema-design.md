@@ -2,11 +2,11 @@
 id: TASK-008
 title: 'Design and implement SQLite schema with compound indexes and FTS5'
 investigation: INV-002
-status: planned
+status: done
 priority: high
 blocked_by: []
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-04
 files:
   - 'src/backend/sqlite-config.ts (new)'
 ---
@@ -23,7 +23,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
 ## Implementation Steps
 
-- [ ] 1. Create `src/backend/sqlite-config.ts`. Define the SQL schema:
+- [x] 1. Create `src/backend/sqlite-config.ts`. Define the SQL schema:
 
   ```sql
   -- Core tables
@@ -98,7 +98,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
   );
   ```
 
-- [ ] 2. Define compound indexes:
+- [x] 2. Define compound indexes:
 
   ```sql
   CREATE INDEX IF NOT EXISTS idx_files_locationId ON files(locationId);
@@ -120,7 +120,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
   CREATE INDEX IF NOT EXISTS idx_visualHashes_absolutePath ON visualHashes(absolutePath);
   ```
 
-- [ ] 3. Define FTS5 virtual table for full-text filename search:
+- [x] 3. Define FTS5 virtual table for full-text filename search:
 
   ```sql
   CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
@@ -143,13 +143,13 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
   END;
   ```
 
-- [ ] 4. Implement a schema versioning system using a `pragma user_version` integer. Export a `sqliteInit(dbPath: string): Database` function that opens the database, runs `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, creates all tables/indexes if they do not exist, and applies any version migrations.
+- [x] 4. Implement a schema versioning system using a `pragma user_version` integer. Export a `sqliteInit(dbPath: string): Database` function that opens the database, runs `PRAGMA journal_mode=WAL`, `PRAGMA foreign_keys=ON`, creates all tables/indexes if they do not exist, and applies any version migrations.
 
-- [ ] 5. Export constants: `SQLITE_DB_FILENAME = 'onefolder.db'`.
+- [x] 5. Export constants: `SQLITE_DB_FILENAME = 'onefolder.db'`.
 
 ## Done When
 
-- [ ] `src/backend/sqlite-config.ts` exists with complete schema, indexes, FTS5, and initialization function
-- [ ] Schema supports all 6 existing tables plus `file_tags` junction table and `files_fts` FTS5 table
-- [ ] `sqliteInit()` function creates the database file, applies schema, and returns a `better-sqlite3` Database instance
-- [ ] Version migration system is in place using `PRAGMA user_version`
+- [x] `src/backend/sqlite-config.ts` exists with complete schema, indexes, FTS5, and initialization function
+- [x] Schema supports all 6 existing tables plus `file_tags` junction table and `files_fts` FTS5 table
+- [x] `sqliteInit()` function creates the database file, applies schema, and returns a `better-sqlite3` Database instance
+- [x] Version migration system is in place using `PRAGMA user_version`

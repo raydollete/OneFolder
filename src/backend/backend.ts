@@ -1,4 +1,7 @@
-import Dexie, { Collection, IndexableType, Table, WhereClause } from 'dexie';
+// DEPRECATED: This file is superseded by sqlite-backend.ts and will be removed
+// after the IndexedDB → SQLite migration has been in production for a few
+// release cycles and all users have migrated. Do not use this class in new code.
+import Dexie, { Collection, Table, WhereClause } from 'dexie';
 
 import { retainArray, shuffleArray } from '../../common/core';
 import { DataStorage } from '../api/data-storage';
@@ -159,7 +162,7 @@ export default class Backend implements DataStorage {
     return files as FileDTO[];
   }
 
-  async fetchFilesByKey(key: keyof FileDTO, value: IndexableType): Promise<FileDTO[]> {
+  async fetchFilesByKey(key: keyof FileDTO, value: string | number | Date): Promise<FileDTO[]> {
     console.info('IndexedDB: Fetching files by key/value...', { key, value });
     return this.#files.where(key).equals(value).toArray();
   }

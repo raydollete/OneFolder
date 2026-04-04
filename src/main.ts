@@ -17,11 +17,35 @@ import { autoUpdater, UpdateInfo } from 'electron-updater';
 import TrayIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-256x256.png';
 import AppIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-512x512.png';
 import { createBugReport, githubUrl } from '../common/config';
-import { IS_DEV } from '../common/process';
+import { IS_DEV, setPortableMode } from '../common/process';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress } from './ipc/messages';
 
-// TODO: change this when running in portable mode, see portable-improvements branch
+// Portable mode detection — must run before any app.getPath() calls so that
+// app.setPath('userData') takes effect for all subsequent consumers.
+const _portableAppDir = app.isPackaged
+  ? path.dirname(process.execPath)
+  : path.resolve(__dirname, '..');
+
+const IS_PORTABLE_MODE =
+  fse.pathExistsSync(path.join(_portableAppDir, 'portable.txt')) ||
+  fse.pathExistsSync(path.join(_portableAppDir, 'data'));
+
+if (IS_PORTABLE_MODE) {
+  const portableDataDir = path.join(_portableAppDir, 'data');
+  // Ensure the data directory and its expected subdirectories exist on first launch.
+  fse.ensureDirSync(portableDataDir);
+  fse.ensureDirSync(path.join(portableDataDir, 'backups'));
+  fse.ensureDirSync(path.join(portableDataDir, 'thumbnails'));
+  fse.ensureDirSync(path.join(portableDataDir, 'themes'));
+  app.setPath('userData', portableDataDir);
+  // Redirect temp as well so thumbnail directory falls inside the portable data dir.
+  app.setPath('temp', portableDataDir);
+}
+
+// Inform the common/process module so other main-process code can read IS_PORTABLE.
+setPortableMode(IS_PORTABLE_MODE);
+
 const basePath = app.getPath('userData');
 
 const preferencesFilePath = path.join(basePath, 'preferences.json');
@@ -76,7 +100,7 @@ function initialize() {
       // Auto update enabled by default
       preferences = { checkForUpdatesOnStartup: true };
     }
-    if (preferences.checkForUpdatesOnStartup) {
+    if (preferences.checkForUpdatesOnStartup && !IS_PORTABLE_MODE) {
       autoUpdater.checkForUpdates();
     }
   } catch (e) {
@@ -675,7 +699,27 @@ MainMessenger.onIsMaximized(() => mainWindow?.isMaximized() ?? false);
 
 MainMessenger.onGetVersion(getVersion);
 
-MainMessenger.onCheckForUpdates(() => autoUpdater.checkForUpdates());
+MainMessenger.onCheckForUpdates(async () => {
+  if (IS_PORTABLE_MODE) {
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      await dialog
+        .showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Portable Mode',
+          message:
+            'Auto-updates are disabled in portable mode. To update, download the latest release and replace the executable manually.',
+          buttons: ['OK', 'Open releases page'],
+        })
+        .then((result) => {
+          if (result.response === 1) {
+            shell.openExternal('https://github.com/OneFolderApp/OneFolder/releases/latest');
+          }
+        });
+    }
+    return;
+  }
+  autoUpdater.checkForUpdates();
+});
 
 MainMessenger.onToggleCheckUpdatesOnStartup(() => {
   updatePreferences({
@@ -685,6 +729,8 @@ MainMessenger.onToggleCheckUpdatesOnStartup(() => {
 });
 
 MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => preferences.checkForUpdatesOnStartup === true);
+
+MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 
 // Helper functions and variables/constants
 

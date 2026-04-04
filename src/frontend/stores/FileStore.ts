@@ -1090,7 +1090,7 @@ class FileStore {
     fileIds: string[],
   ): Promise<void> {
     try {
-      // Don't set id field - let Dexie auto-increment it
+      // id is intentionally omitted; SQLite AUTOINCREMENT on the INTEGER PRIMARY KEY assigns it
       const dismissedGroup = {
         groupHash,
         algorithm,

@@ -21,6 +21,7 @@ import {
   IS_CLIP_SERVER_RUNNING,
   IS_FULL_SCREEN,
   IS_MAXIMIZED,
+  IS_PORTABLE_MODE,
   IS_RUNNING_IN_BACKGROUND,
   TagsMessage,
   ThemeMessage,
@@ -174,4 +175,7 @@ export class MainMessenger {
 
   static onIsCheckUpdatesOnStartupEnabled = (cb: () => boolean) =>
     ipcMain.on(IS_CHECK_UPDATES_ON_STARTUP_ENABLED, (e) => (e.returnValue = cb()));
+
+  static onIsPortableMode = (cb: () => boolean) =>
+    ipcMain.on(IS_PORTABLE_MODE, (e) => (e.returnValue = cb()));
 }

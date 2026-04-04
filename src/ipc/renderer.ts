@@ -21,6 +21,7 @@ import {
   IS_CLIP_SERVER_RUNNING,
   IS_FULL_SCREEN,
   IS_MAXIMIZED,
+  IS_PORTABLE_MODE,
   IS_RUNNING_IN_BACKGROUND,
   TagsMessage,
   ThemeMessage,
@@ -162,7 +163,15 @@ export class RendererMessenger {
   static toggleCheckUpdatesOnStartup = (): void =>
     ipcRenderer.send(TOGGLE_CHECK_UPDATES_ON_STARTUP);
 
+  static isPortableMode = (): boolean => ipcRenderer.sendSync(IS_PORTABLE_MODE);
+
   static getDefaultThumbnailDirectory = async () => {
+    // In portable mode, store thumbnails inside the portable data dir rather than
+    // the system temp directory so they travel with the app.
+    if (RendererMessenger.isPortableMode()) {
+      const userDataPath = await RendererMessenger.getPath('userData');
+      return path.join(userDataPath, 'thumbnails');
+    }
     const userDataPath = await RendererMessenger.getPath('temp');
     return path.join(userDataPath, 'OneFolder', 'thumbnails');
   };

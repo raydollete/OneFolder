@@ -1,4 +1,3 @@
-import { IndexableType } from 'dexie';
 import { ConditionDTO, OrderBy, OrderDirection } from './data-storage-search';
 import { DismissedDuplicateGroupDTO } from './dismissed-duplicate-group';
 import { FileDTO } from './file';
@@ -7,6 +6,11 @@ import { ID } from './id';
 import { LocationDTO } from './location';
 import { TagDTO } from './tag';
 import { VisualHashDTO } from './visual-hash';
+
+// A Dexie-free union type covering all key values used in fetchFilesByKey.
+// This replaces the former IndexableType import from dexie, decoupling the
+// interface contract from any specific database implementation.
+type IndexableValue = string | number | Date;
 
 /**
  * The user generated persisted data edited or viewed by one or multiple actors (users, multiple devices etc.).
@@ -21,7 +25,7 @@ export interface DataStorage {
   fetchTags(): Promise<TagDTO[]>;
   fetchFiles(order: OrderBy<FileDTO>, fileOrder: OrderDirection): Promise<FileDTO[]>;
   fetchFilesByID(ids: ID[]): Promise<FileDTO[]>;
-  fetchFilesByKey(key: keyof FileDTO, value: IndexableType): Promise<FileDTO[]>;
+  fetchFilesByKey(key: keyof FileDTO, value: IndexableValue): Promise<FileDTO[]>;
   fetchLocations(): Promise<LocationDTO[]>;
   fetchSearches(): Promise<FileSearchDTO[]>;
   searchFiles(

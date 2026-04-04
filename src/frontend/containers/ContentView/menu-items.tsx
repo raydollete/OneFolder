@@ -81,17 +81,15 @@ export const FileViewerMenuItems = ({ file }: { file: ClientFile }) => {
         text="Open Tag Selector (T)"
         icon={IconSet.TAG}
       />
-      <MenuItem
-        onClick={handleRemoveAllTags}
-        text="Remove All Tags"
-        icon={IconSet.DELETE}
-      />
+      <MenuItem onClick={handleRemoveAllTags} text="Remove All Tags" icon={IconSet.DELETE} />
       <MenuSubItem text="Search Similar Images..." icon={IconSet.MORE}>
         <MenuItem
           onClick={(e) =>
             handleSearchSimilar(
               e,
-              file.tags.toJSON().map((t: any) => new ClientTagSearchCriteria('tags', t.id, 'contains')),
+              file.tags
+                .toJSON()
+                .map((t: any) => new ClientTagSearchCriteria('tags', t.id, 'contains')),
             )
           }
           text="Same Tags"

@@ -54,13 +54,15 @@ export const Advanced = observer(() => {
   return (
     <>
       <h3>Application Information</h3>
-      <div style={{
-        padding: '12px',
-        backgroundColor: 'var(--input-color)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '4px',
-        marginBottom: '20px'
-      }}>
+      <div
+        style={{
+          padding: '12px',
+          backgroundColor: 'var(--input-color)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '4px',
+          marginBottom: '20px',
+        }}
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontWeight: '500' }}>Version:</span>
           <span style={{ fontFamily: 'monospace', fontSize: '14px' }}>

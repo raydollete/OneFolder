@@ -2,11 +2,11 @@
 id: TASK-009
 title: 'Implement SQLiteBackend class with DataStorage interface'
 investigation: INV-002
-status: planned
+status: DONE
 priority: high
 blocked_by: [TASK-007, TASK-008]
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-04
 files:
   - 'src/backend/sqlite-backend.ts (new)'
   - 'src/api/data-storage.ts'
@@ -24,13 +24,13 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
 ## Implementation Steps
 
-- [ ] 1. Install `better-sqlite3` and `@types/better-sqlite3` as dependencies: `yarn add better-sqlite3 && yarn add -D @types/better-sqlite3`.
+- [x] 1. Install `better-sqlite3` and `@types/better-sqlite3` as dependencies: `yarn add better-sqlite3 && yarn add -D @types/better-sqlite3`. (Already installed by TASK-008; verified in package.json.)
 
-- [ ] 2. Create `src/backend/sqlite-backend.ts`. Import `Database` from `better-sqlite3` and the `DataStorage` interface. The constructor accepts a `Database` instance and a `notifyChange` callback (matching the existing pattern).
+- [x] 2. Create `src/backend/sqlite-backend.ts`. Import `Database` from `better-sqlite3` and the `DataStorage` interface. The constructor accepts a `Database` instance and a `notifyChange` callback (matching the existing pattern).
 
-- [ ] 3. Implement `static async init(db: Database, notifyChange: () => void): Promise<SQLiteBackend>` -- creates root tag if not exists (matching `Backend.init` logic at `src/backend/backend.ts:114-132`).
+- [x] 3. Implement `static async init(db: Database, notifyChange: () => void): Promise<SQLiteBackend>` -- creates root tag if not exists (matching `Backend.init` logic at `src/backend/backend.ts:114-132`).
 
-- [ ] 4. Implement all DataStorage methods. Key implementation notes for each:
+- [x] 4. Implement all DataStorage methods. Key implementation notes for each:
 
   **`fetchTags()`** -- `SELECT * FROM tags` then deserialize: parse `subTags` from JSON string to `ID[]`, parse `dateAdded` from ISO string to Date, convert `isHidden` from 0/1 to boolean.
 
@@ -87,24 +87,24 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
   **Dismissed duplicate group methods** -- Direct SQL CRUD on `dismissedDuplicateGroups` table.
 
-- [ ] 5. Create helper functions for DTO serialization/deserialization:
+- [x] 5. Create helper functions for DTO serialization/deserialization:
   - `fileRowToDTO(row): FileDTO` -- converts SQLite row (ISO dates, comma-separated tags) to FileDTO
   - `fileDTOToRow(dto): object` -- converts FileDTO to SQLite row values
   - `tagRowToDTO(row): TagDTO` -- parses JSON subTags, converts isHidden 0/1 to boolean
   - `locationRowToDTO(row): LocationDTO` -- parses JSON subLocations
   - `searchRowToDTO(row): FileSearchDTO` -- parses JSON criteria
 
-- [ ] 6. Use `better-sqlite3`'s `transaction()` method for all multi-statement operations. This is synchronous and much simpler than Dexie's async transaction API.
+- [x] 6. Use `better-sqlite3`'s `transaction()` method for all multi-statement operations. This is synchronous and much simpler than Dexie's async transaction API.
 
-- [ ] 7. Prepare all frequently-used SQL statements at init time using `db.prepare()` for optimal performance.
+- [x] 7. Prepare all frequently-used SQL statements at init time using `db.prepare()` for optimal performance.
 
 ## Done When
 
-- [ ] `SQLiteBackend` class compiles and implements every method of the `DataStorage` interface
-- [ ] Tag queries use the `file_tags` junction table (not JSON arrays)
-- [ ] `countFiles()` uses `SELECT COUNT(*)` (no full table scan)
-- [ ] String "contains" queries use `LIKE` with proper escaping (or FTS5 for full-text)
-- [ ] All Date fields are correctly serialized to/from ISO 8601 strings
-- [ ] All array fields (`tags`, `subTags`, `subLocations`, `criteria`) are correctly serialized
-- [ ] Prepared statements are used for hot-path queries
-- [ ] `yarn lint` passes
+- [x] `SQLiteBackend` class compiles and implements every method of the `DataStorage` interface
+- [x] Tag queries use the `file_tags` junction table (not JSON arrays)
+- [x] `countFiles()` uses `SELECT COUNT(*)` (no full table scan)
+- [x] String "contains" queries use `LIKE` with proper escaping (or FTS5 for full-text)
+- [x] All Date fields are correctly serialized to/from ISO 8601 strings
+- [x] All array fields (`tags`, `subTags`, `subLocations`, `criteria`) are correctly serialized
+- [x] Prepared statements are used for hot-path queries
+- [x] `yarn lint` passes

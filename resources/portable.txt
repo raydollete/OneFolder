@@ -1,0 +1,17 @@
+This file enables portable mode for OneFolder.
+
+When this file is present next to the OneFolder executable (or AppImage on Linux),
+all application data will be stored in the data/ directory next to the executable,
+instead of in the system user data directory.
+
+This includes:
+  data/onefolder.db  — the SQLite database
+  data/thumbnails/   — generated image thumbnails
+  data/backups/      — database backups
+  data/themes/       — custom themes
+
+Portable mode is useful for running OneFolder from a USB drive or a self-contained
+folder. Auto-updates are disabled in portable mode; update the application manually
+by replacing the executable with a newer version.
+
+To enable portable mode on Linux (AppImage), place this file next to the .AppImage file.

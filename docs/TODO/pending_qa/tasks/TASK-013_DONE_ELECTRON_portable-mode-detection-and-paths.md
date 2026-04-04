@@ -2,11 +2,11 @@
 id: TASK-013
 title: 'Implement portable mode detection and path override system'
 investigation: INV-002
-status: planned
+status: DONE
 priority: medium
 blocked_by: [TASK-012]
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-04
 files:
   - 'common/process.ts'
   - 'src/main.ts'
@@ -25,7 +25,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
 ## Implementation Steps
 
-- [ ] 1. In `common/process.ts`, add portable mode detection. This must work in both the main process and renderer process:
+- [x] 1. In `common/process.ts`, add portable mode detection. This must work in both the main process and renderer process:
 
     ```typescript
     import path from 'path';
@@ -50,7 +50,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
     Practical approach: Add `IS_PORTABLE` as a let-exported variable in `common/process.ts`, and have `src/main.ts` set it at module load time. For the renderer, expose it via an IPC call or environment variable.
 
-- [ ] 2. In `src/main.ts`, add portable mode detection and path override BEFORE `app.getPath('userData')` is used (currently at line 25). This must run at module scope, before `initialize()`:
+- [x] 2. In `src/main.ts`, add portable mode detection and path override BEFORE `app.getPath('userData')` is used (currently at line 25). This must run at module scope, before `initialize()`:
 
     ```typescript
     // Portable mode detection - must run before any getPath calls
@@ -75,7 +75,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
     This ensures `basePath` (line 25) and all subsequent `app.getPath()` calls return the portable directory.
 
-- [ ] 3. Disable auto-updates in portable mode. In the `initialize()` function in `src/main.ts`, wrap the auto-update check:
+- [x] 3. Disable auto-updates in portable mode. In the `initialize()` function in `src/main.ts`, wrap the auto-update check:
 
     ```typescript
     if (preferences.checkForUpdatesOnStartup && !IS_PORTABLE_MODE) {
@@ -85,23 +85,23 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
     Also update `onCheckForUpdates` handler to warn the user if they manually trigger an update check in portable mode.
 
-- [ ] 4. Update `src/ipc/renderer.ts` path helpers. Since `app.setPath('userData')` is called before any windows are created, the existing `RendererMessenger.getPath('userData')` and `RendererMessenger.getPath('temp')` calls will automatically return the portable paths. Verify that:
+- [x] 4. Update `src/ipc/renderer.ts` path helpers. Since `app.setPath('userData')` is called before any windows are created, the existing `RendererMessenger.getPath('userData')` and `RendererMessenger.getPath('temp')` calls will automatically return the portable paths. Verify that:
     - `getDefaultThumbnailDirectory()` (line 165-168): uses `getPath('temp')` -- if temp is overridden, this works. If not, explicitly create a thumbnails dir inside the portable data dir.
     - `getDefaultBackupDirectory()` (line 170-173): uses `getPath('userData')` -- correctly returns portable path.
     - `getThemesDirectory()` (line 175-178): uses `getPath('userData')` -- correctly returns portable path.
 
     If `app.setPath('temp')` does not reliably redirect on all platforms, override `getDefaultThumbnailDirectory` to explicitly use `path.join(portableDataDir, 'thumbnails')` in portable mode.
 
-- [ ] 5. Add a new IPC message to expose portable mode status to the renderer:
+- [x] 5. Add a new IPC message to expose portable mode status to the renderer:
     - In `src/ipc/messages.ts`, add `IS_PORTABLE_MODE` constant
     - In `src/ipc/main.ts`, add handler: `MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE)`
     - In `src/ipc/renderer.ts`, add: `static isPortableMode = (): boolean => ipcRenderer.sendSync(IS_PORTABLE_MODE)`
 
     This allows the renderer (e.g., settings UI) to show portable mode status and hide the auto-update toggle.
 
-- [ ] 6. Ensure single-instance lock (`requestSingleInstanceLock()` at line 369) still works in portable mode. The lock is process-level, not path-level, so it should work. However, if two different portable instances are run from different USB drives simultaneously, they should each get their own lock. Verify this behavior.
+- [x] 6. Ensure single-instance lock (`requestSingleInstanceLock()` at line 369) still works in portable mode. The lock is process-level, not path-level, so it should work. However, if two different portable instances are run from different USB drives simultaneously, they should each get their own lock. Verify this behavior.
 
-- [ ] 7. Create the `data/` directory structure on first portable launch:
+- [x] 7. Create the `data/` directory structure on first portable launch:
     ```
     data/
       onefolder.db        (SQLite database, from TASK-008)

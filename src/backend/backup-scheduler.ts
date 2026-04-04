@@ -1,3 +1,6 @@
+// DEPRECATED: This file is superseded by sqlite-backup-scheduler.ts and will be
+// removed after the IndexedDB → SQLite migration has been in production for a
+// few release cycles. Do not use this class in new code.
 import Dexie from 'dexie';
 import { exportDB, importDB, peakImportFile } from 'dexie-export-import';
 import fse from 'fs-extra';

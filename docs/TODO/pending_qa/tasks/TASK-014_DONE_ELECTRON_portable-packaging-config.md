@@ -2,11 +2,11 @@
 id: TASK-014
 title: 'Configure electron-builder for portable distribution targets'
 investigation: INV-002
-status: planned
+status: DONE
 priority: medium
 blocked_by: [TASK-013]
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-04
 files:
   - 'package.json'
 ---
@@ -23,7 +23,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
 ## Implementation Steps
 
-- [ ] 1. In `package.json`, update the `build.portable` section to include the `portable.txt` marker file:
+- [x] 1. In `package.json`, update the `build.portable` section to include the `portable.txt` marker file:
 
     ```json
     "portable": {
@@ -47,7 +47,7 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
 
     Note: electron-builder's `portable` target extracts to a temp directory by default. The `portable.txt` must end up next to the extracted executable. Investigate whether `extraFiles` achieves this for portable targets, or whether a post-build script is needed to inject it into the portable archive.
 
-- [ ] 2. Handle `better-sqlite3` native module rebuild. Add or update the electron-builder config:
+- [x] 2. Handle `better-sqlite3` native module rebuild. Add or update the electron-builder config:
 
     ```json
     "build": {
@@ -65,20 +65,20 @@ See [INV-002](../investigations/INV-002_HIGH_BACKEND_sqlite-migration-and-portab
     ]
     ```
 
-- [ ] 3. For Linux AppImage: verify it already works as a portable target. AppImage is inherently portable (single file, runs from anywhere). The portable mode detection (TASK-013) checks for `portable.txt` or `data/` next to the executable. For AppImage, `process.execPath` points to the AppImage file itself, so `path.dirname(process.execPath)` gives the directory containing the AppImage. Users create `portable.txt` or `data/` next to the `.AppImage` file.
+- [x] 3. For Linux AppImage: verify it already works as a portable target. AppImage is inherently portable (single file, runs from anywhere). The portable mode detection (TASK-013) checks for `portable.txt` or `data/` next to the executable. For AppImage, `process.execPath` points to the AppImage file itself, so `path.dirname(process.execPath)` gives the directory containing the AppImage. Users create `portable.txt` or `data/` next to the `.AppImage` file.
 
     Document this in a README or help text: "To enable portable mode on Linux, create a file named `portable.txt` next to the AppImage file."
 
-- [ ] 4. For macOS: the `.app` bundle structure means `process.execPath` is inside `Contents/MacOS/`. Portable mode on macOS requires different detection logic (check next to the `.app` bundle, not next to the binary inside it). Update TASK-013's detection logic if macOS portable mode is desired, or explicitly skip macOS portable support.
+- [x] 4. For macOS: the `.app` bundle structure means `process.execPath` is inside `Contents/MacOS/`. Portable mode on macOS requires different detection logic (check next to the `.app` bundle, not next to the binary inside it). Update TASK-013's detection logic if macOS portable mode is desired, or explicitly skip macOS portable support.
 
-- [ ] 5. Add a `package:portable` script to `package.json` for convenient portable-only builds:
+- [x] 5. Add a `package:portable` script to `package.json` for convenient portable-only builds:
 
     ```json
     "package:portable": "yarn build && electron-builder --win portable",
     "package:appimage": "yarn build && electron-builder --linux AppImage"
     ```
 
-- [ ] 6. Test the complete build pipeline:
+- [x] 6. Test the complete build pipeline:
     - `yarn package` produces both NSIS installer and portable EXE for Windows
     - The portable EXE, when extracted, has `portable.txt` next to the executable
     - Running the portable EXE creates a `data/` directory and stores the SQLite database there

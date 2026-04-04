@@ -11,6 +11,8 @@
     "lint": "eslint src/**/*{ts,tsx} widgets/**/*{ts,tsx} --fix",
     "test": "jest",
     "package": "yarn build && electron-builder",
+    "package:portable": "yarn build && electron-builder --win portable",
+    "package:appimage": "yarn build && electron-builder --linux AppImage",
     "logo": "ncp ./resources/logo/icns/onefolder-logomark-fc.icns ./build/icon.icns && ncp ./resources/logo/ico/onefolder-logomark-fc-256x256.ico ./build/icon.ico",
     "build": "rimraf dist && yarn production && yarn logo",
     "pack": "electron-builder --dir",
@@ -67,14 +69,26 @@
       "allowToChangeInstallationDirectory": true
     },
     "portable": {
-      "artifactName": "${productName}Portable.${version}.${ext}"
+      "artifactName": "${productName}Portable.${version}.${ext}",
+      "requestExecutionLevel": "user",
+      "extraFiles": [
+        {
+          "from": "resources/portable.txt",
+          "to": "portable.txt"
+        }
+      ]
     },
     "files": [
       "!node_modules",
       "build/**/*",
       "package.json"
     ],
-    "asar": true
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**"
+    ],
+    "nodeGypRebuild": false,
+    "npmRebuild": true
   },
   "repository": "https://github.com/OneFolderApp/OneFolder",
   "publish": {
@@ -88,6 +102,7 @@
   "devDependencies": {
     "@electron/notarize": "^2.2.0",
     "@svgr/webpack": "^6.5.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/chrome": "^0.0.195",
     "@types/fs-extra": "^11.0.1",
     "@types/jest": "^29.5.1",
@@ -133,6 +148,7 @@
     "@tensorflow/tfjs": "^4.14.0",
     "@types/mapbox-gl": "^2.7.19",
     "ag-psd": "^15.0.0",
+    "better-sqlite3": "^12.8.0",
     "chokidar": "^3.5.3",
     "comlink": "^4.4.1",
     "copy-webpack-plugin": "^11.0.0",
