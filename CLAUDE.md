@@ -39,6 +39,6 @@ yarn package       # Build + electron-builder for platform
 
 # Documentation
 
-Project documentation lives in `Docs/` — read relevant docs before making changes to understand design decisions and system behavior.
+Project documentation lives in `docs/` — read relevant docs before making changes to understand design decisions and system behavior.
 
 Task tracking uses `docs/TODO/` with investigations and tasks managed by the agent workflow.

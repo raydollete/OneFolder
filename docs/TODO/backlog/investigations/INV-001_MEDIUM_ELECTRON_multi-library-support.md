@@ -262,5 +262,5 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 ## Documentation Updates
 
-- [ ] Updated: `Docs/` should get a new `multi-library.md` explaining the library concept and architecture
+- [ ] Updated: `docs/` should get a new `multi-library.md` explaining the library concept and architecture
 - [ ] Updated: `CLAUDE.md` should mention the library abstraction in the Architecture section

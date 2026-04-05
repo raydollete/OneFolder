@@ -25,7 +25,7 @@ When the user (or the prompt that launched you) provides requirements, design de
 Before doing ANY analysis:
 
 1. **Read `CLAUDE.md`** — understand project conventions and rules.
-2. **Read Supplemental Documentation** from `Docs/` as necessary based on the reported subsystem.
+2. **Read Supplemental Documentation** from `docs/` as necessary based on the reported subsystem.
 3. **Reserve the investigation number immediately.** Scan ALL investigation directories (`docs/TODO/backlog/investigations/`, `docs/TODO/pending_qa/investigations/`, `docs/TODO/completed/investigations/`, `docs/TODO/archived/investigations/`) for the highest existing INV-### number, then claim the next one by creating a placeholder file:
 
 ```
@@ -171,7 +171,7 @@ OneFolder is a desktop photo management app built with Electron + React + MobX +
 - `common/` — Shared utilities (ExifTool, filesystem, config)
 - `widgets/` — Custom UI component library
 - `wasm/` — WebAssembly modules (masonry layout, EXR decoder)
-- `Docs/` — Project documentation
+- `docs/` — Project documentation
 
 Key systems to consider when assessing blast radius:
 - File watching (Chokidar via Web Worker)

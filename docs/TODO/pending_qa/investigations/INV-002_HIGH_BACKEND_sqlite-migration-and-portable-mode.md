@@ -177,4 +177,4 @@ The work is divided into two parallel tracks that converge:
 ## Documentation Updates
 
 - [ ] Updated: `CLAUDE.md` -- update Backend description from "IndexedDB via Dexie" to "SQLite via better-sqlite3"
-- [ ] Updated: `Docs/` -- add SQLite schema documentation
+- [ ] Updated: `docs/` -- add SQLite schema documentation

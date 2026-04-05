@@ -56,7 +56,7 @@ For EACH task document, perform the following:
    - Verify consistency with existing code patterns in the codebase
 
 6. **Audit Documentation**: For each implementation:
-   - Ensure that the appropriate documentation in the `Docs/` folder reflects the changes made from an architectural and strategic standpoint
+   - Ensure that the appropriate documentation in the `docs/` folder reflects the changes made from an architectural and strategic standpoint
    - Ensure there is no contradictory documentation of architecture or status
 
 ### Phase 3: Cross-Cutting Concerns
@@ -125,4 +125,4 @@ OneFolder is a desktop photo management app built with Electron + React + MobX +
 - `widgets/` — Custom UI components
 - `wasm/` — WebAssembly modules
 
-Always read relevant documentation from `Docs/` when you need to understand a system's architecture before verifying its implementation.
+Always read relevant documentation from `docs/` when you need to understand a system's architecture before verifying its implementation.
