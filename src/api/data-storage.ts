@@ -61,4 +61,13 @@ export interface DataStorage {
   saveVisualHashes(hashes: VisualHashDTO[]): Promise<void>;
   removeVisualHashes(absolutePaths: string[]): Promise<void>;
   clearVisualHashCache(): Promise<void>;
+
+  /**
+   * Optional lifecycle method: close the underlying database connection and
+   * release all held file descriptors.  Implementations that manage a
+   * long-lived handle (e.g. `better-sqlite3`) should implement this so that
+   * library switching can cleanly close the current database before opening
+   * the next one.
+   */
+  close?(): void;
 }

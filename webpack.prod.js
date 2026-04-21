@@ -28,6 +28,7 @@ let mainConfig = {
   },
   externals: {
     fsevents: "require('fsevents')",
+    'better-sqlite3': "require('better-sqlite3')",
   },
   module: {
     rules: [
@@ -84,6 +85,7 @@ let rendererConfig = {
   },
   externals: {
     fsevents: "require('fsevents')",
+    'better-sqlite3': "require('better-sqlite3')",
   },
   module: {
     rules: [

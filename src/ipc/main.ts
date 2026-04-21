@@ -50,7 +50,15 @@ import {
   WINDOW_MAXIMIZE,
   WINDOW_SYSTEM_BUTTON_PRESS,
   WINDOW_UNMAXIMIZE,
+  GET_LIBRARIES,
+  GET_ACTIVE_LIBRARY_ID,
+  SET_ACTIVE_LIBRARY,
+  CREATE_LIBRARY,
+  DELETE_LIBRARY,
+  RENAME_LIBRARY,
+  SWITCH_LIBRARY,
 } from './messages';
+import { LibraryDTO } from '../api/library';
 
 export class MainMessenger {
   static onceInitialized = async (): Promise<unknown> => {
@@ -178,4 +186,25 @@ export class MainMessenger {
 
   static onIsPortableMode = (cb: () => boolean) =>
     ipcMain.on(IS_PORTABLE_MODE, (e) => (e.returnValue = cb()));
+
+  // Library management handlers
+  static onGetLibraries = (cb: () => LibraryDTO[]) => ipcMain.handle(GET_LIBRARIES, () => cb());
+
+  static onGetActiveLibraryId = (cb: () => string | null) =>
+    ipcMain.handle(GET_ACTIVE_LIBRARY_ID, () => cb());
+
+  static onSetActiveLibrary = (cb: (id: string) => void) =>
+    ipcMain.handle(SET_ACTIVE_LIBRARY, (_, id: string) => cb(id));
+
+  static onCreateLibrary = (cb: (name: string) => LibraryDTO) =>
+    ipcMain.handle(CREATE_LIBRARY, (_, name: string) => cb(name));
+
+  static onDeleteLibrary = (cb: (id: string) => void) =>
+    ipcMain.handle(DELETE_LIBRARY, (_, id: string) => cb(id));
+
+  static onRenameLibrary = (cb: (id: string, name: string) => void) =>
+    ipcMain.handle(RENAME_LIBRARY, (_, id: string, name: string) => cb(id, name));
+
+  static onSwitchLibrary = (cb: (newLibraryId: string) => void) =>
+    ipcMain.handle(SWITCH_LIBRARY, (_, newLibraryId: string) => cb(newLibraryId));
 }

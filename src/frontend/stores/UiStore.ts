@@ -33,6 +33,15 @@ export type GalleryVideoPlaybackMode = 'auto' | 'hover' | 'disabled';
 
 export const PREFERENCES_STORAGE_KEY = 'preferences';
 
+/**
+ * Returns the namespaced localStorage key for UiStore preferences.
+ * When a libraryId is provided, the key is scoped to that library so
+ * different libraries do not share the same preference data.
+ */
+export function getPreferencesStorageKey(libraryId?: string): string {
+  return libraryId ? `${libraryId}:preferences` : 'preferences';
+}
+
 export interface IHotkeyMap {
   // Outliner actions
   toggleOutliner: string;
@@ -219,7 +228,10 @@ class UiStore {
 
   @observable readonly hotkeyMap: IHotkeyMap = observable(defaultHotkeyMap);
 
-  constructor(rootStore: RootStore) {
+  /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
+  readonly storageKeyPrefix: string;
+
+  constructor(rootStore: RootStore, storageKeyPrefix = '') {
     if (!IS_DEV) {
       posthog.init('phc_i7z5MEt8qhw2FfaTV0DH1B52Wwr9gFsFP8vsG5W8M8s', {
         api_host: 'https://eu.posthog.com',
@@ -227,6 +239,7 @@ class UiStore {
       posthog.capture('my event', { property: 'value' });
     }
     this.rootStore = rootStore;
+    this.storageKeyPrefix = storageKeyPrefix;
     makeObservable(this);
   }
 
@@ -964,7 +977,9 @@ class UiStore {
 
   // Storing preferences
   @action recoverPersistentPreferences(): void {
-    const prefsString = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+    const prefsString = localStorage.getItem(
+      getPreferencesStorageKey(this.storageKeyPrefix || undefined),
+    );
     if (prefsString) {
       try {
         const prefs = JSON.parse(prefsString);
@@ -1042,12 +1057,15 @@ class UiStore {
       RendererMessenger.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
     }
 
-    // Set default thumbnail directory in case none was specified
+    // Set default thumbnail directory in case none was specified.
+    // Pass the library ID so each library gets its own thumbnail subdirectory.
     if (this.thumbnailDirectory.length === 0) {
-      RendererMessenger.getDefaultThumbnailDirectory().then((defaultThumbDir) => {
-        this.setThumbnailDirectory(defaultThumbDir);
-        fse.ensureDirSync(this.thumbnailDirectory);
-      });
+      RendererMessenger.getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined).then(
+        (defaultThumbDir) => {
+          this.setThumbnailDirectory(defaultThumbDir);
+          fse.ensureDirSync(this.thumbnailDirectory);
+        },
+      );
     }
   }
 
@@ -1092,7 +1110,7 @@ class UiStore {
   }
 
   clearPersistentPreferences(): void {
-    localStorage.removeItem(PREFERENCES_STORAGE_KEY);
+    localStorage.removeItem(getPreferencesStorageKey(this.storageKeyPrefix || undefined));
   }
 
   /////////////////// Helper methods ///////////////////

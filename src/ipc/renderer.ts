@@ -50,7 +50,15 @@ import {
   WINDOW_MAXIMIZE,
   WINDOW_SYSTEM_BUTTON_PRESS,
   WINDOW_UNMAXIMIZE,
+  GET_LIBRARIES,
+  GET_ACTIVE_LIBRARY_ID,
+  SET_ACTIVE_LIBRARY,
+  CREATE_LIBRARY,
+  DELETE_LIBRARY,
+  RENAME_LIBRARY,
+  SWITCH_LIBRARY,
 } from './messages';
+import { LibraryDTO } from '../api/library';
 
 export class RendererMessenger {
   static initialized = () => ipcRenderer.send(INITIALIZED);
@@ -165,24 +173,49 @@ export class RendererMessenger {
 
   static isPortableMode = (): boolean => ipcRenderer.sendSync(IS_PORTABLE_MODE);
 
-  static getDefaultThumbnailDirectory = async () => {
+  static getDefaultThumbnailDirectory = async (libraryId?: string) => {
     // In portable mode, store thumbnails inside the portable data dir rather than
     // the system temp directory so they travel with the app.
     if (RendererMessenger.isPortableMode()) {
       const userDataPath = await RendererMessenger.getPath('userData');
-      return path.join(userDataPath, 'thumbnails');
+      // Per-library subdir when a library ID is provided; legacy flat path otherwise.
+      const subdir = libraryId ? `thumbnails/${libraryId}` : 'thumbnails';
+      return path.join(userDataPath, subdir);
     }
-    const userDataPath = await RendererMessenger.getPath('temp');
-    return path.join(userDataPath, 'OneFolder', 'thumbnails');
+    const tempPath = await RendererMessenger.getPath('temp');
+    const subdir = libraryId ? `OneFolder/${libraryId}/thumbnails` : 'OneFolder/thumbnails';
+    return path.join(tempPath, subdir);
   };
 
-  static getDefaultBackupDirectory = async () => {
+  static getDefaultBackupDirectory = async (libraryId?: string) => {
     const userDataPath = await RendererMessenger.getPath('userData');
-    return path.join(userDataPath, 'backups');
+    // Per-library subdir when a library ID is provided; legacy flat path otherwise.
+    const subdir = libraryId ? `libraries/${libraryId}/backups` : 'backups';
+    return path.join(userDataPath, subdir);
   };
 
   static getThemesDirectory = async () => {
     const userDataPath = await RendererMessenger.getPath('userData');
     return path.join(userDataPath, 'themes');
   };
+
+  // Library management
+  static getLibraries = (): Promise<LibraryDTO[]> => ipcRenderer.invoke(GET_LIBRARIES);
+
+  static getActiveLibraryId = (): Promise<string | null> =>
+    ipcRenderer.invoke(GET_ACTIVE_LIBRARY_ID);
+
+  static setActiveLibrary = (id: string): Promise<void> =>
+    ipcRenderer.invoke(SET_ACTIVE_LIBRARY, id);
+
+  static createLibrary = (name: string): Promise<LibraryDTO> =>
+    ipcRenderer.invoke(CREATE_LIBRARY, name);
+
+  static deleteLibrary = (id: string): Promise<void> => ipcRenderer.invoke(DELETE_LIBRARY, id);
+
+  static renameLibrary = (id: string, name: string): Promise<void> =>
+    ipcRenderer.invoke(RENAME_LIBRARY, id, name);
+
+  static switchLibrary = (newLibraryId: string): Promise<void> =>
+    ipcRenderer.invoke(SWITCH_LIBRARY, newLibraryId);
 }

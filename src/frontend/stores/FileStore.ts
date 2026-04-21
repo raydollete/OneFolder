@@ -17,6 +17,14 @@ import RootStore from './RootStore';
 
 export const FILE_STORAGE_KEY = 'OneFolder_File';
 
+/**
+ * Returns the namespaced localStorage key for FileStore preferences.
+ * When a libraryId is provided, the key is scoped to that library.
+ */
+export function getFileStorageKey(libraryId?: string): string {
+  return libraryId ? `${libraryId}:OneFolder_File` : 'OneFolder_File';
+}
+
 /** These fields are stored and recovered when the application opens up */
 type PersistentPreferenceFields = 'orderDirection' | 'orderBy';
 
@@ -54,9 +62,13 @@ class FileStore {
   debouncedRefetch: () => void;
   debouncedSaveFilesToSave: () => Promise<void>;
 
-  constructor(backend: DataStorage, rootStore: RootStore) {
+  /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
+  readonly storageKeyPrefix: string;
+
+  constructor(backend: DataStorage, rootStore: RootStore, storageKeyPrefix = '') {
     this.backend = backend;
     this.rootStore = rootStore;
+    this.storageKeyPrefix = storageKeyPrefix;
     makeObservable(this);
 
     this.debouncedRefetch = debounce(this.refetch, 200).bind(this);
@@ -856,7 +868,8 @@ class FileStore {
   }
 
   @action recoverPersistentPreferences(): void {
-    const prefsString = localStorage.getItem(FILE_STORAGE_KEY);
+    const key = getFileStorageKey(this.storageKeyPrefix || undefined);
+    const prefsString = localStorage.getItem(key);
     if (prefsString) {
       try {
         const prefs = JSON.parse(prefsString);
@@ -864,7 +877,7 @@ class FileStore {
         this.setOrderDirection(prefs.orderDirection ?? prefs.fileOrder);
         this.setOrderBy(prefs.orderBy);
       } catch (e) {
-        console.error('Cannot parse persistent preferences:', FILE_STORAGE_KEY, e);
+        console.error('Cannot parse persistent preferences:', key, e);
       }
     }
   }
@@ -878,7 +891,7 @@ class FileStore {
   }
 
   clearPersistentPreferences(): void {
-    localStorage.removeItem(FILE_STORAGE_KEY);
+    localStorage.removeItem(getFileStorageKey(this.storageKeyPrefix || undefined));
   }
 
   @action private async removeThumbnail(path: string) {

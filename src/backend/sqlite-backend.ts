@@ -438,6 +438,20 @@ export default class SQLiteBackend implements DataStorage {
   }
 
   // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Closes the underlying `better-sqlite3` database connection, checkpointing
+   * the WAL and releasing the file lock.  Must be called before switching
+   * libraries so the next library's `sqliteInit()` can open its own database
+   * without a stale file descriptor from the previous session.
+   */
+  close(): void {
+    this.#db.close();
+  }
+
+  // -------------------------------------------------------------------------
   // Read methods
   // -------------------------------------------------------------------------
 

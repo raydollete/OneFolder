@@ -2,11 +2,11 @@
 id: TASK-001
 title: 'Create Library Registry infrastructure for tracking multiple libraries'
 investigation: INV-001
-status: planned
+status: DONE
 priority: high
 blocked_by: []
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-20
 files:
   - 'src/api/library.ts (new)'
   - 'common/library-registry.ts (new)'
@@ -25,7 +25,7 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
 
 ## Implementation Steps
 
-- [ ] 1. **Create `src/api/library.ts`** — Define the `LibraryDTO` interface:
+- [x] 1. **Create `src/api/library.ts`** — Define the `LibraryDTO` interface:
   ```typescript
   export interface LibraryDTO {
     id: string;        // UUID v4
@@ -36,7 +36,7 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
   ```
   Verify: File compiles with `yarn dev`.
 
-- [ ] 2. **Create `common/library-registry.ts`** — Implement the `LibraryRegistry` class:
+- [x] 2. **Create `common/library-registry.ts`** — Implement the `LibraryRegistry` class:
   - Constructor takes `basePath: string` (the global `userData` directory).
   - Reads/writes `{basePath}/libraries.json` (array of `LibraryDTO`).
   - Reads/writes `{basePath}/active-library.json` (single `{ activeLibraryId: string }`).
@@ -52,7 +52,7 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
   - Use `crypto.randomUUID()` for ID generation (available in Node 19+ and Electron 27).
   Verify: Write a simple test or manual verification that creating/reading/deleting libraries round-trips correctly.
 
-- [ ] 3. **Create helper function `getLibraryPaths(basePath: string, libraryId: string)`** in the same file:
+- [x] 3. **Create helper function `getLibraryPaths(basePath: string, libraryId: string)`** in the same file:
   ```typescript
   export function getLibraryPaths(basePath: string, libraryId: string) {
     return {
@@ -64,7 +64,7 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
   This centralizes path construction so other tasks do not need to duplicate logic.
   Verify: Paths are constructed correctly on all platforms.
 
-- [ ] 4. **Update `src/main.ts`** — Import `LibraryRegistry` and instantiate it during `initialize()`:
+- [x] 4. **Update `src/main.ts`** — Import `LibraryRegistry` and instantiate it during `initialize()`:
   - Create the registry: `const registry = new LibraryRegistry(basePath);`
   - Read the active library ID: `const activeLibraryId = registry.getActiveLibraryId();`
   - If no libraries exist yet, do NOT auto-create one here (that is handled by TASK-006 migration). Just store the registry instance for later use by IPC handlers.
@@ -77,13 +77,13 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
     - `MainMessenger.onRenameLibrary((id, name) => registry.renameLibrary(id, name))`
   Verify: IPC handlers are registered. Calling `getLibraries` returns an empty array on a fresh install.
 
-- [ ] 5. **Add IPC message types** — In `src/ipc/messages.ts`, add constants and types for the new library management messages. In `src/ipc/main.ts`, add the handler registrations. In `src/ipc/renderer.ts`, add the static methods to invoke them.
+- [x] 5. **Add IPC message types** — In `src/ipc/messages.ts`, add constants and types for the new library management messages. In `src/ipc/main.ts`, add the handler registrations. In `src/ipc/renderer.ts`, add the static methods to invoke them.
   Verify: TypeScript compiles cleanly. Round-trip IPC call works from renderer to main and back.
 
 ## Done When
 
-- [ ] `LibraryDTO` interface exists and is importable.
-- [ ] `LibraryRegistry` class can create, list, rename, delete, and select libraries, persisted to disk.
-- [ ] IPC handlers exist for all registry operations.
-- [ ] `RendererMessenger` has static methods for all library operations.
-- [ ] Existing app functionality is completely unchanged (no behavioral differences until subsequent tasks wire things up).
+- [x] `LibraryDTO` interface exists and is importable.
+- [x] `LibraryRegistry` class can create, list, rename, delete, and select libraries, persisted to disk.
+- [x] IPC handlers exist for all registry operations.
+- [x] `RendererMessenger` has static methods for all library operations.
+- [x] Existing app functionality is completely unchanged (no behavioral differences until subsequent tasks wire things up).

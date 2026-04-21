@@ -18,8 +18,11 @@ import ImageLoader from '../image/ImageLoader';
 import RootStore from './RootStore';
 import TagStore from './TagStore';
 
-const PREFERENCES_STORAGE_KEY = 'location-store-preferences';
 type Preferences = { extensions: IMG_EXTENSIONS_TYPE[] };
+
+function getLocationPrefsKey(prefix?: string): string {
+  return prefix ? `${prefix}:location-store-preferences` : 'location-store-preferences';
+}
 
 /**
  * Compares metadata of two files to determine whether the files are (likely to be) identical
@@ -45,9 +48,13 @@ class LocationStore {
   // TODO: Maybe per location/sub-location?
   readonly enabledFileExtensions = observable(new Set<IMG_EXTENSIONS_TYPE>());
 
-  constructor(backend: DataStorage, rootStore: RootStore) {
+  /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
+  readonly storageKeyPrefix: string;
+
+  constructor(backend: DataStorage, rootStore: RootStore, storageKeyPrefix = '') {
     this.backend = backend;
     this.rootStore = rootStore;
+    this.storageKeyPrefix = storageKeyPrefix;
 
     makeObservable(this);
   }
@@ -55,7 +62,9 @@ class LocationStore {
   @action async init(): Promise<void> {
     // Restore preferences
     try {
-      const prefs = JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) || '') as Preferences;
+      const prefs = JSON.parse(
+        localStorage.getItem(getLocationPrefsKey(this.storageKeyPrefix || undefined)) || '',
+      ) as Preferences;
       (prefs.extensions || IMG_EXTENSIONS).forEach((ext) => this.enabledFileExtensions.add(ext));
     } catch (e) {
       // If no preferences found, use defaults
@@ -471,10 +480,19 @@ class LocationStore {
     this.rootStore.fileStore.refetchFileCounts();
   }
 
+  /**
+   * Stops all active Chokidar file-watcher workers across every location.
+   * Called during library teardown before switching to a different library so
+   * that watchers from the old library do not fire events into the new one.
+   */
+  async closeAllWatchers(): Promise<void> {
+    await Promise.all(this.locationList.map((loc) => loc.drop()));
+  }
+
   @action.bound setSupportedImageExtensions(extensions: Set<IMG_EXTENSIONS_TYPE>): void {
     this.enabledFileExtensions.replace(extensions);
     localStorage.setItem(
-      PREFERENCES_STORAGE_KEY,
+      getLocationPrefsKey(this.storageKeyPrefix || undefined),
       JSON.stringify(
         { extensions: Array.from(this.enabledFileExtensions) } as Preferences,
         null,

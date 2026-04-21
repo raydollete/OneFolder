@@ -14,19 +14,93 @@ import { Root, createRoot } from 'react-dom/client';
 
 import { IS_DEV } from 'common/process';
 import { IS_PREVIEW_WINDOW, WINDOW_STORAGE_KEY } from 'common/window';
+import { getSqliteDbPath } from 'common/library-registry';
 import { RendererMessenger } from 'src/ipc/renderer';
 import SQLiteBackend from './backend/sqlite-backend';
 import SQLiteBackupScheduler from './backend/sqlite-backup-scheduler';
 import { sqliteInit, SQLITE_DB_FILENAME } from './backend/sqlite-config';
 import { migrateIfNeeded } from './backend/migration-indexeddb-to-sqlite';
 import App from './frontend/App';
+import LibrarySelector from './frontend/containers/LibrarySelector';
 import SplashScreen from './frontend/containers/SplashScreen';
 import StoreProvider from './frontend/contexts/StoreContext';
 import Overlay from './frontend/Overlay';
 import PreviewApp from './frontend/Preview';
-import { FILE_STORAGE_KEY } from './frontend/stores/FileStore';
+import { getFileStorageKey } from './frontend/stores/FileStore';
 import RootStore from './frontend/stores/RootStore';
-import { PREFERENCES_STORAGE_KEY } from './frontend/stores/UiStore';
+import { getPreferencesStorageKey } from './frontend/stores/UiStore';
+
+/**
+ * TASK-006: One-time migration from the legacy single-library layout to the
+ * per-library layout introduced by INV-001.
+ *
+ * Migration is triggered when:
+ *   - The legacy flat SQLite file ({userData}/onefolder.db) EXISTS, AND
+ *   - The library-scoped file ({userData}/libraries/{id}/onefolder.db) does NOT exist.
+ *
+ * This function is idempotent: after the first successful run the precondition
+ * no longer holds (the legacy file is gone), so subsequent launches skip it.
+ */
+async function migrateToMultiLibraryLayout(userDataPath: string, libraryId: string): Promise<void> {
+  const legacyDbPath = path.join(userDataPath, SQLITE_DB_FILENAME);
+  const newDbPath = getSqliteDbPath(userDataPath, libraryId);
+
+  const migrationNeeded =
+    (await fse.pathExists(legacyDbPath)) && !(await fse.pathExists(newDbPath));
+
+  if (!migrationNeeded) {
+    return; // Already migrated or fresh install
+  }
+
+  console.info('TASK-006: Migrating legacy single-library data to multi-library layout...');
+
+  // 1. Move the SQLite database (and any WAL/SHM sidecars).
+  //    Do NOT open the database before moving — better-sqlite3 would lock the
+  //    file and block the move on Windows.
+  await fse.ensureDir(path.dirname(newDbPath));
+  await fse.move(legacyDbPath, newDbPath);
+  for (const suffix of ['-wal', '-shm']) {
+    const legacySidecar = legacyDbPath + suffix;
+    if (await fse.pathExists(legacySidecar)) {
+      await fse.move(legacySidecar, newDbPath + suffix);
+    }
+  }
+  console.info('TASK-006: SQLite database moved to', newDbPath);
+
+  // 2. Migrate localStorage keys from bare names to library-namespaced names.
+  //    Keys that remain global (OneFolder_Window, tag-editor-height) are left in place.
+  const keysToMigrate: [oldKey: string, newKey: string][] = [
+    ['preferences', `${libraryId}:preferences`],
+    ['OneFolder_File', `${libraryId}:OneFolder_File`],
+    ['hierarchical-separator', `${libraryId}:hierarchical-separator`],
+    ['location-store-preferences', `${libraryId}:location-store-preferences`],
+  ];
+  for (const [oldKey, newKey] of keysToMigrate) {
+    const value = localStorage.getItem(oldKey);
+    if (value !== null) {
+      localStorage.setItem(newKey, value);
+      localStorage.removeItem(oldKey);
+    }
+  }
+  console.info('TASK-006: localStorage keys migrated.');
+
+  // 3. Move existing backup files from {userData}/backups/ to
+  //    {userData}/libraries/{libraryId}/backups/.
+  const oldBackupDir = path.join(userDataPath, 'backups');
+  const newBackupDir = path.join(userDataPath, 'libraries', libraryId, 'backups');
+  if ((await fse.pathExists(oldBackupDir)) && !(await fse.pathExists(newBackupDir))) {
+    await fse.ensureDir(path.dirname(newBackupDir));
+    await fse.move(oldBackupDir, newBackupDir);
+    console.info('TASK-006: Backup directory moved to', newBackupDir);
+  }
+
+  // 4. Thumbnail directory — keep existing thumbnails in place (Option B from
+  //    the task spec) to avoid moving potentially gigabytes of data.
+  //    New thumbnails for this library will be generated in the new default
+  //    directory. Users can change it manually in Settings > Advanced.
+
+  console.info('TASK-006: Migration complete.');
+}
 
 async function main(): Promise<void> {
   console.groupCollapsed('Initializing OneFolder');
@@ -41,9 +115,48 @@ async function main(): Promise<void> {
 
   root.render(<SplashScreen />);
 
-  // Determine the on-disk path for the SQLite database.
+  // Show the library selector when multiple libraries exist and no library has
+  // been chosen yet for this load. A single-library user always proceeds without
+  // seeing the selector (matching the pre-multi-library UX).
+  //
+  // The selector is skipped if the URL already has a libraryId — that means the
+  // user either came from a switch action or the main process already determined
+  // which library to use (TASK-003 / TASK-006 migration).
+  const hasSelectorParam = new URLSearchParams(window.location.search).has('libraryId');
+  if (!hasSelectorParam) {
+    const allLibraries = await RendererMessenger.getLibraries();
+    if (allLibraries.length > 1) {
+      // Render the selector and wait — the user's selection will call
+      // switchLibrary(), which triggers a page reload with the chosen libraryId.
+      root.render(<LibrarySelector />);
+      return; // halt this init; the reload will restart main()
+    }
+  }
+
+  // Extract the active library ID from the URL query string.
+  // The main process injects this as ?libraryId=<uuid> when loading the window.
+  // It may be absent on a truly fresh install (before TASK-006 migration runs) —
+  // in that case we fall back to the legacy flat db path so the migration can
+  // still create and move the database as needed.
+  const urlParams = new URLSearchParams(window.location.search.slice(1));
+  const libraryId = urlParams.get('libraryId') || undefined;
+
   const userDataPath = await RendererMessenger.getPath('userData');
-  const dbPath = path.join(userDataPath, SQLITE_DB_FILENAME);
+
+  // TASK-006: Perform the one-time filesystem migration from the legacy
+  // flat layout ({userData}/onefolder.db) to the per-library layout
+  // ({userData}/libraries/{libraryId}/onefolder.db).
+  if (libraryId) {
+    await migrateToMultiLibraryLayout(userDataPath, libraryId);
+  }
+
+  // Per-library path when a library ID is present; legacy flat path otherwise.
+  // The legacy path is only used transiently during first-launch migration (TASK-006).
+  const dbPath = libraryId
+    ? getSqliteDbPath(userDataPath, libraryId)
+    : path.join(userDataPath, SQLITE_DB_FILENAME);
+
+  await fse.ensureDir(path.dirname(dbPath));
 
   // Run the one-time IndexedDB → SQLite migration before opening the backend.
   // migrateIfNeeded is idempotent and no-ops after the first successful run.
@@ -61,9 +174,9 @@ async function main(): Promise<void> {
   const db = sqliteInit(dbPath);
 
   if (!IS_PREVIEW_WINDOW) {
-    await runMainApp(db, dbPath, root);
+    await runMainApp(db, dbPath, root, libraryId);
   } else {
-    await runPreviewApp(db, root);
+    await runPreviewApp(db, root, libraryId);
   }
   console.groupEnd();
 }
@@ -72,8 +185,9 @@ async function runMainApp(
   db: import('better-sqlite3').Database,
   dbPath: string,
   root: Root,
+  libraryId?: string,
 ): Promise<void> {
-  const defaultBackupDirectory = await RendererMessenger.getDefaultBackupDirectory();
+  const defaultBackupDirectory = await RendererMessenger.getDefaultBackupDirectory(libraryId);
   // Initialize backup scheduler first so its reference is available to the
   // backend's notifyChange callback. SQLiteBackupScheduler.init only creates
   // the backup directory, so this is fast.
@@ -83,7 +197,7 @@ async function runMainApp(
     fse.ensureDir(defaultBackupDirectory),
   ]);
 
-  const rootStore = await RootStore.main(backend, backup);
+  const rootStore = await RootStore.main(backend, backup, libraryId);
 
   RendererMessenger.initialized();
 
@@ -103,11 +217,12 @@ async function runMainApp(
     console.error('Cannot load window preferences', e);
   }
 
-  // Debounced and automatic storing of preferences
+  // Debounced and automatic storing of preferences — use namespaced keys so
+  // different libraries do not overwrite each other's stored settings.
   reaction(
     () => rootStore.fileStore.getPersistentPreferences(),
     (preferences) => {
-      localStorage.setItem(FILE_STORAGE_KEY, JSON.stringify(preferences));
+      localStorage.setItem(getFileStorageKey(libraryId), JSON.stringify(preferences));
     },
     { delay: 200 },
   );
@@ -115,7 +230,7 @@ async function runMainApp(
   reaction(
     () => rootStore.uiStore.getPersistentPreferences(),
     (preferences) => {
-      localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+      localStorage.setItem(getPreferencesStorageKey(libraryId), JSON.stringify(preferences));
     },
     { delay: 200 },
   );
@@ -243,11 +358,19 @@ async function runMainApp(
   }
 }
 
-async function runPreviewApp(db: import('better-sqlite3').Database, root: Root): Promise<void> {
+async function runPreviewApp(
+  db: import('better-sqlite3').Database,
+  root: Root,
+  libraryId?: string,
+): Promise<void> {
   // Preview window is read-only: no-op callbacks for change notification and
   // backup scheduling keep the interface compatible without touching the disk.
   const backend = new SQLiteBackend(db, () => {});
-  const rootStore = await RootStore.preview(backend, new SQLiteBackupScheduler(db, '', ''));
+  const rootStore = await RootStore.preview(
+    backend,
+    new SQLiteBackupScheduler(db, '', ''),
+    libraryId,
+  );
 
   RendererMessenger.initialized();
 

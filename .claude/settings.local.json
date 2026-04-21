@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx webpack:*)",
+      "Bash(node:*)",
+      "Bash(npx electron-rebuild:*)"
+    ]
+  }
+}

@@ -2,11 +2,11 @@
 id: TASK-005
 title: 'Implement full library teardown and reinitialization for switching between libraries'
 investigation: INV-001
-status: planned
+status: DONE
 priority: medium
 blocked_by: [TASK-003, TASK-004]
 date_created: 2026-04-04
-date_completed:
+date_completed: 2026-04-20
 files:
   - 'src/frontend/stores/RootStore.ts'
   - 'src/frontend/stores/FileStore.ts'
@@ -33,7 +33,7 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
 
 ## Implementation Steps
 
-- [ ] 1. **`src/frontend/stores/RootStore.ts`** — Extend the `close()` method to perform full teardown:
+- [x] 1. **`src/frontend/stores/RootStore.ts`** — Extend the `close()` method to perform full teardown:
   ```typescript
   async close(): Promise<void> {
     // 1. Close ExifTool child process
@@ -42,22 +42,26 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
     await this.locationStore.closeAllWatchers();
     // 3. Close the image loader (any worker threads)
     this.imageLoader.close();
-    // 4. The Dexie database closes automatically when the page unloads,
-    //    but for soft-switch we might need explicit db.close()
+    // 4. Close the SQLite database handle so the WAL can checkpoint cleanly.
+    //    This is especially important for soft-switch (no page reload), where
+    //    the better-sqlite3 Database instance would otherwise leak its file
+    //    descriptors into the next library's session.
+    this.backend.close?.();
   }
   ```
-  Verify: After `close()`, no ExifTool process is running, no chokidar watchers are active.
+  The SQLite backend exposes (or must expose) a `close()` method that calls `db.close()` on the `better-sqlite3` handle. Add the method to `SQLiteBackend` if it does not already exist.
+  Verify: After `close()`, no ExifTool process is running, no chokidar watchers are active, and the `.db-wal` and `.db-shm` sidecar files for the library have been checkpointed/removed.
 
-- [ ] 2. **`src/frontend/stores/LocationStore.ts`** — Add a `closeAllWatchers()` method:
+- [x] 2. **`src/frontend/stores/LocationStore.ts`** — Add a `closeAllWatchers()` method:
   - Iterate over all `ClientLocation` instances and call their watcher's `close()` method.
   - The `FolderWatcherWorker` (in `src/frontend/workers/folderWatcher.worker.ts`) already has a `close()` method that calls `watcher?.close()`.
   - Each `ClientLocation` holds a reference to its watcher worker via Comlink. The `closeAllWatchers` method must terminate each worker.
   Verify: After calling `closeAllWatchers()`, no chokidar FSWatcher instances remain in memory. Check via DevTools memory snapshot or by confirming no file-change events fire.
 
-- [ ] 3. **`src/renderer.tsx`** — Ensure the `beforeunload` handler (line 123) calls the extended `close()` method. This is already the case (`rootStore.close()`), but verify it covers the new cleanup steps.
+- [x] 3. **`src/renderer.tsx`** — Ensure the `beforeunload` handler (line 123) calls the extended `close()` method. This is already the case (`rootStore.close()`), but verify it covers the new cleanup steps.
   Verify: Refreshing the page (F5) or switching libraries triggers full cleanup.
 
-- [ ] 4. **`src/main.ts`** — When handling the `RELOAD` message for a library switch, update the `active-library.json` BEFORE the reload so the renderer picks up the new library ID:
+- [x] 4. **`src/main.ts`** — When handling the `RELOAD` message for a library switch, update the `active-library.json` BEFORE the reload so the renderer picks up the new library ID:
   ```typescript
   MainMessenger.onSwitchLibrary((newLibraryId) => {
     registry.setActiveLibrary(newLibraryId);
@@ -71,12 +75,12 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
   This is cleaner than a full `app.relaunch()` because it preserves the window state.
   Verify: After switching, the renderer initializes with the new library's database and preferences.
 
-- [ ] 5. **Handle preview window during switch** — When the main window switches libraries, the preview window must also be reloaded or closed:
+- [x] 5. **Handle preview window during switch** — When the main window switches libraries, the preview window must also be reloaded or closed:
   - Close the preview window on library switch.
   - It will be recreated with the new library ID when next requested.
   Verify: No stale preview window shows data from the old library.
 
-- [ ] 6. **Handle in-progress operations** — If a thumbnail generation batch or metadata import is in progress when the user switches libraries:
+- [x] 6. **Handle in-progress operations** — If a thumbnail generation batch or metadata import is in progress when the user switches libraries:
   - Cancel any active thumbnail generation workers.
   - The file watcher teardown (step 2) handles watcher cleanup.
   - Display a brief "Switching library..." indicator if needed.
@@ -84,8 +88,8 @@ See [INV-001](../investigations/INV-001_MEDIUM_ELECTRON_multi-library-support.md
 
 ## Done When
 
-- [ ] Switching libraries fully tears down ExifTool, file watchers, and thumbnail workers.
-- [ ] The renderer reinitializes with the new library's database, preferences, and directories.
-- [ ] No resources leak between library switches (no lingering file watchers, no orphaned ExifTool processes).
-- [ ] The preview window is properly handled during switches.
-- [ ] Rapid sequential switches (open library A, immediately switch to B) do not crash or corrupt data.
+- [x] Switching libraries fully tears down ExifTool, file watchers, and thumbnail workers.
+- [x] The renderer reinitializes with the new library's database, preferences, and directories.
+- [x] No resources leak between library switches (no lingering file watchers, no orphaned ExifTool processes).
+- [x] The preview window is properly handled during switches.
+- [x] Rapid sequential switches (open library A, immediately switch to B) do not crash or corrupt data.

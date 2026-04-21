@@ -45,31 +45,49 @@ class RootStore {
     backend: DataStorage,
     backup: DataBackup,
     formatWindowTitle: (FileStore: FileStore, uiStore: UiStore) => string,
+    // libraryId is the active library's UUID, used as a prefix for all per-library
+    // localStorage keys so different libraries do not share the same preference data.
+    libraryId?: string,
   ) {
+    const prefix = libraryId ?? '';
     this.tagStore = new TagStore(backend, this);
-    this.fileStore = new FileStore(backend, this);
-    this.locationStore = new LocationStore(backend, this);
-    this.uiStore = new UiStore(this);
+    this.fileStore = new FileStore(backend, this, prefix);
+    this.locationStore = new LocationStore(backend, this, prefix);
+    this.uiStore = new UiStore(this, prefix);
     this.searchStore = new SearchStore(backend, this);
     this.#backend = backend;
     this.#backup = backup;
-    this.exifTool = new ExifIO(localStorage.getItem('hierarchical-separator') || undefined);
+    // Namespace the hierarchical separator key so each library can have its own
+    // ExifTool separator setting.
+    const separatorKey = libraryId
+      ? `${libraryId}:hierarchical-separator`
+      : 'hierarchical-separator';
+    this.exifTool = new ExifIO(localStorage.getItem(separatorKey) || undefined);
     this.imageLoader = new ImageLoader(this.exifTool);
     this.getWindowTitle = () => formatWindowTitle(this.fileStore, this.uiStore);
   }
 
-  static async main(backend: DataStorage, backup: DataBackup): Promise<RootStore> {
-    const rootStore = new RootStore(backend, backup, (fileStore, uiStore) => {
-      if (uiStore.isSlideMode && fileStore.fileList.length > 0) {
-        const activeFile = fileStore.fileList[uiStore.firstItem];
-        if (activeFile) {
-          return `${activeFile.filename}.${activeFile.extension} - OneFolder`;
+  static async main(
+    backend: DataStorage,
+    backup: DataBackup,
+    libraryId?: string,
+  ): Promise<RootStore> {
+    const rootStore = new RootStore(
+      backend,
+      backup,
+      (fileStore, uiStore) => {
+        if (uiStore.isSlideMode && fileStore.fileList.length > 0) {
+          const activeFile = fileStore.fileList[uiStore.firstItem];
+          if (activeFile) {
+            return `${activeFile.filename}.${activeFile.extension} - OneFolder`;
+          }
+          return 'OneFolder';
+        } else {
+          return 'OneFolder';
         }
-        return 'OneFolder';
-      } else {
-        return 'OneFolder';
-      }
-    });
+      },
+      libraryId,
+    );
 
     await Promise.all([
       // The location store must be initiated because the file entity constructor
@@ -129,17 +147,26 @@ class RootStore {
     return rootStore;
   }
 
-  static async preview(backend: DataStorage, backup: DataBackup): Promise<RootStore> {
-    const rootStore = new RootStore(backend, backup, (fileStore, uiStore) => {
-      const PREVIEW_WINDOW_BASENAME = 'OneFolder Quick View';
-      const index = uiStore.firstItem;
-      if (index >= 0 && index < fileStore.fileList.length) {
-        const file = fileStore.fileList[index];
-        return `${file.absolutePath} • ${PREVIEW_WINDOW_BASENAME}`;
-      } else {
-        return PREVIEW_WINDOW_BASENAME;
-      }
-    });
+  static async preview(
+    backend: DataStorage,
+    backup: DataBackup,
+    libraryId?: string,
+  ): Promise<RootStore> {
+    const rootStore = new RootStore(
+      backend,
+      backup,
+      (fileStore, uiStore) => {
+        const PREVIEW_WINDOW_BASENAME = 'OneFolder Quick View';
+        const index = uiStore.firstItem;
+        if (index >= 0 && index < fileStore.fileList.length) {
+          const file = fileStore.fileList[index];
+          return `${file.absolutePath} • ${PREVIEW_WINDOW_BASENAME}`;
+        } else {
+          return PREVIEW_WINDOW_BASENAME;
+        }
+      },
+      libraryId,
+    );
 
     await Promise.all([
       // The location store must be initiated because the file entity constructor
@@ -195,8 +222,15 @@ class RootStore {
   }
 
   async close(): Promise<void> {
+    // 1. Close ExifTool child process — must happen first so all pending writes flush.
     // TODO: should be able to be done more reliably by running exiftool as a child process
-    return this.exifTool.close();
+    await this.exifTool.close();
+    // 2. Stop all Chokidar file-watcher workers so they do not fire events into
+    //    the next library's session.
+    await this.locationStore.closeAllWatchers();
+    // 3. Close the SQLite database so the WAL checkpoints cleanly and the file
+    //    lock is released before the next library opens its own database.
+    this.#backend.close?.();
   }
 }
 

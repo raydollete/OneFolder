@@ -9,7 +9,7 @@ tasks_spawned: [TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006]
 root_cause_category: architectural-shortcoming
 affects:
   - 'Electron main process (single-instance lock, basePath, preferences, window state)'
-  - 'IndexedDB / Dexie database (hardcoded name "OneFolder")'
+  - 'SQLite database (hardcoded filename "onefolder.db" in userData)'
   - 'localStorage (renderer-side preferences, all keyed globally)'
   - 'Thumbnail cache (single shared temp directory)'
   - 'Backup scheduler (single shared userData/backups directory)'
@@ -27,7 +27,7 @@ The application is locked to a single library instance. All configuration, data,
 ### Expected Behavior
 
 A user should be able to create and switch between multiple independent libraries. Each library should have its own:
-- IndexedDB database (files, tags, locations, searches, visual hashes, dismissed duplicates)
+- SQLite database file (files, tags, locations, searches, visual hashes, dismissed duplicates)
 - Thumbnail cache directory
 - Database backups
 - UI preferences (view settings, thumbnail size, search criteria, hotkeys)
@@ -67,18 +67,20 @@ const HAS_INSTANCE_LOCK = app.requestSingleInstanceLock();
 
 This prevents any second instance from running, making it impossible to have two libraries open simultaneously (though this investigation focuses on the simpler sequential-switch model first).
 
-**3. IndexedDB Name — Hardcoded constant (`src/backend/config.ts:7`)**
+**3. SQLite database filename — Hardcoded constant (`src/backend/sqlite-config.ts:4`)**
 
 ```typescript
-export const DB_NAME = 'OneFolder';
+export const SQLITE_DB_FILENAME = 'onefolder.db';
 ```
 
-This is used in `src/renderer.tsx:43`:
+This is used in `src/renderer.tsx:46`:
 ```typescript
-const db = dbInit(DB_NAME);
+const dbPath = path.join(userDataPath, SQLITE_DB_FILENAME);
+// ...
+const db = sqliteInit(dbPath);
 ```
 
-Every library uses the same IndexedDB database. There is no mechanism to select an alternative.
+Every library uses the same SQLite database file. There is no mechanism to select an alternative. (Note: the IndexedDB → SQLite migration has already been completed — the legacy Dexie code in `src/backend/config.ts` is retained solely for the one-time `migrateIfNeeded` step invoked before `sqliteInit`.)
 
 **4. localStorage Keys — Global, unscoped (`src/frontend/stores/`)**
 
@@ -130,7 +132,7 @@ Themes could reasonably stay global (shared across libraries), but this is a des
 - **Architectural shortcoming?** YES — this is the core issue. The architecture lacks any concept of a "library" as a first-class entity that scopes configuration and data.
 - **Incorrect order of operations?** Not applicable.
 - **Missing edge case?** Not applicable — this is a missing feature, not an edge case.
-- **Wrong abstraction?** Partially — configuration and database references are scattered (main process files, IndexedDB name, localStorage keys, default directories) rather than being centralized behind a "library config" abstraction.
+- **Wrong abstraction?** Partially — configuration and database references are scattered (main process files, SQLite filename, localStorage keys, default directories) rather than being centralized behind a "library config" abstraction.
 - **Silent failure?** No.
 
 ---
@@ -139,9 +141,9 @@ Themes could reasonably stay global (shared across libraries), but this is a des
 
 1. **Main process startup (`src/main.ts`)** — `basePath`, `preferencesFilePath`, `windowStateFilePath` are all derived from a single `app.getPath('userData')`. The single-instance lock must be rethought (either scoped per library or relaxed to allow switching).
 
-2. **IndexedDB database name (`src/backend/config.ts`)** — The `DB_NAME` constant `'OneFolder'` is used to create the Dexie instance. Each library needs its own database name (e.g., `OneFolder_LibraryName` or `OneFolder_{uuid}`).
+2. **SQLite database filename (`src/backend/sqlite-config.ts`)** — The `SQLITE_DB_FILENAME` constant `'onefolder.db'` is used to construct the on-disk path. Each library needs its own database file (e.g., `onefolder_{uuid}.db` inside `userData/libraries/{uuid}/`).
 
-3. **Renderer initialization (`src/renderer.tsx`)** — `dbInit(DB_NAME)` must accept a dynamic name from library selection. The `BackupScheduler` must use a library-specific backup directory.
+3. **Renderer initialization (`src/renderer.tsx`)** — `sqliteInit(dbPath)` must receive a library-scoped file path from library selection. The `SQLiteBackupScheduler` must use a library-specific backup directory.
 
 4. **UiStore preferences (`src/frontend/stores/UiStore.ts`)** — `PREFERENCES_STORAGE_KEY` stores thumbnail directory, view settings, search criteria, and many other settings in a single unscoped localStorage entry. Must be namespaced per library.
 
@@ -173,7 +175,7 @@ Enable users to maintain multiple independent photo libraries within a single On
 
 1. **Library selector at launch** — When the app starts (or via a menu action), the user should be able to choose which library to open. This could be a lightweight dialog before the main window loads.
 2. **Per-library config directories** — Each library should have its own subdirectory for database backups and thumbnail cache.
-3. **Database isolation** — Each library must have its own IndexedDB database. Tags, locations, files, searches, and all other DB tables must be completely separate.
+3. **Database isolation** — Each library must have its own SQLite database file. Tags, locations, files, searches, and all other DB tables must be completely separate.
 4. **Thumbnail cache separation** — Each library should have its own default thumbnail directory to prevent collisions.
 5. **Per-library preferences** — View settings, sort order, search criteria, enabled extensions, and other preferences should be per-library.
 
@@ -212,7 +214,7 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 **Phase 2: Namespace All Per-Library Storage (TASK-002)**
 
-- Change `DB_NAME` from a constant to a function: `getDbName(libraryId: string) => 'OneFolder_' + libraryId`
+- Add `getSqliteDbPath(basePath, libraryId)` that returns `{basePath}/libraries/{libraryId}/onefolder.db`. (Each library's SQLite file lives in its own subdirectory alongside its backups — there is no shared parent file.)
 - Namespace all `localStorage` keys with the library ID prefix: `{libraryId}:preferences`, `{libraryId}:OneFolder_File`, etc.
 - Create per-library subdirectories for backups: `{userData}/libraries/{libraryId}/backups/`
 - Create per-library default thumbnail directories: `{temp}/OneFolder/{libraryId}/thumbnails/`
@@ -221,8 +223,8 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 - Main process reads `active-library.json` at startup to determine which library to load.
 - Pass the library ID to the renderer (via IPC or query parameter on `index.html`).
-- `renderer.tsx` uses the library ID to construct the correct DB name, localStorage prefix, and default directories.
-- `BackupScheduler`, `RootStore`, `UiStore`, `FileStore`, and `LocationStore` all receive the namespaced keys/paths.
+- `renderer.tsx` uses the library ID to construct the correct SQLite `dbPath`, localStorage prefix, and default directories.
+- `SQLiteBackupScheduler`, `RootStore`, `UiStore`, `FileStore`, and `LocationStore` all receive the namespaced keys/paths.
 
 **Phase 4: Library Selector UI (TASK-004)**
 
@@ -233,15 +235,17 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 **Phase 5: Library Switching / Teardown (TASK-005)**
 
-- When switching libraries, the app must: close ExifTool, stop all file watchers, close the Dexie database, clear MobX stores, then reinitialize with the new library's data.
+- When switching libraries, the app must: close ExifTool, stop all file watchers, close the SQLite database handle, clear MobX stores, then reinitialize with the new library's data.
 - This is effectively a "soft restart" of the renderer without restarting the Electron process.
-- The `RootStore.close()` method already handles ExifTool cleanup. Extend it to handle full teardown.
+- The `RootStore.close()` method already handles ExifTool cleanup. Extend it to handle full teardown including `db.close()` on the `better-sqlite3` handle.
 
 **Phase 6: Migration for Existing Users (TASK-006)**
 
-- On first launch after the update, if no `libraries.json` exists, automatically create a default library entry (e.g., "My Library") and associate the existing database, backups, and thumbnail cache with it.
-- Rename the existing IndexedDB from `'OneFolder'` to `'OneFolder_{defaultLibraryId}'` (Dexie does not support rename, so this requires export + import under the new name).
+- On first launch after the update, if no `libraries.json` exists, automatically create a default library entry (e.g., "My Library") and associate the existing data with it.
+- Move the existing SQLite database file from `{userData}/onefolder.db` to `{userData}/libraries/{defaultLibraryId}/onefolder.db` (a simple `fse.move` — no export/import needed).
 - Migrate existing localStorage keys to the namespaced format.
+- Move existing backups from `{userData}/backups/` to `{userData}/libraries/{defaultLibraryId}/backups/`.
+- The legacy IndexedDB → SQLite migration (`migrateIfNeeded`) already ran in the previous version; it does not need to be re-invoked here.
 
 ### Expected Outcomes
 
@@ -252,11 +256,12 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 ### Risks and Tradeoffs
 
-1. **IndexedDB migration complexity** — Renaming an IndexedDB requires exporting and reimporting. This is a one-time cost but must handle large databases gracefully. The existing `BackupScheduler.backupToFile` / `restoreFromFile` methods provide a foundation.
+1. **SQLite file migration simplicity** — Moving a SQLite database is a plain filesystem `move` of `onefolder.db` (and any `-wal` / `-shm` sidecars if present). No export/import is required, which is a significant simplification compared to the Dexie-based plan originally drafted for this investigation.
 2. **localStorage migration** — Must handle the case where users have existing preferences that need to be moved to namespaced keys without losing data.
 3. **Memory/performance** — No impact during normal operation (only one library is loaded at a time). Switching libraries has a cost similar to a fresh app launch.
 4. **Single-instance lock** — The current lock prevents running two instances. This is fine for sequential switching but would need revisiting if simultaneous multi-library is ever desired.
 5. **Thumbnail directory user customization** — If a user has customized their thumbnail directory, the migration must preserve that choice for the default library. New libraries get the per-library default.
+6. **Portable mode interaction** — Portable mode remaps `userData` and `temp` to `{appDir}/data`. The per-library layout (`{userData}/libraries/{libraryId}/...`) nests cleanly inside the portable data directory without additional changes — confirm by inspection that `libraries/` appears under `data/` in portable builds.
 
 ---
 

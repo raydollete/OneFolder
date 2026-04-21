@@ -18,6 +18,7 @@ import TrayIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-256
 import AppIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-512x512.png';
 import { createBugReport, githubUrl } from '../common/config';
 import { IS_DEV, setPortableMode } from '../common/process';
+import { LibraryRegistry } from '../common/library-registry';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress } from './ipc/messages';
 
@@ -50,6 +51,20 @@ const basePath = app.getPath('userData');
 
 const preferencesFilePath = path.join(basePath, 'preferences.json');
 const windowStateFilePath = path.join(basePath, 'windowState.json');
+
+// Library registry — manages the list of known libraries and the active
+// library ID. Instantiated at module scope so IPC handlers below can close
+// over it without needing to thread it through function parameters.
+const registry = new LibraryRegistry(basePath);
+
+// TASK-006: First-launch migration — if no libraries exist yet (fresh install or
+// first launch after upgrading to the multi-library version), create the default
+// library and record it as active. The renderer will then perform the filesystem
+// migration (SQLite file + localStorage keys + backups) on its own startup path.
+if (registry.getLibraries().length === 0) {
+  const defaultLibrary = registry.createLibrary('My Library');
+  registry.setActiveLibrary(defaultLibrary.id);
+}
 
 // if (IS_DEV) {
 //   Object.defineProperty(app, 'isPackaged', {
@@ -298,8 +313,11 @@ function createWindow() {
 
   Menu.setApplicationMenu(menu);
 
-  // and load the index.html of the app.
-  mainWindow.loadURL(`file://${__dirname}/index.html`);
+  // and load the index.html of the app, passing the active library ID so
+  // the renderer can open the correct SQLite database and namespace its storage.
+  const activeLibId = registry.getActiveLibraryId();
+  const libraryParam = activeLibId ? `?libraryId=${encodeURIComponent(activeLibId)}` : '';
+  mainWindow.loadURL(`file://${__dirname}/index.html${libraryParam}`);
 
   // then maximize the window if it was previously
   if (previousWindowState.isMaximized) {
@@ -373,7 +391,9 @@ function createPreviewWindow() {
     show: false, // invis by default
   });
   previewWindow.setMenuBarVisibility(false);
-  previewWindow.loadURL(`file://${__dirname}/index.html?preview=true`);
+  const previewLibId = registry.getActiveLibraryId();
+  const previewLibParam = previewLibId ? `&libraryId=${encodeURIComponent(previewLibId)}` : '';
+  previewWindow.loadURL(`file://${__dirname}/index.html?preview=true${previewLibParam}`);
   previewWindow.on('close', (e) => {
     // Prevent close, hide the window instead, for faster launch next time
     if (mainWindow !== null) {
@@ -731,6 +751,33 @@ MainMessenger.onToggleCheckUpdatesOnStartup(() => {
 MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => preferences.checkForUpdatesOnStartup === true);
 
 MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
+
+// Library management IPC handlers
+MainMessenger.onGetLibraries(() => registry.getLibraries());
+MainMessenger.onGetActiveLibraryId(() => registry.getActiveLibraryId());
+MainMessenger.onSetActiveLibrary((id) => {
+  registry.setActiveLibrary(id);
+  registry.updateLastOpened(id);
+});
+MainMessenger.onCreateLibrary((name) => registry.createLibrary(name));
+MainMessenger.onDeleteLibrary((id) => registry.deleteLibrary(id));
+MainMessenger.onRenameLibrary((id, name) => registry.renameLibrary(id, name));
+
+// Switch library: update the active library in the registry, then reload the
+// main window (and close any open preview window) so the renderer reinitialises
+// with the new library's database and preferences.
+MainMessenger.onSwitchLibrary((newLibraryId) => {
+  registry.setActiveLibrary(newLibraryId);
+  registry.updateLastOpened(newLibraryId);
+  if (previewWindow !== null && !previewWindow.isDestroyed()) {
+    previewWindow.destroy();
+  }
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    mainWindow.loadURL(
+      `file://${__dirname}/index.html?libraryId=${encodeURIComponent(newLibraryId)}`,
+    );
+  }
+});
 
 // Helper functions and variables/constants
 

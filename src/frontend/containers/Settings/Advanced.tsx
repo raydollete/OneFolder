@@ -92,6 +92,20 @@ export const Advanced = observer(() => {
         <div className="filepicker-path">{thumbnailDirectory}</div>
       </div>
 
+      <h3>Libraries</h3>
+      <ButtonGroup>
+        <Button
+          onClick={() => {
+            // Navigate to the library selector by clearing the libraryId param
+            // so the selector appears on the next load.
+            window.location.href = window.location.pathname;
+          }}
+          styling="outlined"
+          icon={IconSet.FOLDER_STRUCTURE}
+          text="Manage Libraries"
+        />
+      </ButtonGroup>
+
       <h3>Development</h3>
       <ButtonGroup>
         <ClearDbButton />
