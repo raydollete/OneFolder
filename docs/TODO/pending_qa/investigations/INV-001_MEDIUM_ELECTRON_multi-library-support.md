@@ -5,7 +5,7 @@ reported_bug: 'Feature request — the application is not portable and cannot su
 date: 2026-04-04
 status: active
 superseded_by:
-tasks_spawned: [TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006]
+tasks_spawned: [TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-017, TASK-018]
 root_cause_category: architectural-shortcoming
 affects:
   - 'Electron main process (single-instance lock, basePath, preferences, window state)'
@@ -267,5 +267,5 @@ The registry file lives at `{userData}/libraries.json`. The active library ID is
 
 ## Documentation Updates
 
-- [ ] Updated: `docs/` should get a new `multi-library.md` explaining the library concept and architecture
-- [ ] Updated: `CLAUDE.md` should mention the library abstraction in the Architecture section
+- [x] Updated: `docs/` should get a new `multi-library.md` explaining the library concept and architecture
+- [x] Updated: `CLAUDE.md` should mention the library abstraction in the Architecture section

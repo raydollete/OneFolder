@@ -169,3 +169,29 @@ export function getLibraryPaths(basePath: string, libraryId: string) {
 export function getSqliteDbPath(basePath: string, libraryId: string): string {
   return path.join(basePath, 'libraries', libraryId, SQLITE_DB_FILENAME);
 }
+
+/**
+ * Returns the default per-library thumbnail directory path.
+ *
+ * This mirrors the logic in `RendererMessenger.getDefaultThumbnailDirectory`
+ * so that main-process code and renderer code agree on the path without
+ * duplicating the computation.
+ *
+ * @param basePath    - `app.getPath('userData')` (already remapped for portable mode)
+ * @param tempPath    - `app.getPath('temp')` (already remapped for portable mode)
+ * @param isPortable  - whether the app is running in portable mode
+ * @param libraryId   - the library's UUID
+ */
+export function getDefaultThumbnailDir(
+  basePath: string,
+  tempPath: string,
+  isPortable: boolean,
+  libraryId: string,
+): string {
+  if (isPortable) {
+    // In portable mode, temp is remapped to basePath, so thumbnails live inside
+    // the portable data dir and travel with the app.
+    return path.join(basePath, 'thumbnails', libraryId);
+  }
+  return path.join(tempPath, 'OneFolder', libraryId, 'thumbnails');
+}

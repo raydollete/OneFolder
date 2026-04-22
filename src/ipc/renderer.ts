@@ -57,6 +57,10 @@ import {
   DELETE_LIBRARY,
   RENAME_LIBRARY,
   SWITCH_LIBRARY,
+  GET_LIBRARY_DISK_PATHS,
+  DELETE_LIBRARY_AND_FILES,
+  LibraryDiskPaths,
+  DeleteLibraryAndFilesResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -218,4 +222,10 @@ export class RendererMessenger {
 
   static switchLibrary = (newLibraryId: string): Promise<void> =>
     ipcRenderer.invoke(SWITCH_LIBRARY, newLibraryId);
+
+  static getLibraryDiskPaths = (id: string): Promise<LibraryDiskPaths> =>
+    ipcRenderer.invoke(GET_LIBRARY_DISK_PATHS, id);
+
+  static deleteLibraryAndFiles = (id: string): Promise<DeleteLibraryAndFilesResult> =>
+    ipcRenderer.invoke(DELETE_LIBRARY_AND_FILES, id);
 }

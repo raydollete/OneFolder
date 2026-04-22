@@ -19,7 +19,11 @@ import TrayIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-256
 import AppIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-512x512.png';
 import { createBugReport, githubUrl } from '../common/config';
 import { IS_DEV, setPortableMode } from '../common/process';
-import { LibraryRegistry } from '../common/library-registry';
+import {
+  LibraryRegistry,
+  getDefaultThumbnailDir,
+  getSqliteDbPath,
+} from '../common/library-registry';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress } from './ipc/messages';
 
@@ -769,6 +773,107 @@ MainMessenger.onCreateLibrary((name) => registry.createLibrary(name));
 MainMessenger.onDeleteLibrary((id) => registry.deleteLibrary(id));
 MainMessenger.onRenameLibrary((id, name) => registry.renameLibrary(id, name));
 
+// Returns the absolute paths that would be deleted by DELETE_LIBRARY_AND_FILES,
+// so the renderer can display them in the confirmation dialog before the user commits.
+MainMessenger.onGetLibraryDiskPaths((id) => {
+  const tempPath = app.getPath('temp');
+  const libraryDir = path.join(basePath, 'libraries', id);
+  return {
+    libraryDir,
+    dbPath: getSqliteDbPath(basePath, id),
+    thumbnailDir: getDefaultThumbnailDir(basePath, tempPath, IS_PORTABLE_MODE, id),
+  };
+});
+
+// Destructive deletion: removes the library's on-disk data (DB + WAL/SHM sidecars +
+// backups/ + thumbnail cache) and then unregisters it.  Several safety gates apply:
+//   1. Refuse if this is the currently active library.
+//   2. Refuse if it is the last library (registry would be left empty).
+//   3. Resolve all paths and validate that each stays inside its expected root.
+//   4. Attempt fse.remove for each path; collect per-path errors instead of aborting.
+//   5. Only call registry.deleteLibrary when ALL removals succeeded (or paths were absent).
+MainMessenger.onDeleteLibraryAndFiles(async (id) => {
+  const removedPaths: string[] = [];
+  const failedPaths: { path: string; error: string }[] = [];
+
+  // Safety gate 1: never delete the currently active library.
+  if (id === registry.getActiveLibraryId()) {
+    return {
+      removedPaths: [],
+      failedPaths: [{ path: id, error: 'Cannot delete the active library.' }],
+    };
+  }
+
+  // Safety gate 2: refuse if this is the last library.
+  if (registry.getLibraries().length <= 1) {
+    return {
+      removedPaths: [],
+      failedPaths: [{ path: id, error: 'Cannot delete the last remaining library.' }],
+    };
+  }
+
+  const tempPath = app.getPath('temp');
+  const libraryDir = path.join(basePath, 'libraries', id);
+  const thumbnailDir = getDefaultThumbnailDir(basePath, tempPath, IS_PORTABLE_MODE, id);
+
+  // Safety gate 3: path-sanity assertions — prevent a crafted library ID containing
+  // ".." from escaping the expected root directories.
+  const resolvedLibraryDir = path.resolve(libraryDir);
+  const resolvedThumbnailDir = path.resolve(thumbnailDir);
+  const resolvedBasePath = path.resolve(basePath);
+  // Thumbnail root differs by mode: portable uses basePath, installed uses tempPath.
+  const resolvedThumbnailRoot = path.resolve(IS_PORTABLE_MODE ? basePath : tempPath);
+
+  if (
+    !resolvedLibraryDir.startsWith(resolvedBasePath + path.sep) &&
+    resolvedLibraryDir !== resolvedBasePath
+  ) {
+    return {
+      removedPaths: [],
+      failedPaths: [
+        {
+          path: libraryDir,
+          error: `Path sanity check failed: resolved path does not start with basePath. libraryDir=${resolvedLibraryDir}, basePath=${resolvedBasePath}`,
+        },
+      ],
+    };
+  }
+  if (
+    !resolvedThumbnailDir.startsWith(resolvedThumbnailRoot + path.sep) &&
+    resolvedThumbnailDir !== resolvedThumbnailRoot
+  ) {
+    return {
+      removedPaths: [],
+      failedPaths: [
+        {
+          path: thumbnailDir,
+          error: `Path sanity check failed: resolved thumbnail path does not start with expected root. thumbnailDir=${resolvedThumbnailDir}, root=${resolvedThumbnailRoot}`,
+        },
+      ],
+    };
+  }
+
+  // Attempt removal of each path, collecting errors.  Order: thumbnail dir first,
+  // then the library dir (which includes onefolder.db, -wal, -shm, and backups/).
+  for (const p of [thumbnailDir, libraryDir]) {
+    try {
+      await fse.remove(p); // idempotent — does not throw for absent paths
+      removedPaths.push(p);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      failedPaths.push({ path: p, error: msg });
+    }
+  }
+
+  // Only update the registry when every removal succeeded (ENOENT counts as success
+  // because fse.remove is idempotent, but a real access error does not).
+  if (failedPaths.length === 0) {
+    registry.deleteLibrary(id);
+  }
+
+  return { removedPaths, failedPaths };
+});
+
 // Switch library: update the active library in the registry, then reload the
 // main window (and close any open preview window) so the renderer reinitialises
 // with the new library's database and preferences.
@@ -839,7 +944,7 @@ function getPreviousWindowState(): Electron.Rectangle & { isMaximized?: boolean 
   } catch (e) {
     // ENOENT is expected on first launch (file hasn't been written yet);
     // anything else — malformed JSON, permission error — is worth surfacing.
-    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
       console.warn('Could not read window state file, falling back to defaults.', e);
     }
     // Fallback to primary display screen size

@@ -1,0 +1,163 @@
+///////////////////////////////// Library Selector /////////////////////////////////
+
+// Full-viewport centered layout — matches the feel of #about and #help-center.
+.library-selector {
+  width: 100vw;
+  height: 100vh;
+  background: var(--background-color);
+  display: flex;
+  flex-direction: column;
+  padding: 2rem;
+
+  // Inner column: constrained width, centered horizontally.
+  > * {
+    max-width: 640px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+.library-selector-header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+
+  h1 {
+    color: var(--text-color-strong);
+    font-size: 1.5rem;
+    margin-bottom: 0.25rem;
+    margin-top: 0;
+  }
+
+  p {
+    color: var(--text-color-muted);
+    margin: 0;
+  }
+}
+
+// Vertical stack of library cards — scrollable when the list is long.
+.library-selector-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+// Individual library row card.
+.library-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--background-color-alt);
+  border: 0.0625rem solid var(--border-color);
+  border-radius: 0.25rem;
+  gap: 1rem;
+
+  &:hover {
+    background: var(--hover-color);
+  }
+}
+
+// Active-library modifier: accent border + faint tinted background.
+.library-card--active {
+  border-color: var(--accent-color);
+  background: var(--accent-color-variation);
+
+  // Keep the highlighted look on hover; do not revert to generic hover color.
+  &:hover {
+    background: var(--accent-color-variation);
+  }
+}
+
+// Left-hand column: name + date. min-width: 0 allows long names to ellipsize.
+.library-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+// Library display name — ellipsizes when the card is too narrow.
+.library-card-name {
+  color: var(--text-color-strong);
+  font-weight: 600;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// "Last opened: …" label.
+.library-card-date {
+  color: var(--text-color-muted);
+  font-size: 0.8125rem;
+}
+
+// Right-hand button cluster — flex-shrink: 0 prevents buttons from wrapping.
+.library-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+// Inline rename <input> — mirrors the .input idiom from controls/input.scss.
+// It replaces .library-card-name in place and should fill the same space.
+.library-card-rename-input {
+  background: var(--input-color);
+  border: 0.0625rem solid var(--border-color);
+  border-radius: 0.25rem;
+  color: var(--text-color);
+  padding: 0.25rem 0.5rem;
+  height: 1.75rem;
+  width: 100%;
+  outline: none;
+
+  &:hover {
+    background: var(--input-color-hover);
+  }
+
+  &:focus {
+    background: var(--input-color);
+    box-shadow: 0 0 0 0.125rem var(--accent-color);
+  }
+}
+
+// Footer strip beneath the list: centered, separated by a top border.
+.library-selector-footer {
+  display: flex;
+  justify-content: center;
+  padding-top: 1rem;
+  border-top: 0.0625rem solid var(--border-color);
+  margin-top: 1rem;
+}
+
+// Inline create-form row: input expands, ButtonGroup stays at natural width.
+.library-create-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+// New-library name <input> — same .input idiom as rename, fills remaining space.
+.library-create-input {
+  background: var(--input-color);
+  border: 0.0625rem solid var(--border-color);
+  border-radius: 0.25rem;
+  color: var(--text-color);
+  padding: 0.25rem 0.5rem;
+  height: 1.75rem;
+  flex: 1 1 auto;
+  outline: none;
+
+  &:hover {
+    background: var(--input-color-hover);
+  }
+
+  &:focus {
+    background: var(--input-color);
+    box-shadow: 0 0 0 0.125rem var(--accent-color);
+  }
+}

@@ -122,3 +122,21 @@ export const CREATE_LIBRARY = 'CREATE_LIBRARY';
 export const DELETE_LIBRARY = 'DELETE_LIBRARY';
 export const RENAME_LIBRARY = 'RENAME_LIBRARY';
 export const SWITCH_LIBRARY = 'SWITCH_LIBRARY';
+export const GET_LIBRARY_DISK_PATHS = 'GET_LIBRARY_DISK_PATHS';
+export const DELETE_LIBRARY_AND_FILES = 'DELETE_LIBRARY_AND_FILES';
+
+export type LibraryDiskPaths = {
+  /** The per-library directory containing onefolder.db, WAL/SHM sidecars, and backups/ */
+  libraryDir: string;
+  /** Absolute path to the SQLite database file (informational; lives inside libraryDir) */
+  dbPath: string;
+  /** The default per-library thumbnail cache directory */
+  thumbnailDir: string;
+};
+
+export type DeleteLibraryAndFilesResult = {
+  /** Paths that were successfully removed (or were already absent) */
+  removedPaths: string[];
+  /** Paths where removal failed with a non-ENOENT error */
+  failedPaths: { path: string; error: string }[];
+};

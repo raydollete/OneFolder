@@ -39,3 +39,4 @@ OneFolder/
 | [Location Loading Process](location-loading.md)                 | Complete workflow from folder selection to indexed files             |
 | [Thumbnail Generation System](thumbnail-generation.md)          | Image processing, caching, and format-specific handling              |
 | [Metadata Sync Implementation](metadata-sync-implementation.md) | Plan for immediate tag synchronization between app and file metadata |
+| [Multi-Library Support](multi-library.md)                       | Multi-library registry, per-library on-disk layout, startup and switch flows |

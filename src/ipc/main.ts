@@ -57,6 +57,10 @@ import {
   DELETE_LIBRARY,
   RENAME_LIBRARY,
   SWITCH_LIBRARY,
+  GET_LIBRARY_DISK_PATHS,
+  DELETE_LIBRARY_AND_FILES,
+  LibraryDiskPaths,
+  DeleteLibraryAndFilesResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -207,4 +211,10 @@ export class MainMessenger {
 
   static onSwitchLibrary = (cb: (newLibraryId: string) => void) =>
     ipcMain.handle(SWITCH_LIBRARY, (_, newLibraryId: string) => cb(newLibraryId));
+
+  static onGetLibraryDiskPaths = (cb: (id: string) => LibraryDiskPaths) =>
+    ipcMain.handle(GET_LIBRARY_DISK_PATHS, (_, id: string) => cb(id));
+
+  static onDeleteLibraryAndFiles = (cb: (id: string) => Promise<DeleteLibraryAndFilesResult>) =>
+    ipcMain.handle(DELETE_LIBRARY_AND_FILES, (_, id: string) => cb(id));
 }

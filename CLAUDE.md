@@ -5,6 +5,7 @@ OneFolder is a desktop photo management application built with Electron, React, 
 # Architecture
 
 - **Electron main process** (`src/main.ts`) — Window management, native APIs, IPC handlers
+- **Library abstraction** (`src/api/library.ts`, `common/library-registry.ts`) — First-class "library" concept that scopes the SQLite database, preferences, thumbnails, and backups per library; the registry lives at `{userData}/libraries.json` (see `docs/multi-library.md`)
 - **React renderer** (`src/renderer.tsx`) — UI layer with MobX state management
 - **IPC layer** (`src/ipc/`) — Type-safe messaging between main and renderer
 - **Backend** (`src/backend/`) — IndexedDB via Dexie for data persistence
