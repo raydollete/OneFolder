@@ -15,6 +15,7 @@
     "package:appimage": "yarn build && electron-builder --linux AppImage",
     "logo": "ncp ./resources/logo/icns/onefolder-logomark-fc.icns ./build/icon.icns && ncp ./resources/logo/ico/onefolder-logomark-fc-256x256.ico ./build/icon.ico",
     "build": "rimraf dist && yarn production && yarn logo",
+    "convert-backup": "electron scripts/convert-dexie-backup.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "build:masonry": "cd wasm/wasm-build && cargo run masonry masonry/masonry-scalar && cargo run masonry masonry/masonry-simd -- -C target-feature=+simd128",
@@ -70,16 +71,9 @@
     },
     "portable": {
       "artifactName": "${productName}Portable.${version}.${ext}",
-      "requestExecutionLevel": "user",
-      "extraFiles": [
-        {
-          "from": "resources/portable.txt",
-          "to": "portable.txt"
-        }
-      ]
+      "requestExecutionLevel": "user"
     },
     "files": [
-      "!node_modules",
       "build/**/*",
       "package.json"
     ],

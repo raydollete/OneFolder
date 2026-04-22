@@ -12,6 +12,7 @@ import {
   Rectangle,
 } from 'electron';
 import path from 'path';
+import { spawn } from 'child_process';
 import fse from 'fs-extra';
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 import TrayIcon from '../resources/logo/png/full-color/onefolder-logomark-fc-256x256.png';
@@ -24,11 +25,16 @@ import { WindowSystemButtonPress } from './ipc/messages';
 
 // Portable mode detection — must run before any app.getPath() calls so that
 // app.setPath('userData') takes effect for all subsequent consumers.
-const _portableAppDir = app.isPackaged
-  ? path.dirname(process.execPath)
-  : path.resolve(__dirname, '..');
+// electron-builder's Windows `portable` target sets PORTABLE_EXECUTABLE_DIR to the
+// directory that holds the running .exe (not the extracted temp dir), so we prefer
+// that when present. This lets shipped portable builds auto-enter portable mode
+// without needing a bundled sentinel file.
+const _portableAppDir =
+  process.env.PORTABLE_EXECUTABLE_DIR ??
+  (app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '..'));
 
 const IS_PORTABLE_MODE =
+  process.env.PORTABLE_EXECUTABLE_DIR !== undefined ||
   fse.pathExistsSync(path.join(_portableAppDir, 'portable.txt')) ||
   fse.pathExistsSync(path.join(_portableAppDir, 'data'));
 
@@ -831,7 +837,11 @@ function getPreviousWindowState(): Electron.Rectangle & { isMaximized?: boolean 
     }
     options.isMaximized = state.isMaximized;
   } catch (e) {
-    console.error('Could not read window state file!', e);
+    // ENOENT is expected on first launch (file hasn't been written yet);
+    // anything else — malformed JSON, permission error — is worth surfacing.
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn('Could not read window state file, falling back to defaults.', e);
+    }
     // Fallback to primary display screen size
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
     options.width = width;
@@ -859,8 +869,28 @@ function saveWindowState() {
 }
 
 function forceRelaunch() {
-  app.relaunch();
-  app.exit();
+  // We deliberately avoid app.relaunch(): its internal child-process handoff races
+  // against Electron's exit cleanup in several packaging formats (notably the
+  // Windows portable target, where process.execPath is inside an NSIS temp dir
+  // that gets wiped on exit). Spawning a detached child ourselves before calling
+  // app.exit() gives the new process an independent OS-level lifetime, so exit
+  // ordering stops mattering.
+  //
+  // For the Windows portable target, PORTABLE_EXECUTABLE_FILE points to the outer
+  // .exe that lives on disk permanently; re-executing it re-enters the normal
+  // portable boot path (including the env-var injection that triggers portable
+  // mode detection). In dev and all other packaged builds, process.execPath is
+  // the right target.
+  const exe = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
+  // In dev, argv[1] is the app bundle path that electron.exe must be told to
+  // load. Packaged/portable binaries know how to launch themselves.
+  const args = app.isPackaged ? [] : [process.argv[1]];
+  spawn(exe, args, {
+    detached: true,
+    stdio: 'ignore',
+    env: process.env,
+  }).unref();
+  app.exit(0);
 }
 
 function getVersion(): string {

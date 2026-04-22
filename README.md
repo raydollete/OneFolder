@@ -87,6 +87,23 @@ Then run the following commands to get started:
 An installable executable can be built using `yarn package` for your platform in the `/dist` folder. The building is performed using the [electron-builder](https://www.electron.build/) package, and is configured by a section in the `package.json` file.
 Builds are automatically published to Github Releases when a tag is created in GitHub.
 
+### Migrating from pre-SQLite backups
+
+Starting with the SQLite data layer (introduced with INV-002), backup files are produced as SQLite `.db` files. Older OneFolder versions produced `.json` backups via `dexie-export-import`. The in-app restore flow only accepts `.db` files, so a legacy `.json` backup must be converted first.
+
+A one-off converter script is included:
+
+```bash
+yarn convert-backup <input.json> [output.db]
+```
+
+- If `[output.db]` is omitted, the `.db` is written next to the input with the same base name.
+- The script runs under Electron (not plain Node) so it can load `better-sqlite3`, which is rebuilt for Electron's ABI.
+- The generated `.db` uses the current v1 schema (including the FTS5 full-text index) so it can be consumed directly by **Settings → Import/Export → Restore Backup** inside the app.
+- The source JSON is never modified.
+
+The conversion is defensive about older Dexie schema versions — missing fields (`ino`, `dateLastIndexed`, `annotations`, tag `color`, etc.) are populated with sensible defaults, matching the behavior of the in-app IndexedDB → SQLite migration.
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=OneFolderApp/OneFolder&type=Date)](https://star-history.com/#OneFolderApp/OneFolder&Date)
