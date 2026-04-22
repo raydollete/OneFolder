@@ -9,7 +9,9 @@
       "Bash(mv TASK-015_PLANNED_BACKEND_multi-library-infrastructure-tests.md TASK-017_PLANNED_BACKEND_multi-library-infrastructure-tests.md)",
       "Bash(mv TASK-015_PLANNED_ELECTRON_library-delete-on-disk-cleanup.md TASK-018_PLANNED_ELECTRON_library-delete-on-disk-cleanup.md)",
       "Read(//d/d/Dev/OneFolder/docs/TODO/backlog/**)",
-      "Bash(yarn build *)"
+      "Bash(yarn build *)",
+      "Bash(git --no-pager diff HEAD~1..HEAD -- src/main.ts)",
+      "Bash(git --no-pager diff HEAD~1..HEAD --stat)"
     ]
   }
 }
