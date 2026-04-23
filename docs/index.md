@@ -40,3 +40,4 @@ OneFolder/
 | [Thumbnail Generation System](thumbnail-generation.md)          | Image processing, caching, and format-specific handling              |
 | [Metadata Sync Implementation](metadata-sync-implementation.md) | Plan for immediate tag synchronization between app and file metadata |
 | [Multi-Library Support](multi-library.md)                       | Multi-library registry, per-library on-disk layout, startup and switch flows |
+| [Personal Fork Notes](personal-fork-notes.md)                   | Fork-specific deviations: Windows binary renamed to `brave.exe` (for NVIDIA VSR), portable-only |

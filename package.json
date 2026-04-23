@@ -53,8 +53,8 @@
       ]
     },
     "win": {
+      "executableName": "brave",
       "target": [
-        "nsis",
         "portable"
       ],
       "extraResources": [
@@ -65,12 +65,8 @@
     "extraResources": [
       "resources/themes"
     ],
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
     "portable": {
-      "artifactName": "${productName}Portable.${version}.${ext}",
+      "artifactName": "brave.${ext}",
       "requestExecutionLevel": "user"
     },
     "files": [
