@@ -1,5 +1,13 @@
 import fse from 'fs-extra';
-import { action, computed, makeObservable, observable, runInAction, transaction } from 'mobx';
+import {
+  action,
+  computed,
+  makeObservable,
+  observable,
+  reaction,
+  runInAction,
+  transaction,
+} from 'mobx';
 
 import { getThumbnailPath } from 'common/fs';
 import { promiseAllLimit } from 'common/promise';
@@ -73,6 +81,13 @@ class FileStore {
 
     this.debouncedRefetch = debounce(this.refetch, 200).bind(this);
     this.debouncedSaveFilesToSave = debounce(this.saveFilesToSave, 100).bind(this);
+
+    // When the "hide missing files" preference toggles, re-run the current fetch so
+    // the gallery immediately reflects the new setting without requiring a restart.
+    reaction(
+      () => this.rootStore.uiStore.hideMissingFilesInBrowsing,
+      () => this.refetch(),
+    );
   }
 
   /**
@@ -957,12 +972,44 @@ class FileStore {
     const N = 50;
     return promiseAllLimit(existenceCheckPromises, N)
       .then(() => {
-        // Batch the final state update to avoid additional reactions
         transaction(() => {
-          this.updateFileListState(); // update missing image counter
+          // Count broken files BEFORE filtering so the Outliner badge stays accurate
+          // regardless of whether we're about to splice them out of fileList.
+          const brokenCount = newClientFiles.reduce((n, f) => n + (f.isBroken ? 1 : 0), 0);
+
+          const shouldHide =
+            this.rootStore.uiStore.hideMissingFilesInBrowsing && !this.showsMissingContent;
+
+          if (shouldHide && brokenCount > 0) {
+            // Replace fileList with only the visible (non-broken) files.
+            const visible = newClientFiles.filter((f) => !f.isBroken);
+            this.fileList.clear();
+            this.fileList.push(...visible);
+            // Drop any stale selection references to broken files that were just removed.
+            this.cleanFileSelection();
+            this.fileListLastModified = new Date();
+          }
+
+          // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
+          // fileList looks like now (possibly filtered above).
+          this.updateFileListState();
+
+          // updateFileListState derives numMissingFiles from fileList; after the splice
+          // fileList has no broken entries so the count becomes 0. Override it with the
+          // pre-filter tally so the Outliner warning badge remains accurate.
+          this.numMissingFiles = brokenCount;
+
+          // updateFileListState also sets numTotalFiles = fileList.length when showing
+          // All content. After the filter splice, fileList is smaller than the DB total,
+          // so the Outliner "All Images" badge would show the visible count rather than
+          // the true library size. Override with the full fetched count so the badge
+          // stays accurate even when broken files are hidden.
+          if (shouldHide && brokenCount > 0 && this.showsAllContent) {
+            this.numTotalFiles = newClientFiles.length;
+          }
         });
       })
-      .catch((e) => console.error('An error occured during existence checking!', e));
+      .catch((e) => console.error('An error occurred during existence checking!', e));
   }
 
   /** Remove files from selection that are not in the file list anymore */

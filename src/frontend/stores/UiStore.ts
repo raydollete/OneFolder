@@ -150,6 +150,7 @@ type PersistentPreferenceFields =
   | 'outlinerWidth'
   | 'inspectorWidth'
   | 'isRememberSearchEnabled'
+  | 'hideMissingFilesInBrowsing'
   // the following are only restored when isRememberSearchEnabled is enabled
   | 'isSlideMode'
   | 'firstItem'
@@ -188,6 +189,10 @@ class UiStore {
   @observable importMetadataAtReIndexing: boolean = true;
   @observable isThumbnailFilenameOverlayEnabled: boolean = false;
   @observable isThumbnailResolutionOverlayEnabled: boolean = false;
+  /** When true (default), files whose absolutePath no longer resolves on disk are hidden from
+   *  All / Untagged / Query / Duplicates / Calendar / List views. The dedicated Missing Files
+   *  recovery view is unaffected. */
+  @observable hideMissingFilesInBrowsing: boolean = true;
   @observable inspectorIsDescriptionVisible: boolean = true;
   @observable inspectorIsPromptVisible: boolean = false;
   @observable inspectorIsParametersVisible: boolean = false;
@@ -418,6 +423,14 @@ class UiStore {
 
   @action.bound toggleThumbnailResolutionOverlay(): void {
     this.isThumbnailResolutionOverlayEnabled = !this.isThumbnailResolutionOverlayEnabled;
+  }
+
+  @action.bound setHideMissingFilesInBrowsing(value: boolean): void {
+    this.hideMissingFilesInBrowsing = value;
+  }
+
+  @action.bound toggleHideMissingFilesInBrowsing(): void {
+    this.hideMissingFilesInBrowsing = !this.hideMissingFilesInBrowsing;
   }
 
   @action.bound toggleInspectorDescriptionVisibility(): void {
@@ -1016,6 +1029,7 @@ class UiStore {
         this.isThumbnailResolutionOverlayEnabled = Boolean(
           prefs.isThumbnailResolutionOverlayEnabled ?? false,
         );
+        this.hideMissingFilesInBrowsing = Boolean(prefs.hideMissingFilesInBrowsing ?? true);
         this.inspectorIsDescriptionVisible = Boolean(prefs.inspectorIsDescriptionVisible ?? true);
         this.inspectorIsPromptVisible = Boolean(prefs.inspectorIsPromptVisible ?? true);
         this.inspectorIsParametersVisible = Boolean(prefs.inspectorIsParametersVisible ?? false);
@@ -1098,6 +1112,7 @@ class UiStore {
       importMetadataAtLocationLoading: this.importMetadataAtLocationLoading,
       importMetadataAtReIndexing: this.importMetadataAtReIndexing,
       isThumbnailResolutionOverlayEnabled: this.isThumbnailResolutionOverlayEnabled,
+      hideMissingFilesInBrowsing: this.hideMissingFilesInBrowsing,
       outlinerWidth: this.outlinerWidth,
       inspectorWidth: this.inspectorWidth,
       isRememberSearchEnabled: this.isRememberSearchEnabled,

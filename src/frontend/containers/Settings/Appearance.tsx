@@ -8,7 +8,7 @@ import { Button, IconSet, Radio, RadioGroup, Toggle } from 'widgets';
 import { useStore } from '../../contexts/StoreContext';
 
 export const Appearance = observer(() => {
-  const { uiStore } = useStore();
+  const { uiStore, fileStore } = useStore();
 
   // const toggleFullScreen = (value: boolean) => {
   //   localStorage.setItem(WINDOW_STORAGE_KEY, JSON.stringify({ isFullScreen: value }));
@@ -71,6 +71,27 @@ export const Appearance = observer(() => {
         >
           Show resolution
         </Toggle>
+        <Toggle
+          checked={!uiStore.hideMissingFilesInBrowsing}
+          onChange={(checked) => {
+            uiStore.setHideMissingFilesInBrowsing(!checked);
+            fileStore.refetch();
+          }}
+        >
+          Show missing files in gallery
+        </Toggle>
+        <div
+          style={{
+            fontSize: '12px',
+            color: 'var(--text-secondary)',
+            marginTop: '-4px',
+            marginLeft: '20px',
+            marginBottom: '8px',
+          }}
+        >
+          When off, files that can no longer be found on disk are excluded from browsing views. They
+          remain accessible via the warning badge in the left panel.
+        </div>
         <RadioGroup
           orientation="horizontal"
           name="Shape"
