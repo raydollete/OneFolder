@@ -11,7 +11,8 @@
       "Read(//d/d/Dev/OneFolder/docs/TODO/backlog/**)",
       "Bash(yarn build *)",
       "Bash(git --no-pager diff HEAD~1..HEAD -- src/main.ts)",
-      "Bash(git --no-pager diff HEAD~1..HEAD --stat)"
+      "Bash(git --no-pager diff HEAD~1..HEAD --stat)",
+      "Bash(git mv *)"
     ]
   }
 }
