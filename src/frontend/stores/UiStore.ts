@@ -793,6 +793,25 @@ class UiStore {
     }
   }
 
+  /**
+   * Clears the search criteria list WITHOUT triggering viewAllContent().
+   *
+   * Intended for fetcher internals that need to reset the user-visible
+   * criteria chip list before setting up a new non-query content mode
+   * (Untagged, All). Callers are responsible for setting the content mode
+   * themselves afterward (via setContentUntagged / setContentAll / etc).
+   *
+   * Do NOT call from UI code — the Searchbar "Clear" button and anywhere
+   * else the user clears the list should use clearSearchCriteriaList() so
+   * that clearing returns the user to All view.
+   */
+  @action.bound _resetSearchCriteriaListNoFetch(): void {
+    if (this.searchCriteriaList.length > 0) {
+      this.searchCriteriaList.forEach((c) => c.dispose());
+      this.searchCriteriaList.clear();
+    }
+  }
+
   @action.bound addSearchCriteria(query: Exclude<ClientFileSearchCriteria, 'key'>): void {
     this.searchCriteriaList.push(query);
     this.viewQueryContent();

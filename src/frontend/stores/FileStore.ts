@@ -10,6 +10,7 @@ import {
 } from 'mobx';
 
 import { getThumbnailPath } from 'common/fs';
+import { IS_DEV } from 'common/process';
 import { promiseAllLimit } from 'common/promise';
 import { debounce } from 'common/timeout';
 import { DataStorage } from '../../api/data-storage';
@@ -674,22 +675,54 @@ class FileStore {
   }
 
   @action.bound async refetch(): Promise<void> {
+    const contentBefore = this.content;
+
+    // Pass forceRefresh=true so the no-op guards in each fetcher are bypassed.
+    // Background refetch callers (watchLocations, chokidar add, tag/location mutations)
+    // must always re-run the query even when the content mode hasn't changed.
+    let result: Promise<void> | undefined;
     if (this.showsAllContent) {
-      return this.fetchAllFiles();
+      result = this._fetchAllFilesForced();
     } else if (this.showsUntaggedContent) {
-      return this.fetchUntaggedFiles();
+      result = this._fetchUntaggedFilesForced();
     } else if (this.showsQueryContent) {
-      return this.fetchFilesByQuery();
+      result = this.fetchFilesByQuery();
     } else if (this.showsMissingContent) {
-      return this.fetchMissingFiles();
+      result = this._fetchMissingFilesForced();
     } else if (this.showsDuplicatesContent) {
-      return this.fetchDuplicatesFiles();
+      result = this._fetchDuplicatesFilesForced();
     }
+
+    if (result !== undefined && IS_DEV) {
+      result.then(() => {
+        if (this.content !== contentBefore) {
+          console.warn(
+            '[INV-007 regression] refetch() changed content mode from',
+            contentBefore,
+            'to',
+            this.content,
+            '— some async side-effect is clobbering the user-visible filter.',
+          );
+        }
+      });
+    }
+
+    return result;
   }
 
   @action.bound async fetchAllFiles(): Promise<void> {
+    // No-op guard: if already in All mode, skip the fetch to prevent gallery flicker
+    // on repeated clicks of the "All Images" selector. Background refetch() calls
+    // go through _fetchAllFilesForced() to bypass this guard. See INV-007.
+    if (this.showsAllContent) {
+      return;
+    }
+    return this._fetchAllFilesForced();
+  }
+
+  private async _fetchAllFilesForced(): Promise<void> {
     try {
-      this.rootStore.uiStore.clearSearchCriteriaList();
+      this.rootStore.uiStore._resetSearchCriteriaListNoFetch();
       const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
       this.setContentAll();
       return this.updateFromBackend(fetchedFiles);
@@ -699,9 +732,19 @@ class FileStore {
   }
 
   @action.bound async fetchUntaggedFiles(): Promise<void> {
+    // No-op guard: if already in Untagged mode, skip the fetch to prevent gallery
+    // flicker on repeated clicks of the Untagged selector. Background refetch() calls
+    // go through _fetchUntaggedFilesForced() to bypass this guard. See INV-007.
+    if (this.showsUntaggedContent) {
+      return;
+    }
+    return this._fetchUntaggedFilesForced();
+  }
+
+  private async _fetchUntaggedFilesForced(): Promise<void> {
     try {
       const { uiStore } = this.rootStore;
-      uiStore.clearSearchCriteriaList();
+      uiStore._resetSearchCriteriaListNoFetch();
       const criteria = new ClientTagSearchCriteria('tags');
       uiStore.searchCriteriaList.push(criteria);
       const fetchedFiles = await this.backend.searchFiles(
@@ -718,6 +761,16 @@ class FileStore {
   }
 
   @action.bound async fetchMissingFiles(): Promise<void> {
+    // No-op guard: if already in Missing mode, skip the fetch to prevent gallery
+    // flicker on repeated clicks of the Missing selector. Background refetch() calls
+    // go through _fetchMissingFilesForced() to bypass this guard. See INV-007.
+    if (this.showsMissingContent) {
+      return;
+    }
+    return this._fetchMissingFilesForced();
+  }
+
+  private async _fetchMissingFilesForced(): Promise<void> {
     try {
       const {
         orderBy,
@@ -803,6 +856,16 @@ class FileStore {
   }
 
   @action.bound async fetchDuplicatesFiles(): Promise<void> {
+    // No-op guard: if already in Duplicates mode, skip the fetch to prevent gallery
+    // flicker on repeated clicks of the Duplicates selector. Background refetch() calls
+    // go through _fetchDuplicatesFilesForced() to bypass this guard. See INV-007.
+    if (this.showsDuplicatesContent) {
+      return;
+    }
+    return this._fetchDuplicatesFilesForced();
+  }
+
+  private async _fetchDuplicatesFilesForced(): Promise<void> {
     try {
       // For now, just fetch all files - the duplicate detection logic is in the component
       // In a future enhancement, we could move this logic to the backend for better performance
@@ -1069,6 +1132,13 @@ class FileStore {
    * - `index`
    * - `numUntaggedFiles`
    * - `numMissingFiles`
+   *
+   * Invariant: this function is the SOLE writer of numUntaggedFiles.
+   * When called from updateFromBackend's post-splice pass with
+   * hideMissingFilesInBrowsing=true, fileList contains only non-broken
+   * files, so the count reflects what the gallery will actually render.
+   * refetchFileCounts() intentionally does NOT write numUntaggedFiles
+   * to avoid overwriting this with the raw DB count. See INV-007.
    */
   @action updateFileListState(): void {
     let missingFiles = 0;
@@ -1093,11 +1163,19 @@ class FileStore {
     // Don't set numUntaggedFiles for other content types to avoid race conditions
   }
 
-  /** Initializes the total and untagged file counters by querying the database with count operations */
+  /** Initializes the total file counter by querying the database with a count operation */
   async refetchFileCounts(): Promise<void> {
-    const [numTotalFiles, numUntaggedFiles] = await this.backend.countFiles();
+    // numTotalFiles = raw DB row count. This value intentionally disregards
+    // the `hideMissingFilesInBrowsing` preference — it is the "All Images"
+    // toolbar badge which always shows the DB total (see docs/missing-files.md).
+    //
+    // numUntaggedFiles is NOT written here. It is derived from fileList
+    // by updateFileListState()'s post-splice pass in updateFromBackend(),
+    // which is the only writer aware of `hideMissingFilesInBrowsing`.
+    // Writing a raw DB count here would overwrite the post-splice value
+    // and produce the sidebar/gallery count mismatch documented in INV-007.
+    const [numTotalFiles, _rawDbUntagged] = await this.backend.countFiles();
     runInAction(() => {
-      this.numUntaggedFiles = numUntaggedFiles;
       this.numTotalFiles = numTotalFiles;
     });
   }
