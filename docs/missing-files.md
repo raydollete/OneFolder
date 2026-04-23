@@ -111,3 +111,11 @@ A MobX `reaction` in `FileStore`'s constructor watches `uiStore.hideMissingFiles
 ### `numTotalFiles` preservation
 
 `updateFileListState()` also sets `numTotalFiles = fileList.length` when the content mode is All Images. After the filter splice, `fileList` is smaller than the database total. The implementation overrides `this.numTotalFiles` with the pre-splice total after calling `updateFileListState()`, so the toolbar file count always reflects the database total rather than the filtered visible count.
+
+### `numUntaggedFiles` single-writer invariant
+
+`updateFileListState()` (called from `updateFromBackend`'s post-splice pass) is the **single authoritative writer** of `numUntaggedFiles`. When `hideMissingFilesInBrowsing === true`, this writer runs after broken files have been spliced out of `fileList`, so the count reflects what the gallery will actually render.
+
+`refetchFileCounts()` intentionally does NOT write `numUntaggedFiles` — the raw DB count (`SELECT COUNT(*) ... WHERE NOT EXISTS file_tags`) includes missing files and would not match the rendered gallery. It only writes `numTotalFiles`, which is the DB-total "All Images" badge value.
+
+See [INV-007](TODO/backlog/investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mismatch-and-filter-clobber.md) for the bug this invariant prevents.

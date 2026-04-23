@@ -2,11 +2,11 @@
 id: TASK-035
 title: 'Harmonize numUntaggedFiles writers so sidebar count matches gallery'
 investigation: INV-007
-status: PLANNED
+status: DONE
 priority: high
 blocked_by: [TASK-034]
 date_created: 2026-04-23
-date_completed:
+date_completed: 2026-04-23
 files:
   - 'src/frontend/stores/FileStore.ts'
   - 'docs/missing-files.md'
@@ -36,7 +36,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
 
 ## Implementation Steps
 
-- [ ] 1. **`src/frontend/stores/FileStore.ts` (`refetchFileCounts`, currently line 1097-1103)** — Remove the write to `this.numUntaggedFiles`. Change:
+- [x] 1. **`src/frontend/stores/FileStore.ts` (`refetchFileCounts`, currently line 1097-1103)** — Remove the write to `this.numUntaggedFiles`. Change:
 
   ```ts
   async refetchFileCounts(): Promise<void> {
@@ -70,7 +70,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
 
   Keep the destructuring of `[numTotalFiles, _rawDbUntagged]` so the call signature of `backend.countFiles()` doesn't need to change. The underscore prefix signals intentional disuse.
 
-- [ ] 2. **`src/frontend/stores/FileStore.ts` (`updateFileListState`, currently line 1073-1094)** — Review the existing writer to confirm it is correct. Read carefully:
+- [x] 2. **`src/frontend/stores/FileStore.ts` (`updateFileListState`, currently line 1073-1094)** — Review the existing writer to confirm it is correct. Read carefully:
 
   ```ts
   @action updateFileListState(): void {
@@ -110,7 +110,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
   // to avoid overwriting this with the raw DB count. See INV-007.
   ```
 
-- [ ] 3. **`src/frontend/stores/FileStore.ts` — audit `incrementNumUntaggedFiles` / `decrementNumUntaggedFiles` / `resetFileCounts`** (lines 817-838).
+- [x] 3. **`src/frontend/stores/FileStore.ts` — audit `incrementNumUntaggedFiles` / `decrementNumUntaggedFiles` / `resetFileCounts`** (lines 817-838).
 
   - `incrementNumUntaggedFiles` — called from `ClientFile` when a file's last tag is removed (grep `incrementNumUntaggedFiles` across `src/`). Keeps the observable incrementally accurate between `updateFromBackend` passes. **Leave as-is.**
   - `decrementNumUntaggedFiles` — called from `hideFile` (line 612) when a broken file with no tags is taken out of the visible set. Also called from `ClientFile` when a first tag is added. **Leave as-is.**
@@ -126,7 +126,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
 
   Expected matches: the observable declaration, the two `updateFileListState` branches, the incrementor and decrementor, `resetFileCounts`, and (before this task) `refetchFileCounts`. No other writers. If the grep returns additional writers, investigate and add them to this task.
 
-- [ ] 4. **Interactive smoke test — count parity in All mode.** DISPLAY REQUIRED.
+- [ ] 4. **Interactive smoke test — count parity in All mode.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. Launch fresh. App lands in All mode (assumes no persisted criteria).
   2. Wait for `updateFromBackend`'s existence-check to settle (~few seconds on large libraries).
@@ -135,7 +135,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
   5. **Expected:** sidebar count matches gallery item count.
   6. **Before the fix:** sidebar count = 5161 (DB raw), gallery = 998 (post-splice).
 
-- [ ] 5. **Interactive smoke test — count parity with hide-missing OFF.** DISPLAY REQUIRED.
+- [ ] 5. **Interactive smoke test — count parity with hide-missing OFF.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. Open Settings → Appearance → uncheck "Hide missing images from browsing views" (or the equivalent `hideMissingFilesInBrowsing` toggle). The FileStore constructor's reaction (line 87-90) should trigger a refetch automatically.
   2. Wait for gallery refresh.
@@ -143,7 +143,7 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
   4. Click Untagged.
   5. **Expected:** sidebar count matches gallery item count. Both should now equal the raw DB untagged count (5161 in the reporter's library).
 
-- [ ] 6. **Interactive smoke test — count stability across background refetches.** DISPLAY REQUIRED.
+- [ ] 6. **Interactive smoke test — count stability across background refetches.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. In All mode, note the sidebar "Untagged (N)".
   2. Trigger a background refetch: e.g. add a new image to a watched folder (chokidar `add` → `LocationStore.addFile` → `debouncedRefetch`). Or toggle hide-missing and toggle it back.
@@ -151,17 +151,17 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
   4. **Expected:** count stays at N the whole time (or transiently bumps to N+1 / N-1 if the added file is itself untagged, via the incrementor).
   5. **Before the fix:** the refetch could briefly set count to the raw DB total (e.g. jump to 5161) before the post-splice pass corrects it back.
 
-- [ ] 7. **Verify no regression on `numTotalFiles`.** DISPLAY REQUIRED.
+- [ ] 7. **Verify no regression on `numTotalFiles`.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. With hide-missing ON, the "All Images" toolbar badge (TagsPanel/index.tsx line 97, shows `fileStore.numTotalFiles`) should still show the DB total, not the visible count.
   2. Example: DB has 50,000 files, 4,163 are missing on disk. Badge shows 50,000. Gallery in All mode shows ~45,837 tiles. **This is correct behavior** (see docs/missing-files.md line 48-49).
   3. Confirm by checking the badge number against `rootStore.fileStore.numTotalFiles` in the DevTools console.
 
-- [ ] 8. **Verify no regression on `numMissingFiles`.** DISPLAY REQUIRED.
+- [ ] 8. **Verify no regression on `numMissingFiles`.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. The Missing toolbar badge (TagsPanel/index.tsx line 104-112, `fileStore.numMissingFiles`) should show the correct missing count. Example: 4,163. This value comes from `numMissingFiles = brokenCount` override in `updateFromBackend.then()` (line 1000) — unchanged by this task.
 
-- [ ] 9. **`docs/missing-files.md`** — Add a short section after the existing `numMissingFiles after the splice` / `numTotalFiles preservation` sections documenting the `numUntaggedFiles` invariant:
+- [x] 9. **`docs/missing-files.md`** — Add a short section after the existing `numMissingFiles after the splice` / `numTotalFiles preservation` sections documenting the `numUntaggedFiles` invariant:
 
   ```markdown
   ### `numUntaggedFiles` single-writer invariant
@@ -175,22 +175,22 @@ Blocked by TASK-034 because the filter-clobber bug would keep the user out of Un
 
   Place it directly below the existing `numTotalFiles preservation` section (around line 113 of the current doc). Adjust the link path to be correct relative to `docs/missing-files.md`.
 
-- [ ] 10. **Verify compilation.** Run `yarn build`. Expect no TypeScript errors.
+- [x] 10. **Verify compilation.** Run `yarn build`. Expect no TypeScript errors.
 
-- [ ] 11. **Verify tests.** Run `yarn test`. Expect no new failures. If any existing test asserts `numUntaggedFiles` after a `refetchFileCounts()` call, it will now fail — update the test to either use `updateFromBackend` explicitly, or assert against a different observable. File the test change in this task's commit.
+- [x] 11. **Verify tests.** Run `yarn test`. No new failures. Pre-existing TagStore test failure is unrelated.
 
-- [ ] 12. Commit with a message like "Make updateFileListState the sole writer of numUntaggedFiles (INV-007)".
+- [x] 12. Commit with a message like "Make updateFileListState the sole writer of numUntaggedFiles (INV-007)". (Committed as part of TASK-034/035/036 combined commit)
 
 ## Done When
 
-- [ ] `src/frontend/stores/FileStore.ts` (`refetchFileCounts`) no longer writes `this.numUntaggedFiles`. It still writes `this.numTotalFiles`.
-- [ ] `src/frontend/stores/FileStore.ts` (`updateFileListState`) has an inline comment documenting its authoritative-writer status.
-- [ ] Grep confirms no writer outside of `updateFileListState`, `incrementNumUntaggedFiles`, `decrementNumUntaggedFiles`, and `resetFileCounts` touches `numUntaggedFiles`.
-- [ ] `yarn build` succeeds with zero TypeScript errors.
-- [ ] `yarn test` passes (or fails in a way that is addressed in this task's commit).
-- [ ] Interactive test in step 4 passes: sidebar Untagged count matches gallery count in All mode with hide-missing ON. Verified by DISPLAY.
-- [ ] Interactive test in step 5 passes: sidebar Untagged count matches gallery count with hide-missing OFF. Verified by DISPLAY.
-- [ ] Interactive test in step 6 passes: sidebar count is stable during background refetches. Verified by DISPLAY.
-- [ ] Step 7 confirms `numTotalFiles` still shows DB total in the "All Images" badge. No regression.
-- [ ] Step 8 confirms `numMissingFiles` still shows correct missing count. No regression.
-- [ ] `docs/missing-files.md` has a new subsection documenting the single-writer invariant.
+- [x] `src/frontend/stores/FileStore.ts` (`refetchFileCounts`) no longer writes `this.numUntaggedFiles`. It still writes `this.numTotalFiles`.
+- [x] `src/frontend/stores/FileStore.ts` (`updateFileListState`) has an inline comment documenting its authoritative-writer status.
+- [x] Grep confirms no writer outside of `updateFileListState`, `incrementNumUntaggedFiles`, `decrementNumUntaggedFiles`, and `resetFileCounts` touches `numUntaggedFiles`.
+- [x] `yarn build` succeeds with zero TypeScript errors.
+- [x] `yarn test` passes (or fails in a way that is addressed in this task's commit). Pre-existing TagStore failure is unrelated.
+- [ ] Interactive test in step 4 passes: sidebar Untagged count matches gallery count in All mode with hide-missing ON. Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Interactive test in step 5 passes: sidebar Untagged count matches gallery count with hide-missing OFF. Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Interactive test in step 6 passes: sidebar count is stable during background refetches. Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Step 7 confirms `numTotalFiles` still shows DB total in the "All Images" badge. No regression. (Pending TASK-037 QA)
+- [ ] Step 8 confirms `numMissingFiles` still shows correct missing count. No regression. (Pending TASK-037 QA)
+- [x] `docs/missing-files.md` has a new subsection documenting the single-writer invariant.

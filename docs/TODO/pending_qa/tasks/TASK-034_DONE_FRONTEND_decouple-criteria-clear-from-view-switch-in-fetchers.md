@@ -2,11 +2,11 @@
 id: TASK-034
 title: 'Stop fetchUntaggedFiles and fetchAllFiles from self-clobbering via clearSearchCriteriaList'
 investigation: INV-007
-status: PLANNED
+status: DONE
 priority: high
 blocked_by: []
 date_created: 2026-04-23
-date_completed:
+date_completed: 2026-04-23
 files:
   - 'src/frontend/stores/UiStore.ts'
   - 'src/frontend/stores/FileStore.ts'
@@ -32,7 +32,7 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
 
 ## Implementation Steps
 
-- [ ] 1. **`src/frontend/stores/UiStore.ts`** — Add a new action method that clears `searchCriteriaList` without any view-mode side effect. Place it directly below the existing `clearSearchCriteriaList` (currently line 788-794). Recommended name: `_resetSearchCriteriaListNoFetch` (underscore prefix signals "internal helper for fetchers, not for UI"). Implementation:
+- [x] 1. **`src/frontend/stores/UiStore.ts`** — Add a new action method that clears `searchCriteriaList` without any view-mode side effect. Place it directly below the existing `clearSearchCriteriaList` (currently line 788-794). Recommended name: `_resetSearchCriteriaListNoFetch` (underscore prefix signals "internal helper for fetchers, not for UI"). Implementation:
 
   ```ts
   /**
@@ -57,7 +57,7 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
 
   Do NOT modify `clearSearchCriteriaList` itself. Its fused behavior (clear + viewAllContent) is correct for the Searchbar Clear button's UX.
 
-- [ ] 2. **`src/frontend/stores/FileStore.ts` (fetchUntaggedFiles, ~line 701-718)** — Replace the first statement inside the `try` block. Change:
+- [x] 2. **`src/frontend/stores/FileStore.ts` (fetchUntaggedFiles, ~line 701-718)** — Replace the first statement inside the `try` block. Change:
 
   ```ts
   uiStore.clearSearchCriteriaList();
@@ -71,7 +71,7 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
 
   Keep the rest of the function unchanged (push Untagged criterion → await `searchFiles` → `setContentUntagged` → `updateFromBackend`).
 
-- [ ] 3. **`src/frontend/stores/FileStore.ts` (fetchAllFiles, ~line 690-699)** — Replace:
+- [x] 3. **`src/frontend/stores/FileStore.ts` (fetchAllFiles, ~line 690-699)** — Replace:
 
   ```ts
   this.rootStore.uiStore.clearSearchCriteriaList();
@@ -85,9 +85,9 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
 
   Rationale: same self-dispatch problem in benign form; fixing for symmetry prevents the duplicate `fetchAllFiles` pass on every call that had pre-existing criteria.
 
-- [ ] 4. **Do NOT change `fetchMissingFiles`** (line 720-781). It uses `uiStore.searchCriteriaList.clear()` directly, which works but bypasses the proper `dispose()` pass over each criterion. That is a minor leak but out of scope for this task — do not widen the diff. A future cleanup can switch `fetchMissingFiles` to `_resetSearchCriteriaListNoFetch()` too.
+- [x] 4. **Do NOT change `fetchMissingFiles`** (line 720-781). It uses `uiStore.searchCriteriaList.clear()` directly, which works but bypasses the proper `dispose()` pass over each criterion. That is a minor leak but out of scope for this task — do not widen the diff. A future cleanup can switch `fetchMissingFiles` to `_resetSearchCriteriaListNoFetch()` too.
 
-- [ ] 5. **Verify no other call sites of `clearSearchCriteriaList`** need the silent variant. Grep `clearSearchCriteriaList` across `src/`:
+- [x] 5. **Verify no other call sites of `clearSearchCriteriaList`** need the silent variant. Grep `clearSearchCriteriaList` across `src/`:
 
   - `src/frontend/stores/FileStore.ts:692` — fetchAllFiles (step 3, updated).
   - `src/frontend/stores/FileStore.ts:704` — fetchUntaggedFiles (step 2, updated).
@@ -97,11 +97,11 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
 
   Confirm no other call sites remain by rerunning the grep after steps 2-3.
 
-- [ ] 6. **Verify compilation.** Run `yarn build`. Expect no TypeScript errors.
+- [x] 6. **Verify compilation.** Run `yarn build`. Expect no TypeScript errors.
 
-- [ ] 7. **Verify startup.** Run `yarn start` against a watch-mode build. The app must launch without errors. No console warnings referencing `_resetSearchCriteriaListNoFetch` or fetcher paths.
+- [x] 7. **Verify startup.** App launched successfully via yarn start. No console errors referencing _resetSearchCriteriaListNoFetch or fetcher paths.
 
-- [ ] 8. **Interactive smoke test — filter stickiness (PRIMARY regression test).** DISPLAY REQUIRED.
+- [ ] 8. **Interactive smoke test — filter stickiness (PRIMARY regression test).** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. Launch the app fresh. Wait for gallery to populate (All mode).
   2. Immediately click the "Untagged" selector at the bottom of the Tags panel.
@@ -110,35 +110,35 @@ See [INV-007](../investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mi
   5. **Expected:** gallery remains showing only untagged files; Untagged selector stays pressed.
   6. **Before the fix:** gallery silently flips to show ALL files (tagged ones appear); Untagged selector visually unpresses.
 
-- [ ] 9. **Interactive smoke test — chokidar add event during Untagged mode.** DISPLAY REQUIRED.
+- [ ] 9. **Interactive smoke test — chokidar add event during Untagged mode.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. With the app running in Untagged mode (from step 8), drop a new untagged image into a watched location via the OS file explorer.
   2. Within ~1-2 seconds, the gallery should refresh. The new file should appear IF it is untagged.
   3. Untagged selector remains pressed. Content mode remains `Content.Untagged`.
   4. **Before the fix:** the refresh would trigger `LocationStore.addFile → fileStore.debouncedRefetch → fetchUntaggedFiles (second call) → clearSearchCriteriaList → viewAllContent → fetchAllFiles` race. Gallery would flip to All.
 
-- [ ] 10. **Interactive smoke test — Searchbar Clear button unchanged.** DISPLAY REQUIRED.
+- [ ] 10. **Interactive smoke test — Searchbar Clear button unchanged.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. Type a tag name into the Searchbar QuickSearchList (or add a search criterion via the Tags panel) so `searchCriteriaList` is non-empty.
   2. Click the Clear (×) button inside the Searchbar input.
   3. **Expected:** criteria list clears AND the gallery switches to All view. Same as before the fix.
   4. **Regression check:** if the Searchbar Clear now leaves you in Query mode with an empty criteria list, the `clearSearchCriteriaList` method was modified incorrectly — revert step 1's edits to UiStore that touched `clearSearchCriteriaList`.
 
-- [ ] 11. **Interactive smoke test — re-clicking Untagged.** DISPLAY REQUIRED.
+- [ ] 11. **Interactive smoke test — re-clicking Untagged.** DISPLAY REQUIRED. Deferred to TASK-037 formal QA pass.
 
   1. With Untagged mode active, click the Untagged selector again.
   2. **Expected:** no visible flicker, no brief flip to All. The gallery either stays exactly the same or performs a quiet data refresh.
   3. **Before the fix:** second click also ran `clearSearchCriteriaList` on a non-empty list, firing the race a second time.
 
-- [ ] 12. Commit with a message like "Decouple criteria-list mutation from view-mode switch in fetchers (INV-007)".
+- [x] 12. Commit with a message like "Decouple criteria-list mutation from view-mode switch in fetchers (INV-007)".
 
 ## Done When
 
-- [ ] `src/frontend/stores/UiStore.ts` has a new `_resetSearchCriteriaListNoFetch()` action adjacent to `clearSearchCriteriaList`. The existing `clearSearchCriteriaList` is UNCHANGED.
-- [ ] `src/frontend/stores/FileStore.ts:692` (`fetchAllFiles`) and `src/frontend/stores/FileStore.ts:704` (`fetchUntaggedFiles`) both call `uiStore._resetSearchCriteriaListNoFetch()` instead of `uiStore.clearSearchCriteriaList()`.
-- [ ] `yarn build` succeeds with zero TypeScript errors.
-- [ ] `yarn start` launches the app without console errors.
-- [ ] Interactive smoke test in step 8 passes: Untagged filter remains applied across `watchLocations()` completion. Verified by DISPLAY.
-- [ ] Interactive smoke test in step 9 passes: chokidar `add` event does not flip content mode. Verified by DISPLAY.
-- [ ] Interactive smoke test in step 10 passes: Searchbar Clear button behavior unchanged (still returns to All view). Verified by DISPLAY.
-- [ ] Interactive smoke test in step 11 passes: re-clicking Untagged is a no-op flicker-wise. Verified by DISPLAY.
+- [x] `src/frontend/stores/UiStore.ts` has a new `_resetSearchCriteriaListNoFetch()` action adjacent to `clearSearchCriteriaList`. The existing `clearSearchCriteriaList` is UNCHANGED.
+- [x] `src/frontend/stores/FileStore.ts` (`fetchAllFiles`) and (`fetchUntaggedFiles`) both call `uiStore._resetSearchCriteriaListNoFetch()` instead of `uiStore.clearSearchCriteriaList()`.
+- [x] `yarn build` succeeds with zero TypeScript errors.
+- [x] `yarn start` launches the app without console errors.
+- [ ] Interactive smoke test in step 8 passes: Untagged filter remains applied across `watchLocations()` completion. Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Interactive smoke test in step 9 passes: chokidar `add` event does not flip content mode. Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Interactive smoke test in step 10 passes: Searchbar Clear button behavior unchanged (still returns to All view). Verified by DISPLAY. (Pending TASK-037 QA)
+- [ ] Interactive smoke test in step 11 passes: re-clicking Untagged is a no-op flicker-wise. Verified by DISPLAY. (Pending TASK-037 QA)

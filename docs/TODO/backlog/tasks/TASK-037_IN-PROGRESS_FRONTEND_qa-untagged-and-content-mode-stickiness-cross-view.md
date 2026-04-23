@@ -2,7 +2,7 @@
 id: TASK-037
 title: 'QA: sidebar count parity and content-mode stickiness across all five Content modes'
 investigation: INV-007
-status: PLANNED
+status: IN-PROGRESS
 priority: medium
 blocked_by: [TASK-034, TASK-035, TASK-036]
 date_created: 2026-04-23
