@@ -24,6 +24,18 @@ import { ClientStringSearchCriteria, ClientTagSearchCriteria } from '../entities
 import { ClientTag } from '../entities/Tag';
 import RootStore from './RootStore';
 
+/**
+ * Dev-build regressions this file watches for:
+ *
+ * - [INV-007 regression] — refetch() caused a content-mode change. Indicates
+ *   a self-clobber: some code path is fusing list-mutation with view-switching.
+ *   See INV-007 Defect B, TASK-036.
+ *
+ * - [INV-009] dropped stale apply — a fetcher's result was discarded because
+ *   a newer fetcher had dispatched in the meantime. Expected during the
+ *   initial-scan window if the user filters early. Unexpected during steady-state.
+ *   See INV-009, TASK-043/044.
+ */
 export const FILE_STORAGE_KEY = 'OneFolder_File';
 
 /**
@@ -70,6 +82,25 @@ class FileStore {
 
   debouncedRefetch: () => void;
   debouncedSaveFilesToSave: () => Promise<void>;
+
+  /**
+   * Monotonically-increasing generation counter for in-flight fetches.
+   * Each fetcher increments this at dispatch and captures the value; the
+   * apply functions (updateFromBackend and fetchMissingFiles's inline
+   * apply) compare captured-vs-current and silently drop stale results.
+   * See INV-009 for the race this protects against.
+   *
+   * Not @observable — no UI reads it, making it observable would trigger
+   * reactions on every fetch.
+   */
+  private fetchGeneration = 0;
+
+  /**
+   * Dev-only counter of stale apply drops. Incremented each time
+   * updateFromBackend or fetchMissingFiles discards a result due to
+   * generation mismatch. Zero under normal operation.
+   */
+  @observable droppedApplyCount = 0;
 
   /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
   readonly storageKeyPrefix: string;
@@ -677,20 +708,21 @@ class FileStore {
   @action.bound async refetch(): Promise<void> {
     const contentBefore = this.content;
 
-    // Pass forceRefresh=true so the no-op guards in each fetcher are bypassed.
-    // Background refetch callers (watchLocations, chokidar add, tag/location mutations)
-    // must always re-run the query even when the content mode hasn't changed.
+    // Dispatch to the fetcher matching the current content mode. Untagged has a
+    // no-op guard on its public method to debounce user re-clicks, so go through
+    // _fetchUntaggedFilesForced() to bypass it. The other fetchers have no guard
+    // and can be called directly. See INV-007.
     let result: Promise<void> | undefined;
     if (this.showsAllContent) {
-      result = this._fetchAllFilesForced();
+      result = this.fetchAllFiles();
     } else if (this.showsUntaggedContent) {
       result = this._fetchUntaggedFilesForced();
     } else if (this.showsQueryContent) {
       result = this.fetchFilesByQuery();
     } else if (this.showsMissingContent) {
-      result = this._fetchMissingFilesForced();
+      result = this.fetchMissingFiles();
     } else if (this.showsDuplicatesContent) {
-      result = this._fetchDuplicatesFilesForced();
+      result = this.fetchDuplicatesFiles();
     }
 
     if (result !== undefined && IS_DEV) {
@@ -704,6 +736,9 @@ class FileStore {
             '— some async side-effect is clobbering the user-visible filter.',
           );
         }
+        // NOTE: The INV-009 stale-fileList-clobber shape does NOT change content —
+        // only fileList is replaced. That race is caught by logStaleDrop() inside
+        // updateFromBackend/fetchMissingFiles, not by this assertion. See TASK-044.
       });
     }
 
@@ -711,21 +746,18 @@ class FileStore {
   }
 
   @action.bound async fetchAllFiles(): Promise<void> {
-    // No-op guard: if already in All mode, skip the fetch to prevent gallery flicker
-    // on repeated clicks of the "All Images" selector. Background refetch() calls
-    // go through _fetchAllFilesForced() to bypass this guard. See INV-007.
-    if (this.showsAllContent) {
-      return;
-    }
-    return this._fetchAllFilesForced();
-  }
-
-  private async _fetchAllFilesForced(): Promise<void> {
     try {
       this.rootStore.uiStore._resetSearchCriteriaListNoFetch();
-      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
+      // Flip content mode synchronously BEFORE the async backend call. Any
+      // concurrent refetch() that fires during the await will then see
+      // Content.All and re-enter fetchAllFiles() (idempotent) instead of
+      // racing a different fetcher that would clobber the result. See INV-007.
       this.setContentAll();
-      return this.updateFromBackend(fetchedFiles);
+      // Capture generation AFTER the content flip, BEFORE the await, so that any
+      // fetcher dispatched later gets a strictly larger generation. See INV-009.
+      const gen = this.nextFetchGeneration();
+      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
+      return this.updateFromBackend(fetchedFiles, gen);
     } catch (err) {
       console.error('Could not load all files', err);
     }
@@ -747,30 +779,26 @@ class FileStore {
       uiStore._resetSearchCriteriaListNoFetch();
       const criteria = new ClientTagSearchCriteria('tags');
       uiStore.searchCriteriaList.push(criteria);
+      // Flip content mode synchronously BEFORE the async backend call. Any
+      // concurrent refetch() that fires during the await will then see
+      // Content.Untagged and re-enter _fetchUntaggedFilesForced() (idempotent)
+      // instead of dispatching to fetchAllFiles() and racing it. See INV-007.
+      this.setContentUntagged();
+      // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
+      const gen = this.nextFetchGeneration();
       const fetchedFiles = await this.backend.searchFiles(
         criteria.toCondition(this.rootStore),
         this.orderBy,
         this.orderDirection,
         uiStore.searchMatchAny,
       );
-      this.setContentUntagged();
-      return this.updateFromBackend(fetchedFiles);
+      return this.updateFromBackend(fetchedFiles, gen);
     } catch (err) {
-      console.error('Could not load all files', err);
+      console.error('Could not load untagged files', err);
     }
   }
 
   @action.bound async fetchMissingFiles(): Promise<void> {
-    // No-op guard: if already in Missing mode, skip the fetch to prevent gallery
-    // flicker on repeated clicks of the Missing selector. Background refetch() calls
-    // go through _fetchMissingFilesForced() to bypass this guard. See INV-007.
-    if (this.showsMissingContent) {
-      return;
-    }
-    return this._fetchMissingFilesForced();
-  }
-
-  private async _fetchMissingFilesForced(): Promise<void> {
     try {
       const {
         orderBy,
@@ -780,6 +808,8 @@ class FileStore {
 
       uiStore.searchCriteriaList.clear();
       this.setContentMissing();
+      // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
+      const gen = this.nextFetchGeneration();
 
       // Fetch all files, then check their existence and only show the missing ones
       // Similar to {@link updateFromBackend}, but the existence check needs to be awaited before we can show the images
@@ -808,6 +838,12 @@ class FileStore {
       await promiseAllLimit(existenceCheckPromises, N);
 
       runInAction(() => {
+        // Guard: if a newer fetcher has dispatched during the existence-check batch,
+        // discard this result to prevent overwriting the user's current view. See INV-009.
+        if (gen !== this.fetchGeneration) {
+          this.logStaleDrop('missing-inline', gen);
+          return;
+        }
         const missingClientFiles = newClientFiles.filter((file) => file.isBroken);
         this.fileList.replace(missingClientFiles);
         this.numMissingFiles = missingClientFiles.length;
@@ -818,6 +854,11 @@ class FileStore {
         }
         this.fileListLastModified = new Date();
       });
+
+      // Only show the toast if we are still the current fetch (generation not stale).
+      if (gen !== this.fetchGeneration) {
+        return;
+      }
       this.cleanFileSelection();
 
       AppToaster.show(
@@ -842,36 +883,34 @@ class FileStore {
 
     const criterias = uiStore.searchCriteriaList.map((c) => c.toCondition(this.rootStore));
     try {
+      // Flip content mode synchronously BEFORE the async backend call so a
+      // concurrent refetch() cannot observe a stale content mode and dispatch
+      // to a different fetcher. See INV-007.
+      this.setContentQuery();
+      // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
+      const gen = this.nextFetchGeneration();
       const fetchedFiles = await this.backend.searchFiles(
         criterias as [ConditionDTO<FileDTO>, ...ConditionDTO<FileDTO>[]],
         this.orderBy,
         this.orderDirection,
         uiStore.searchMatchAny,
       );
-      this.setContentQuery();
-      return this.updateFromBackend(fetchedFiles);
+      return this.updateFromBackend(fetchedFiles, gen);
     } catch (e) {
       console.log('Could not find files based on criteria', e);
     }
   }
 
   @action.bound async fetchDuplicatesFiles(): Promise<void> {
-    // No-op guard: if already in Duplicates mode, skip the fetch to prevent gallery
-    // flicker on repeated clicks of the Duplicates selector. Background refetch() calls
-    // go through _fetchDuplicatesFilesForced() to bypass this guard. See INV-007.
-    if (this.showsDuplicatesContent) {
-      return;
-    }
-    return this._fetchDuplicatesFilesForced();
-  }
-
-  private async _fetchDuplicatesFilesForced(): Promise<void> {
     try {
       // For now, just fetch all files - the duplicate detection logic is in the component
       // In a future enhancement, we could move this logic to the backend for better performance
-      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
+      // Flip content mode synchronously BEFORE the async backend call. See INV-007.
       this.setContentDuplicates();
-      return this.updateFromBackend(fetchedFiles);
+      // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
+      const gen = this.nextFetchGeneration();
+      const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
+      return this.updateFromBackend(fetchedFiles, gen);
     } catch (err) {
       console.error('Could not load files for duplicate detection', err);
     }
@@ -945,6 +984,52 @@ class FileStore {
     this.filesToSave.clear();
   }
 
+  /**
+   * Entry point for the preview-window's direct file apply.
+   * The preview window does not go through any of the five named fetchers, so it
+   * calls this wrapper which handles the generation increment for it.
+   * See INV-009 and renderer.tsx for usage.
+   */
+  @action async applyPreviewFiles(files: FileDTO[]): Promise<void> {
+    const gen = this.nextFetchGeneration();
+    return this.updateFromBackend(files, gen);
+  }
+
+  /**
+   * Increments the fetch generation and returns the new value.
+   * Must be called synchronously at dispatch, AFTER the setContentX() flip
+   * and BEFORE any await. This ensures that a concurrent fetcher dispatched
+   * later always gets a strictly larger generation number. See INV-009.
+   */
+  private nextFetchGeneration(): number {
+    this.fetchGeneration += 1;
+    return this.fetchGeneration;
+  }
+
+  /**
+   * Records a stale-apply drop and emits a structured dev-build log line.
+   * The counter always increments so automated tests can assert on it.
+   * The console.debug is dev-only to avoid noise in production builds.
+   *
+   * @param phase - Which guard site fired: 'sync' (updateFromBackend first pass),
+   *   'async' (updateFromBackend existence-check .then()), or
+   *   'missing-inline' (fetchMissingFiles inline runInAction).
+   * @param dropped - The captured generation value that was found stale.
+   */
+  @action private logStaleDrop(phase: 'sync' | 'async' | 'missing-inline', dropped: number): void {
+    // Counter always increments so unit tests can assert on it regardless of IS_DEV.
+    this.droppedApplyCount += 1;
+    if (IS_DEV) {
+      console.debug('[INV-009] dropped stale apply', {
+        phase,
+        dropped,
+        current: this.fetchGeneration,
+        content: this.content,
+        droppedTotal: this.droppedApplyCount,
+      });
+    }
+  }
+
   @action recoverPersistentPreferences(): void {
     const key = getFileStorageKey(this.storageKeyPrefix || undefined);
     const prefsString = localStorage.getItem(key);
@@ -984,7 +1069,15 @@ class FileStore {
     }
   }
 
-  @action async updateFromBackend(backendFiles: FileDTO[]): Promise<void> {
+  @action async updateFromBackend(backendFiles: FileDTO[], generation: number): Promise<void> {
+    // Guard (sync first-pass): if a newer fetcher has already dispatched, the
+    // results we are about to apply are stale. Discard everything — no fileList
+    // mutation, no count update, no selection mutation, no toast. See INV-009.
+    if (generation !== this.fetchGeneration) {
+      this.logStaleDrop('sync', generation);
+      return;
+    }
+
     if (backendFiles.length === 0) {
       this.rootStore.uiStore.clearFileSelection();
       this.fileListLastModified = new Date();
@@ -1035,6 +1128,15 @@ class FileStore {
     const N = 50;
     return promiseAllLimit(existenceCheckPromises, N)
       .then(() => {
+        // Guard (async second-pass): the existence-check batch can take 50–500 ms.
+        // A newer fetcher may have dispatched during that window — discard stale results.
+        // The captured `generation` is the same value passed into updateFromBackend;
+        // this guard uses closure capture. See INV-009.
+        if (generation !== this.fetchGeneration) {
+          this.logStaleDrop('async', generation);
+          return;
+        }
+
         transaction(() => {
           // Count broken files BEFORE filtering so the Outliner badge stays accurate
           // regardless of whether we're about to splice them out of fileList.

@@ -284,6 +284,20 @@ async function runMainApp(
         }
       },
     };
+
+    // INV-009 observability: exposes drop counter and current generation for QA
+    // console queries and automated test assertions.
+    (window as any).__inv009 = {
+      get droppedCount() {
+        return rootStore.fileStore.droppedApplyCount;
+      },
+      get generation() {
+        return (rootStore.fileStore as any).fetchGeneration;
+      },
+      get content() {
+        return (rootStore.fileStore as any).content;
+      },
+    };
   }
 }
 
@@ -327,7 +341,7 @@ async function runPreviewApp(
           await rootStore.locationStore.init();
         }
 
-        await rootStore.fileStore.updateFromBackend(files);
+        await rootStore.fileStore.applyPreviewFiles(files);
         rootStore.uiStore.setFirstItem((activeImgId && ids.indexOf(activeImgId)) || 0);
 
         if (initRender !== undefined) {

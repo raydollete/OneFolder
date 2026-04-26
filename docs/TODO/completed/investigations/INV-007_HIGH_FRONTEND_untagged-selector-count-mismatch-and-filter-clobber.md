@@ -3,8 +3,8 @@ id: INV-007
 title: 'Untagged sidebar selector: count mismatch and filter clobber by async refetch'
 reported_bug: 'With no tag selected, the "Untagged" selector in the tag panel shows qty 5161, but clicking it immediately changes that value to 998 and shows untagged media. A few seconds later the browsing window updates again, showing what looks like ALL images (some with tags). Net effect: the Untagged filter does not stick.'
 date: 2026-04-23
-status: active
-superseded_by:
+status: superseded
+superseded_by: INV-009
 tasks_spawned: [TASK-034, TASK-035, TASK-036, TASK-037]
 root_cause_category: architectural-shortcoming
 affects:
@@ -14,6 +14,21 @@ affects:
   - 'src/frontend/stores/RootStore.ts (post-watchLocations refetch)'
   - 'src/frontend/containers/Outliner/TagsPanel/TagsTree.tsx (UntaggedItem count display, handleUntaggedClick)'
   - 'src/frontend/entities/SearchCriteria.ts (ClientTagSearchCriteria with empty value = "Untagged images" pseudo-criterion)'
+---
+
+## Superseded by INV-009 (2026-04-24)
+
+**This investigation is superseded by [INV-009](./INV-009_HIGH_FRONTEND_stale-fetch-clobbers-user-filter-via-updateFromBackend.md).**
+
+Post-TASK-037 QA reproduced a related-but-distinct bug:
+
+- **What this investigation correctly fixed (keep):** user-initiated re-clicks of Untagged no longer self-clobber via `clearSearchCriteriaList` → `viewAllContent` → `fetchAllFiles`. TASK-034's `_resetSearchCriteriaListNoFetch` helper removed that fusion. Defect A's count-mismatch fix (TASK-035) also remains correct.
+- **What it missed:** a different race in which a LONG-RUNNING earlier fetch (`fileStore.fetchAllFiles()` kicked off by `RootStore.main` on launch) resolves SECONDS after the user has already clicked a filter (tag, Missing, saved query, etc.), and its final `updateFromBackend(allFiles)` overwrites the user's `fileList` — even though the `content` flag and the `searchCriteriaList` have already been set to the user's choice. Result: criteria chips and selector pressed-state remain correct, but the gallery reverts to "All". Waiting several minutes for the initial scan to finish before clicking avoids the bug — confirming it is a stale-fetch-applied-on-completion race, not a self-clobber.
+
+INV-009 re-classifies the root cause as **wrong-abstraction** at `FileStore.updateFromBackend`: it has no cancellation / generation check, so any stale fetch that completes after the user mutates the filter will overwrite the user's state. Full analysis and broader blast radius there.
+
+The tasks TASK-034 / TASK-035 / TASK-036 remain valid and shipped work. TASK-037 (QA) must be re-run against INV-009's fix before advancing.
+
 ---
 
 ## Bug Report

@@ -119,3 +119,17 @@ A MobX `reaction` in `FileStore`'s constructor watches `uiStore.hideMissingFiles
 `refetchFileCounts()` intentionally does NOT write `numUntaggedFiles` — the raw DB count (`SELECT COUNT(*) ... WHERE NOT EXISTS file_tags`) includes missing files and would not match the rendered gallery. It only writes `numTotalFiles`, which is the DB-total "All Images" badge value.
 
 See [INV-007](TODO/backlog/investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mismatch-and-filter-clobber.md) for the bug this invariant prevents.
+
+### Fetch generation invariant
+
+Every fetcher on `FileStore` (`fetchAllFiles`, `fetchUntaggedFiles` / `_fetchUntaggedFilesForced`, `fetchMissingFiles`, `fetchFilesByQuery`, `fetchDuplicatesFiles`) must increment `FileStore.fetchGeneration` synchronously at dispatch — AFTER the `setContentX()` flip, BEFORE the `await backend.*`. The captured value is passed through to `updateFromBackend(results, generation)`, which discards the apply if the captured generation no longer equals `this.fetchGeneration`. The existence-check `.then()` second-pass carries the same captured generation and guards a second time.
+
+This prevents a stale in-flight fetch from overwriting the user's `fileList` if they have since dispatched a newer fetcher. The primary trigger is the initial `fetchAllFiles` from `RootStore.main` on launch — it can take 5–30 seconds on a large library, during which the user may click into any Content mode. Without the generation guard, the stale result wins on resolution and the user's filter silently reverts to All.
+
+`fetchMissingFiles` does not call `updateFromBackend`; it has its own inline `runInAction` apply block. That block carries the same `gen` variable captured at dispatch and guards with the identical `if (gen !== this.fetchGeneration) return;` check before mutating `fileList`. The toast that follows the apply is also conditionally skipped for stale completions.
+
+**Rule:** any new writer that mutates `fileList` from an async context must participate in the generation guard. Bypassing `updateFromBackend` (as `fetchMissingFiles` does with its inline apply) is permitted only if the new code path includes its own `if (gen !== this.fetchGeneration) return;` check — captured at the same synchronous-before-await point.
+
+**Observability:** when a stale apply is dropped in the dev build, `FileStore.logStaleDrop(phase, dropped)` emits a `console.debug('[INV-009] dropped stale apply', { phase, dropped, current, content, droppedTotal })` line. The `droppedApplyCount` observable accumulates the total; in the dev build this is accessible as `window.__inv009.droppedCount`. Zero drops under normal steady-state usage; one or two drops during the initial-scan window on a large library is expected and correct.
+
+See [INV-009](TODO/backlog/investigations/INV-009_HIGH_FRONTEND_stale-fetch-clobbers-user-filter-via-updateFromBackend.md) for the full analysis. Also see [INV-007](TODO/backlog/investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mismatch-and-filter-clobber.md) for the related criteria-list work (TASK-034).

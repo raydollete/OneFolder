@@ -40,5 +40,5 @@ OneFolder/
 | [Thumbnail Generation System](thumbnail-generation.md)          | Image processing, caching, and format-specific handling              |
 | [Metadata Sync Implementation](metadata-sync-implementation.md) | Plan for immediate tag synchronization between app and file metadata |
 | [Multi-Library Support](multi-library.md)                       | Multi-library registry, per-library on-disk layout, startup and switch flows |
-| [Missing Files](missing-files.md)                               | Detection, per-library hide preference, and recovery via the Outliner badge  |
+| [Missing Files](missing-files.md)                               | Detection, per-library hide preference, and recovery via the Outliner badge; also documents the **FileStore fetch-generation invariant** — stale fetcher results are silently dropped (see §Fetch generation invariant). |
 | [Personal Fork Notes](personal-fork-notes.md)                   | Fork-specific deviations: Windows binary renamed to `brave.exe` (for NVIDIA VSR), portable-only |
