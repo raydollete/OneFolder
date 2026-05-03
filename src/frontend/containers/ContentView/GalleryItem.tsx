@@ -185,6 +185,19 @@ export const Thumbnail = observer(
 
     // Plays and pauses video
     const thumbnailRef = useRef<HTMLVideoElement>(null);
+
+    // Register this video element with the MediaReleaseCoordinator so that
+    // destructive file ops (trash, move) can release the OS handle before
+    // calling shell.trashItem / fse.move. See INV-008.
+    const { mediaReleaseCoordinator } = useStore();
+    useEffect(() => {
+      if (thumbnailRef.current === null || !isFileExtensionVideo(file.extension)) {
+        return;
+      }
+      const unregister = mediaReleaseCoordinator.register(file.absolutePath, thumbnailRef.current);
+      return unregister;
+    }, [thumbnailRef, file.absolutePath, file.extension, mediaReleaseCoordinator]);
+
     useEffect(() => {
       if (thumbnailRef.current === null || !isFileExtensionVideo(file.extension)) {
         return;

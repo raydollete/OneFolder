@@ -685,7 +685,49 @@ MainMessenger.onMessageBoxSync(dialog);
 
 MainMessenger.onGetPath((path) => app.getPath(path));
 
-MainMessenger.onTrashFile((absolutePath) => shell.trashItem(absolutePath));
+/**
+ * Trash a file with a single EBUSY/EPERM retry after 150 ms.
+ *
+ * The renderer's MediaReleaseCoordinator releases `<video>` file handles
+ * before this IPC fires (INV-008), but Chromium's media-pipeline teardown is
+ * asynchronous and can finish a few milliseconds later on slow or contended
+ * systems.  A single short retry bridges that race window without masking
+ * legitimate persistent failures (antivirus locks, permission errors, etc.).
+ */
+async function trashWithRetry(absolutePath: string): Promise<void> {
+  try {
+    await shell.trashItem(absolutePath);
+  } catch (err: any) {
+    const code: string | undefined = err?.code;
+    const message: string | undefined = err?.message ?? '';
+    const isTransientLock =
+      code === 'EBUSY' ||
+      code === 'EPERM' ||
+      message.includes('resource busy or locked') ||
+      message.includes('scandir');
+
+    if (!isTransientLock) {
+      throw err;
+    }
+
+    console.warn(
+      `[trashWithRetry] First attempt failed for "${absolutePath}" (${
+        code ?? message
+      }). Retrying after 150 ms…`,
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    try {
+      await shell.trashItem(absolutePath);
+      console.info(`[trashWithRetry] Retry succeeded for "${absolutePath}".`);
+    } catch (retryErr) {
+      // Retry also failed — surface the original error unchanged so the
+      // renderer's error-handling path (RemovalAlert.tsx) sees a failure.
+      throw err;
+    }
+  }
+}
+
+MainMessenger.onTrashFile((absolutePath) => trashWithRetry(absolutePath));
 
 MainMessenger.onIsFullScreen(() => mainWindow?.isFullScreen() ?? false);
 

@@ -83,10 +83,10 @@ export const TagRemoval = observer((props: IRemovalProps<ClientTag>) => {
 });
 
 export const FileRemoval = observer(() => {
-  const { fileStore, uiStore } = useStore();
+  const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
   const selection = uiStore.fileSelection;
 
-  const handleConfirm = action(() => {
+  const handleConfirm = action(async () => {
     uiStore.closeToolbarFileRemover();
     const files = [];
     for (const file of selection) {
@@ -94,6 +94,10 @@ export const FileRemoval = observer(() => {
         files.push(file);
       }
     }
+    // Release any video handles even for broken/missing files — defends against
+    // the rare race where a file is marked broken but still held open. (INV-008)
+    const paths = files.map((f) => f.absolutePath);
+    await mediaReleaseCoordinator.releasePaths(paths);
     fileStore.deleteFiles(files);
   });
 
@@ -118,11 +122,17 @@ export const FileRemoval = observer(() => {
 });
 
 export const MoveFilesToTrashBin = observer(() => {
-  const { fileStore, uiStore } = useStore();
+  const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
   const selection = uiStore.fileSelection;
 
   const handleConfirm = action(async () => {
     uiStore.closeMoveFilesToTrash();
+
+    // Release any <video> handles for the selected files BEFORE calling
+    // shell.trashItem, so Windows does not return EBUSY. (INV-008)
+    const paths = Array.from(selection, (f) => f.absolutePath);
+    await mediaReleaseCoordinator.releasePaths(paths);
+
     const files = [];
     for (const file of selection) {
       // File deletion used to be possible in renderer process, not in new electron version

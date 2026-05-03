@@ -49,7 +49,7 @@ needsThumbnail(file: FileDTO) {
 - **Small web-compatible images**: Use original file directly
 - **Large images**: Generate scaled-down thumbnails
 - **Special formats**: Process through appropriate decoders
-- **Videos/GIFs**: Currently use original (future enhancement planned)
+- **Videos/GIFs**: Currently use original (future enhancement planned). Because videos use the original file path as their `<video src>`, Chromium holds an OS file handle without `FILE_SHARE_DELETE` on Windows. OneFolder therefore coordinates `<video>` handle release via `MediaReleaseCoordinator` (`src/frontend/image/MediaReleaseCoordinator.ts`) before any destructive file operation (trash, move). See INV-008 for full analysis.
 
 ---
 

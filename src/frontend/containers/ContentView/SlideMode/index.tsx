@@ -49,7 +49,7 @@ interface SlideViewProps {
 }
 
 const SlideView = observer(({ width, height }: SlideViewProps) => {
-  const { uiStore, fileStore, imageLoader } = useStore();
+  const { uiStore, fileStore, imageLoader, mediaReleaseCoordinator } = useStore();
   const file = uiStore.firstFileInView;
   const eventManager = useMemo(() => (file ? new CommandDispatcher(file) : undefined), [file]);
   const isFirst = useComputed(() => uiStore.firstItem === 0);
@@ -122,40 +122,71 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
     };
   }, [decrImgIndex, incrImgIndex, uiStore]);
 
-  // Preload next and previous image for better UX
+  // Preload next and previous image for better UX.
+  // Orphan video elements are tracked in preloadVideosRef so the coordinator
+  // can release their OS handles before a trash/move op (INV-008), and so we
+  // can tear them down immediately on unmount rather than waiting for GC.
+  const preloadVideosRef = useRef<Map<string, { el: HTMLVideoElement; unregister: () => void }>>(
+    new Map(),
+  );
   useEffect(() => {
     let isEffectRunning = true;
     const dispose = autorun(() => {
       if (!isLast.get() && uiStore.firstItem + 1 < fileStore.fileList.length) {
         const nextFile = fileStore.fileList[uiStore.firstItem + 1];
-        let nextImg: any;
         if (isFileExtensionVideo(nextFile.extension)) {
-          nextImg = document.createElement('video');
+          // Reuse or create a preload video element for this path
+          if (!preloadVideosRef.current.has(nextFile.absolutePath)) {
+            const el = document.createElement('video');
+            const unregister = mediaReleaseCoordinator.register(nextFile.absolutePath, el);
+            preloadVideosRef.current.set(nextFile.absolutePath, { el, unregister });
+            imageLoader
+              .getImageSrc(nextFile)
+              .then((src) => isEffectRunning && src && (el.src = encodeFilePath(src)));
+          }
         } else {
-          nextImg = new Image();
+          const nextImg = new Image();
+          imageLoader
+            .getImageSrc(nextFile)
+            .then((src) => isEffectRunning && src && (nextImg.src = encodeFilePath(src)));
         }
-        imageLoader
-          .getImageSrc(nextFile)
-          .then((src) => isEffectRunning && src && (nextImg.src = encodeFilePath(src)));
       }
       if (!isFirst.get() && fileStore.fileList.length > 0) {
         const prevFile = fileStore.fileList[uiStore.firstItem - 1];
-        let prevImg: any;
         if (isFileExtensionVideo(prevFile.extension)) {
-          prevImg = document.createElement('video');
+          if (!preloadVideosRef.current.has(prevFile.absolutePath)) {
+            const el = document.createElement('video');
+            const unregister = mediaReleaseCoordinator.register(prevFile.absolutePath, el);
+            preloadVideosRef.current.set(prevFile.absolutePath, { el, unregister });
+            imageLoader
+              .getImageSrc(prevFile)
+              .then((src) => isEffectRunning && src && (el.src = encodeFilePath(src)));
+          }
         } else {
-          prevImg = new Image();
+          const prevImg = new Image();
+          imageLoader
+            .getImageSrc(prevFile)
+            .then((src) => isEffectRunning && src && (prevImg.src = encodeFilePath(src)));
         }
-        imageLoader
-          .getImageSrc(prevFile)
-          .then((src) => isEffectRunning && src && (prevImg.src = encodeFilePath(src)));
       }
     });
+    // Capture the map reference at effect-creation time so the cleanup closure
+    // operates on the correct Map instance even if the ref is reassigned.
+    const preloadVideos = preloadVideosRef.current;
     return () => {
       isEffectRunning = false;
       dispose();
+      // Explicitly release all orphan preload video elements rather than
+      // waiting for GC — this closes the OS handles immediately.
+      for (const { el, unregister } of preloadVideos.values()) {
+        unregister();
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      }
+      preloadVideos.clear();
     };
-  }, [fileStore, isFirst, isLast, uiStore, imageLoader]);
+  }, [fileStore, isFirst, isLast, uiStore, imageLoader, mediaReleaseCoordinator]);
 
   const transitionStart: SlideTransform | undefined = useMemo(() => {
     return undefined;
@@ -270,7 +301,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
     onClose,
     upscaleMode,
   }: ZoomableImageProps) => {
-    const { imageLoader, uiStore } = useStore();
+    const { imageLoader, uiStore, mediaReleaseCoordinator } = useStore();
     const { absolutePath, width: imgWidth, height: imgHeight } = file;
     // Image src can be set asynchronously: keep track of it in a state
     // Needed for image formats not natively supported by the browser (e.g. tiff): will be converted to another format
@@ -351,6 +382,17 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
       },
     );
 
+    // Ref for the SlideMode video element so the MediaReleaseCoordinator can
+    // release its OS handle before a trash/move op. See INV-008.
+    const slideVideoRef = useRef<HTMLVideoElement>(null);
+    useEffect(() => {
+      if (slideVideoRef.current === null || !isFileExtensionVideo(file.extension)) {
+        return;
+      }
+      const unregister = mediaReleaseCoordinator.register(file.absolutePath, slideVideoRef.current);
+      return unregister;
+    }, [slideVideoRef, file.absolutePath, file.extension, mediaReleaseCoordinator]);
+
     if (image.tag === 'ready' && 'err' in image.value) {
       const isVideo = isFileExtensionVideo(file.extension);
       console.log(image.value.err);
@@ -391,6 +433,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
             {(props) => (
               <video
                 {...props}
+                ref={slideVideoRef}
                 src={encodeFilePath(src)}
                 width={dimension[0]}
                 height={dimension[1]}

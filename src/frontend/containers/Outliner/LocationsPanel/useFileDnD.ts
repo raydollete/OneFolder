@@ -10,6 +10,7 @@ import { DnDAttribute } from '../../../contexts/TagDnDContext';
 import { ClientFile } from '../../../entities/File';
 import { ClientLocation } from '../../../entities/Location';
 import FileStore from '../../../stores/FileStore';
+import { MediaReleaseCoordinator } from '../../../image/MediaReleaseCoordinator';
 import { IExpansionState } from '../../types';
 import {
   findDroppedFileMatches,
@@ -23,16 +24,22 @@ import {
 export const HOVER_TIME_TO_EXPAND = 600;
 
 /**
- * Either moves or downloads a dropped file into the target directory
+ * Either moves or downloads a dropped file into the target directory.
+ * Accepts `mediaReleaseCoordinator` so that any <video> handles on the source
+ * or destination path are released before the fse.remove / fse.move calls —
+ * preventing EBUSY on Windows when Chromium holds an open file handle. (INV-008)
  * @param fileStore
  * @param matches
+ * @param loc
  * @param dir
+ * @param mediaReleaseCoordinator
  */
 const handleMove = async (
   fileStore: FileStore,
   matches: ClientFile[],
   loc: ClientLocation,
   dir: string,
+  mediaReleaseCoordinator: MediaReleaseCoordinator,
 ) => {
   let isReplaceAllActive = false;
 
@@ -74,6 +81,10 @@ const handleMove = async (
         }
       }
 
+      // Release any <video> handles on src and dst BEFORE touching the files on
+      // disk, so Windows does not return EBUSY. (INV-008)
+      await mediaReleaseCoordinator.releasePaths([src, dst]);
+
       // When replacing an existing file, no change is detected when moving the file
       // The target file needs to be removed from disk and the DB first
       if (alreadyExists) {
@@ -106,7 +117,7 @@ export const useFileDropHandling = (
   expansion: IExpansionState,
   setExpansion: (s: IExpansionState) => void,
 ) => {
-  const { fileStore, locationStore } = useStore();
+  const { fileStore, locationStore, mediaReleaseCoordinator } = useStore();
   // Don't expand immediately, only after hovering over it for a second or so
   const [expandTimeoutId, setExpandTimeoutId] = useState<number>();
   const expandDelayed = useCallback(() => {
@@ -152,7 +163,7 @@ export const useFileDropHandling = (
             if (!loc) {
               throw new Error('Location not found for path ' + fullPath);
             }
-            await handleMove(fileStore, matches, loc, fullPath);
+            await handleMove(fileStore, matches, loc, fullPath, mediaReleaseCoordinator);
             setTimeout(() => fileStore.refetch(), 500);
           } else {
             // Otherwise it's an external file (e.g. from the web or a folder not set up as a Location in OneFolder)

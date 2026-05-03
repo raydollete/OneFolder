@@ -12,6 +12,7 @@ import ImageLoader from '../image/ImageLoader';
 
 import { RendererMessenger } from 'src/ipc/renderer';
 import SearchStore from './SearchStore';
+import { MediaReleaseCoordinator } from '../image/MediaReleaseCoordinator';
 
 // This will throw exceptions whenever we try to modify the state directly without an action
 // Actions will batch state modifications -> better for performance
@@ -39,6 +40,7 @@ class RootStore {
   readonly searchStore: SearchStore;
   readonly exifTool: ExifIO;
   readonly imageLoader: ImageLoader;
+  readonly mediaReleaseCoordinator: MediaReleaseCoordinator;
   readonly getWindowTitle: () => string;
 
   private constructor(
@@ -64,6 +66,7 @@ class RootStore {
       : 'hierarchical-separator';
     this.exifTool = new ExifIO(localStorage.getItem(separatorKey) || undefined);
     this.imageLoader = new ImageLoader(this.exifTool);
+    this.mediaReleaseCoordinator = new MediaReleaseCoordinator();
     this.getWindowTitle = () => formatWindowTitle(this.fileStore, this.uiStore);
   }
 
