@@ -3,8 +3,8 @@ id: INV-008
 title: 'Video gallery element holds OS file handle, blocking trash/delete with EBUSY'
 reported_bug: 'I am unable to delete videos. I get an error: "EBUSY: resource busy or locked, scandir <filepath>" — the video is correctly previewing on hover, but there needs to be a way to unload the video when a delete is triggered.'
 date: 2026-04-23
-status: active
-superseded_by:
+status: superseded
+superseded_by: INV-014
 tasks_spawned: [TASK-038, TASK-039, TASK-040, TASK-041, TASK-042]
 root_cause_category: 'architectural-shortcoming'
 affects:
@@ -15,6 +15,53 @@ affects:
   - Drag-and-drop move flow (useFileDnD.handleMove — fse.move + fse.remove)
   - Folder watcher rescans (chokidar via @nodelib/fs.scandir)
   - Thumbnail lifecycle for videos (currently uses original file path as thumbnail)
+postmortem_summary: |
+  Diagnosis was correct (Chromium <video> holds an OS file handle without
+  FILE_SHARE_DELETE on Windows). Architectural approach (a MediaReleaseCoordinator
+  that components register video refs with, and that destructive ops await before
+  IPC) was correct. However the implementation that shipped in commit 6b81a51
+  has three concrete defects that prevent it from actually releasing handles in
+  the common case (gallery hover-then-delete):
+
+    1. The component-side registration useEffects in
+       src/frontend/containers/ContentView/GalleryItem.tsx (Thumbnail) and
+       src/frontend/containers/ContentView/SlideMode/index.tsx (ZoomableImage,
+       slideVideoRef) have dependency lists that omit the imageSource/image
+       promise state. The <video> element only renders after the async
+       thumbnail/decode promise resolves, so on first render thumbnailRef.current
+       is null. The effect runs once on mount, bails on the null check, and is
+       never re-run because none of its deps change when the promise resolves.
+       Result: the gallery video and the slide-mode main video are NEVER
+       registered with the coordinator.
+
+    2. The DOM-fallback sweep in
+       src/frontend/image/MediaReleaseCoordinator.ts releasePaths() decodes
+       the Chromium-resolved <video>.src (which is the URL-parsed form
+       file:///C:/Users/foo/bar.mp4 even when encodeFilePath produced
+       file://C:\Users\foo\bar.mp4) and runs it through path.normalize on
+       Windows. path.normalize('/C:/Users/foo/bar.mp4') returns
+       \C:\Users\foo\bar.mp4 (leading backslash) — which never matches
+       registry keys derived from f.absolutePath (C:\Users\foo\bar.mp4). The
+       fallback that was meant to cover the registration miss does not match
+       on Windows.
+
+    3. SlideMode/index.tsx:328 creates an additional orphan
+       document.createElement('video') for video-dimension probing. It is
+       never registered with the coordinator. Its OS file handle persists
+       until V8 GC finalizes the wrapper.
+
+  Together (1) and (2) mean the gallery delete flow performs no <video>
+  release at all on the path that the user is reporting. The main-process
+  150ms retry is unable to compensate because the renderer never frees the
+  handle. (3) is an additional latent handle-holder that the original
+  investigation missed.
+
+  Procedural finding: TASK-042 was marked DONE in commit 6b81a51 without any
+  of its 9 manual-Windows verification steps actually being executed. Only
+  the docs step (#10) was completed. The user's recent QA is the first
+  real-world verification of the fix.
+
+  See INV-014 for the full re-investigation and the corrected fix plan.
 ---
 
 ## Bug Report
