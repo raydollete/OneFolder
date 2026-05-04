@@ -20,3 +20,6 @@ target/
 .env
 .vscode/
 .vscode/*
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
