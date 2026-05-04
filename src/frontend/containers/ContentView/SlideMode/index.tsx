@@ -419,7 +419,8 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
         return (
           <ZoomPan
             position="center"
-            initialScale="auto"
+            initialScale="fit"
+            mediaType="video"
             doubleTapBehavior="zoomOrReset"
             imageDimension={dimension}
             containerDimension={createDimension(width, height)}

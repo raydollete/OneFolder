@@ -11,6 +11,7 @@ import {
   createVec2,
   Dimension,
   getAutofitScale,
+  getFitScale,
   getConstrainedScale,
   getImageOverflow,
   getPinchLength,
@@ -28,11 +29,18 @@ const OVERZOOM_TOLERANCE = 0.05;
 const DOUBLE_TAP_THRESHOLD = 250;
 const ANIMATION_SPEED = 0.1;
 
+// Video wheel-seek step sizes (per scroll tick). Direction sign is multiplied in.
+const VIDEO_SEEK_BARE_SECONDS = 2;
+const VIDEO_SEEK_CTRL_SECONDS = 10;
+// Heuristic single-frame step: exact at 30fps, ~2 frames at 60fps, may not advance at <30fps.
+// HTML5 <video> exposes no per-frame step API, so we approximate.
+const VIDEO_SEEK_SHIFT_FRAME_SECONDS = 1 / 30;
+
 export type SlideTransform = Transform;
 
 export interface ZoomPanProps {
   children: (props: React.ImgHTMLAttributes<HTMLElement>) => React.ReactElement<HTMLElement>;
-  initialScale: number | 'auto';
+  initialScale: number | 'auto' | 'fit';
   minScale: number;
   maxScale: number;
   position: 'topLeft' | 'center';
@@ -41,6 +49,7 @@ export interface ZoomPanProps {
   containerDimension: Dimension;
   onClose?: () => void;
   upscaleMode: UpscaleMode;
+  mediaType?: 'image' | 'video';
 
   transitionStart?: Transform;
   transitionEnd?: Transform;
@@ -150,15 +159,52 @@ export default class ZoomPan extends React.Component<ZoomPanProps, ZoomPanState>
   };
 
   handleMouseWheel = (event: React.WheelEvent) => {
+    // Wheel over a video seeks the timeline. Modifier-dependent step (precedence Shift > Ctrl > bare).
+    // Alt+wheel falls through to the zoom path below.
+    if (this.props.mediaType === 'video' && !event.altKey) {
+      const videoEl = this.containerRef.current?.querySelector('video') as HTMLVideoElement | null;
+      if (videoEl && Number.isFinite(videoEl.duration)) {
+        const direction = event.deltaY < 0 ? -1 : event.deltaY > 0 ? 1 : 0;
+        if (direction !== 0) {
+          let step: number;
+          if (event.shiftKey) {
+            step = VIDEO_SEEK_SHIFT_FRAME_SECONDS * direction;
+            // Frame-stepping only makes sense on a paused video.
+            if (!videoEl.paused) {
+              videoEl.pause();
+            }
+          } else if (event.ctrlKey) {
+            step = VIDEO_SEEK_CTRL_SECONDS * direction;
+          } else {
+            step = VIDEO_SEEK_BARE_SECONDS * direction;
+          }
+          videoEl.currentTime = clamp(videoEl.currentTime + step, 0, videoEl.duration);
+          tryPreventDefault(event);
+          // Ctrl+wheel would otherwise bubble to the gallery's thumbnail-resize handler;
+          // Shift+wheel could be hijacked by horizontal-scroll handlers. Stop propagation
+          // when we intentionally consumed those modifiers. Bare wheel keeps bubbling.
+          if (event.shiftKey || event.ctrlKey) {
+            event.stopPropagation();
+          }
+        }
+      }
+      return;
+    }
+    // Zoom path. For video (only reachable here under Alt+wheel) the deltaY → zoom
+    // polarity is INVERTED so scroll-down zooms IN, matching the seek polarity above.
+    // For image (bare wheel), the original polarity is preserved.
     this.stopAnimation();
     const { scale } = this.state;
     const point = getRelativePosition(createVec2(event.clientX, event.clientY), this.container);
-    if (event.deltaY > 0) {
+    const isVideo = this.props.mediaType === 'video';
+    const wantZoomIn = isVideo ? event.deltaY > 0 : event.deltaY < 0;
+    const wantZoomOut = isVideo ? event.deltaY < 0 : event.deltaY > 0;
+    if (wantZoomOut) {
       if (scale > this.props.minScale) {
         this.zoomOut(point);
         tryPreventDefault(event);
       }
-    } else if (event.deltaY < 0) {
+    } else if (wantZoomIn) {
       if (scale < this.props.maxScale) {
         this.zoomInStep(point);
         tryPreventDefault(event);
@@ -205,8 +251,10 @@ export default class ZoomPan extends React.Component<ZoomPanProps, ZoomPanState>
       case 'reset':
         this.startAnimation(resetTransform(props, this.setState));
         break;
-      case 'zoomOrReset':
-        const initialScale = getAutofitScale(props.containerDimension, props.imageDimension);
+      case 'zoomOrReset': {
+        // Reset target = whatever getTransform currently produces for these props,
+        // so 'fill' videos reset to fill and 'auto' images reset to autofit.
+        const initialScale = getTransform(props).scale;
         // If current scale is same as initial scale, zoom in, otherwise reset to initial zoom
         if (Math.abs(this.state.scale - initialScale) < 0.01) {
           this.zoomIn(position);
@@ -214,6 +262,7 @@ export default class ZoomPan extends React.Component<ZoomPanProps, ZoomPanState>
           this.startAnimation(resetTransform(props, this.setState));
         }
         break;
+      }
       default:
         break;
     }
@@ -343,11 +392,13 @@ type Updater = (
 function getTransform(props: Readonly<ZoomPanProps>): Transform {
   const { position, initialScale, minScale, maxScale, imageDimension, containerDimension } = props;
 
-  const scale = clamp(
-    initialScale === 'auto' ? getAutofitScale(containerDimension, imageDimension) : initialScale,
-    minScale,
-    maxScale,
-  );
+  const rawScale =
+    initialScale === 'auto'
+      ? getAutofitScale(containerDimension, imageDimension)
+      : initialScale === 'fit'
+      ? getFitScale(containerDimension, imageDimension)
+      : initialScale;
+  const scale = clamp(rawScale, minScale, maxScale);
 
   if (position === 'center') {
     const top = (containerDimension[1] - imageDimension[1] * scale) / 2;

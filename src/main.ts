@@ -699,7 +699,7 @@ async function trashWithRetry(absolutePath: string): Promise<void> {
     await shell.trashItem(absolutePath);
   } catch (err: any) {
     const code: string | undefined = err?.code;
-    const message: string | undefined = err?.message ?? '';
+    const message: string = err?.message ?? '';
     const isTransientLock =
       code === 'EBUSY' ||
       code === 'EPERM' ||

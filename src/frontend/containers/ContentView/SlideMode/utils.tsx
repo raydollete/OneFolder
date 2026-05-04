@@ -73,6 +73,19 @@ export const getAutofitScale = (
   return Math.min(containerWidth / imageWidth, containerHeight / imageHeight, 1);
 };
 
+// "Fit-to-viewport" scale: largest image dimension reaches the corresponding viewport
+// edge — entire image visible, letterboxed on the other axis. Unlike getAutofitScale,
+// this DOES upscale a small image past 1.0 to reach the edge.
+export const getFitScale = (
+  [containerWidth, containerHeight]: Dimension,
+  [imageWidth, imageHeight]: Dimension,
+): number => {
+  if (imageWidth <= 0 || imageHeight <= 0) {
+    return 1;
+  }
+  return Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
+};
+
 export const tryPreventDefault = (event: { cancelable: boolean; preventDefault: () => void }) => {
   if (event.cancelable) {
     event.preventDefault();
