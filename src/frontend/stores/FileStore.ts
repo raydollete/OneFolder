@@ -75,7 +75,7 @@ class FileStore {
   /** The origin of the current files that are shown */
   @observable private content: Content = Content.All;
   @observable orderDirection: OrderDirection = OrderDirection.Desc;
-  @observable orderBy: OrderBy<FileDTO> = 'dateAdded';
+  @observable orderBy: OrderBy<FileDTO> = 'random';
   @observable numTotalFiles = 0;
   @observable numUntaggedFiles = 0;
   @observable numMissingFiles = 0;
@@ -595,7 +595,7 @@ class FileStore {
     this.refetch();
   }
 
-  @action.bound orderFilesBy(prop: OrderBy<FileDTO> = 'dateAdded'): void {
+  @action.bound orderFilesBy(prop: OrderBy<FileDTO> = 'random'): void {
     this.setOrderBy(prop);
     this.refetch();
   }
@@ -1286,7 +1286,7 @@ class FileStore {
     this.orderDirection = order;
   }
 
-  @action private setOrderBy(prop: OrderBy<FileDTO> = 'dateAdded') {
+  @action private setOrderBy(prop: OrderBy<FileDTO> = 'random') {
     this.orderBy = prop;
   }
 

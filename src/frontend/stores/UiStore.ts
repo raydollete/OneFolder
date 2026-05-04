@@ -164,7 +164,7 @@ class UiStore {
   private readonly rootStore: RootStore;
 
   // Theme
-  @observable theme: 'light' | 'dark' = 'light';
+  @observable theme: 'light' | 'dark' = 'dark';
 
   // UI
   @observable isOutlinerOpen: boolean = true;
@@ -1086,9 +1086,14 @@ class UiStore {
       } catch (e) {
         console.error('Cannot parse persistent preferences', e);
       }
-      // Set the native window theme based on the application theme
-      RendererMessenger.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
     }
+
+    // Set the native window theme based on the application theme.
+    // This must run on EVERY recovery, not just when persisted prefs exist:
+    // on a fresh install (no prefsString) the main process still needs to be
+    // told the theme so the native window chrome matches the React UI.
+    // See INV-011 Defect A.
+    RendererMessenger.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
 
     // Set default thumbnail directory in case none was specified.
     // Pass the library ID so each library gets its own thumbnail subdirectory.
