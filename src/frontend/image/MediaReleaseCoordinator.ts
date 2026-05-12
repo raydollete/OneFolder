@@ -1,5 +1,7 @@
 import path from 'path';
 
+import { IS_DEV } from 'common/process';
+
 /**
  * MediaReleaseCoordinator
  *
@@ -59,11 +61,31 @@ export function decodeVideoSrcToPath(src: string): string | undefined {
   const withoutProto = src.slice('file://'.length);
   const queryIdx = withoutProto.lastIndexOf('?');
   const pathPart = queryIdx > 0 ? withoutProto.slice(0, queryIdx) : withoutProto;
+
+  // When Chromium (and the WHATWG URL parser) resolves a Windows file URL, it
+  // normalizes `file://C:\Users\foo\bar.mp4` into `file:///C:/Users/foo/bar.mp4`
+  // (triple-slash, forward slashes).  After stripping `file://` we are left with
+  // `/C:/Users/foo/bar.mp4`.  On Windows, `path.normalize('/C:/...')` inserts a
+  // leading backslash (`\C:\...`), which never matches the registry key derived
+  // from `absolutePath` (`C:\...`).
+  //
+  // Fix: if the remaining path matches the drive-letter pattern `/^\/[A-Za-z]:\//`,
+  // strip exactly one leading `/`.  This regex is inherently Windows-specific —
+  // POSIX absolute paths (`/Users/foo/bar`) do not start with a drive letter, so
+  // the strip is never applied on macOS / Linux.
+  let decoded: string;
   try {
-    return decodeURIComponent(pathPart);
+    decoded = decodeURIComponent(pathPart);
   } catch {
-    return pathPart;
+    decoded = pathPart;
   }
+
+  // Strip leading `/` only when followed by a Windows drive letter + colon
+  if (/^\/[A-Za-z]:[/\\]/.test(decoded)) {
+    decoded = decoded.slice(1);
+  }
+
+  return decoded;
 }
 
 /** Release a single `<video>` element, freeing its OS file handle. */
@@ -165,6 +187,8 @@ export class MediaReleaseCoordinator {
     }
 
     const releasedElements: HTMLVideoElement[] = [];
+    let registryHits = 0;
+    let domHits = 0;
 
     // 1. Release from explicit registry
     for (const [key, elements] of this.#registry) {
@@ -172,6 +196,7 @@ export class MediaReleaseCoordinator {
         for (const el of elements) {
           releaseVideoElement(el);
           releasedElements.push(el);
+          registryHits++;
         }
       }
     }
@@ -191,6 +216,7 @@ export class MediaReleaseCoordinator {
             // Only add if not already released via registry
             if (!releasedElements.includes(el)) {
               releasedElements.push(el);
+              domHits++;
             }
           }
         }
@@ -210,6 +236,19 @@ export class MediaReleaseCoordinator {
     // 4. Wait for `emptied` events (or timeout) for each released element
     if (releasedElements.length > 0) {
       await Promise.all(releasedElements.map((el) => waitForEmptied(el, timeoutMs)));
+    }
+
+    // Dev-only diagnostics: log the release summary so QA can confirm
+    // that registryHits >= 1, proving the callback-ref registration fired.
+    // This is the runtime evidence the original fix shipped without. See INV-014.
+    if (IS_DEV) {
+      // eslint-disable-next-line no-console
+      console.debug('[MediaReleaseCoordinator] releasePaths', {
+        targets: targetKeys.size,
+        registryHits,
+        domHits,
+        releasedElements: releasedElements.length,
+      });
     }
   }
 }

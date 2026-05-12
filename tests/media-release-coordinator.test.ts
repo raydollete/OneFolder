@@ -1,4 +1,7 @@
-import { MediaReleaseCoordinator, decodeVideoSrcToPath } from '../src/frontend/image/MediaReleaseCoordinator';
+import {
+  MediaReleaseCoordinator,
+  decodeVideoSrcToPath,
+} from '../src/frontend/image/MediaReleaseCoordinator';
 import { encodeFilePath } from '../common/fs';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +38,36 @@ describe('decodeVideoSrcToPath', () => {
     const original = 'C:/test#folder/video.mp4';
     const encoded = encodeFilePath(original);
     expect(decodeVideoSrcToPath(encoded)).toBe(original);
+  });
+
+  // -------------------------------------------------------------------------
+  // Windows WHATWG URL round-trip (Root Cause #2 regression guard)
+  //
+  // Chromium (and Node's WHATWG URL parser) normalizes the two-slash form
+  // `file://C:/...` that encodeFilePath produces into the three-slash form
+  // `file:///C:/...`.  After stripping `file://` the leftover `/C:/...`
+  // caused path.normalize on Windows to insert a leading backslash.
+  // This test verifies the fix strips the spurious `/` so the decoded path
+  // can be matched against the registry key.
+  //
+  // Forward-slash Windows paths are used so that path.normalize behaves
+  // consistently across Windows and POSIX runners.
+  // -------------------------------------------------------------------------
+
+  it('decodes a browser-resolved Windows file:/// URL (triple-slash form) to the correct path', () => {
+    // Simulate what Chromium / WHATWG URL parser returns for el.src
+    const browserResolved = 'file:///C:/Users/foo/bar.mp4';
+    const decoded = decodeVideoSrcToPath(browserResolved);
+    expect(decoded).toBe('C:/Users/foo/bar.mp4');
+  });
+
+  it('does not strip leading / for POSIX absolute paths (macOS/Linux safety)', () => {
+    // POSIX file URL — the leading / must be preserved
+    const posixUrl = 'file:///Users/foo/bar.mp4';
+    const decoded = decodeVideoSrcToPath(posixUrl);
+    // After stripping `file://`, pathPart is `/Users/foo/bar.mp4`.
+    // The drive-letter regex does NOT match, so the `/` is kept.
+    expect(decoded).toBe('/Users/foo/bar.mp4');
   });
 });
 
@@ -143,5 +176,43 @@ describe('MediaReleaseCoordinator', () => {
     // Different case + forward slashes
     await coordinator.releasePaths(['C:/videos/clip.mp4'], { timeoutMs: 0 });
     expect(el.pause).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // WHATWG URL round-trip integration (Root Cause #2 regression guard)
+  //
+  // Simulates the full path: register a Windows path → Chromium resolves
+  // el.src to the triple-slash form → DOM-fallback decodes and matches.
+  // Uses Node's built-in URL (same WHATWG algorithm as Chromium) so the
+  // test passes on both Windows and POSIX CI runners without jsdom.
+  // Forward-slash Windows paths ensure path.normalize is consistent
+  // across platforms.
+  // -------------------------------------------------------------------------
+
+  it('DOM-fallback matches a Windows path after WHATWG URL resolution (triple-slash form)', async () => {
+    const el = makeMockVideo();
+    const registeredPath = 'C:/Users/foo/bar.mp4';
+    coordinator.register(registeredPath, el);
+
+    // Simulate what <video>.src returns after the WHATWG URL parser
+    // normalizes the two-slash form encodeFilePath produces:
+    //   encodeFilePath('C:/Users/foo/bar.mp4') → 'file://C:/Users/foo/bar.mp4'
+    //   new URL('file://C:/Users/foo/bar.mp4').href → 'file:///C:/Users/foo/bar.mp4'
+    // This is the value releasePaths sees when it reads el.src from the DOM.
+    const browserResolvedSrc = new URL(encodeFilePath(registeredPath)).href;
+    expect(browserResolvedSrc).toBe('file:///C:/Users/foo/bar.mp4');
+
+    // Decode and verify it round-trips back to the registered path's key
+    const decoded = decodeVideoSrcToPath(browserResolvedSrc);
+    if (decoded === undefined) {
+      throw new Error('decodeVideoSrcToPath returned undefined for a valid file:// URL');
+    }
+    expect(decoded).toBe('C:/Users/foo/bar.mp4');
+
+    // Verify releasePaths finds the registered element via the decoded path
+    await coordinator.releasePaths([decoded], { timeoutMs: 0 });
+    expect(el.pause).toHaveBeenCalledTimes(1);
+    expect(el.removeAttribute).toHaveBeenCalledWith('src');
+    expect(el.load).toHaveBeenCalledTimes(1);
   });
 });

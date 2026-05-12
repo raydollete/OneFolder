@@ -183,20 +183,47 @@ export const Thumbnail = observer(
       setLoadError(false);
     }, [fileId]);
 
-    // Plays and pauses video
-    const thumbnailRef = useRef<HTMLVideoElement>(null);
+    // Plays and pauses video — declared as MutableRefObject so the callback ref
+    // can assign .current when React attaches/detaches the element.
+    const thumbnailRef = useRef<HTMLVideoElement | null>(null);
 
     // Register this video element with the MediaReleaseCoordinator so that
     // destructive file ops (trash, move) can release the OS handle before
-    // calling shell.trashItem / fse.move. See INV-008.
+    // calling shell.trashItem / fse.move. See INV-014.
+    //
+    // The previous useEffect-based registration was a no-op: the effect ran at
+    // component mount when thumbnailRef.current was still null (the <video> is
+    // rendered conditionally on imageSource.tag === 'ready'), and none of the
+    // effect deps changed when the promise resolved, so it never re-ran.
+    // A callback ref fires synchronously whenever React attaches/detaches the
+    // element, regardless of upstream async state.
     const { mediaReleaseCoordinator } = useStore();
-    useEffect(() => {
-      if (thumbnailRef.current === null || !isFileExtensionVideo(file.extension)) {
-        return;
-      }
-      const unregister = mediaReleaseCoordinator.register(file.absolutePath, thumbnailRef.current);
-      return unregister;
-    }, [thumbnailRef, file.absolutePath, file.extension, mediaReleaseCoordinator]);
+    const unregisterRef = useRef<(() => void) | null>(null);
+    const setThumbnailRef = useCallback(
+      (el: HTMLVideoElement | null) => {
+        // Tear down any previous registration before switching elements
+        if (unregisterRef.current) {
+          unregisterRef.current();
+          unregisterRef.current = null;
+        }
+        // Update the stable ref that pause/play effects read
+        thumbnailRef.current = el;
+        if (el && isFileExtensionVideo(file.extension)) {
+          unregisterRef.current = mediaReleaseCoordinator.register(file.absolutePath, el);
+        }
+      },
+      [file.absolutePath, file.extension, mediaReleaseCoordinator],
+    );
+    // Cleanup on unmount — React calls the callback ref with null when the
+    // component unmounts while the element is mounted, but an explicit cleanup
+    // effect ensures we unregister even in edge cases (e.g. fast unmount).
+    useEffect(
+      () => () => {
+        unregisterRef.current?.();
+        unregisterRef.current = null;
+      },
+      [],
+    );
 
     useEffect(() => {
       if (thumbnailRef.current === null || !isFileExtensionVideo(file.extension)) {
@@ -256,7 +283,7 @@ export const Thumbnail = observer(
             videoProps.autoPlay = true;
           }
 
-          return <video ref={thumbnailRef} {...videoProps} />;
+          return <video ref={setThumbnailRef} {...videoProps} />;
         }
 
         return (

@@ -2,16 +2,18 @@
 id: TASK-058
 title: 'Use callback refs for video registration in GalleryItem and SlideMode + add dev-only releasePaths logging'
 investigation: INV-014
-status: planned
+status: DONE
 priority: critical
 blocked_by: []
 date_created: 2026-05-04
-date_completed:
+date_completed: 2026-05-11
 files:
   - src/frontend/containers/ContentView/GalleryItem.tsx
   - src/frontend/containers/ContentView/SlideMode/index.tsx
   - src/frontend/image/MediaReleaseCoordinator.ts
 ---
+
+> Adheres to [QA-DISCIPLINE](../../QA-DISCIPLINE.md) — planned as part of the INV-014 batch that introduced the manual-execution discipline.
 
 ## What
 
@@ -33,7 +35,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
 
 ## Implementation Steps
 
-- [ ] 1. In `src/frontend/containers/ContentView/GalleryItem.tsx` `Thumbnail` component:
+- [x] 1. In `src/frontend/containers/ContentView/GalleryItem.tsx` `Thumbnail` component:
   - Remove the existing registration `useEffect` (lines ~189-199) — the one with deps `[thumbnailRef, file.absolutePath, file.extension, mediaReleaseCoordinator]`.
   - Keep `const thumbnailRef = useRef<HTMLVideoElement>(null);` since the existing pause/play `useEffect`s read `thumbnailRef.current`.
   - Add a ref to track the unregister callback: `const unregisterRef = useRef<(() => void) | null>(null);`.
@@ -56,48 +58,33 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
     ```ts
     useEffect(() => () => { unregisterRef.current?.(); unregisterRef.current = null; }, []);
     ```
+  - Note: declared `thumbnailRef` as `useRef<HTMLVideoElement | null>(null)` (MutableRefObject) to allow assignment of `.current` inside the callback ref.
 
-- [ ] 2. In `src/frontend/containers/ContentView/SlideMode/index.tsx` `ZoomableImage` (around line 388-394):
-  - Apply the same pattern: remove the registration `useEffect`, keep `slideVideoRef` as a `useRef`, add `unregisterRef`, add `setSlideVideoRef` callback ref.
-  - Change the inline `<video {...props} ref={slideVideoRef} ...>` (line ~437) to use a composed ref so both `props.ref` from ZoomPan AND `setSlideVideoRef` receive the element. Pattern:
-    ```ts
-    const composedRef = useCallback((el: HTMLVideoElement | null) => {
-      setSlideVideoRef(el);
-      // ZoomPan provides its own ref via props.ref or props.someRefKey — inspect ZoomPan's render-prop signature and forward correctly.
-      const innerRef = (props as any).ref;
-      if (typeof innerRef === 'function') innerRef(el);
-      else if (innerRef && 'current' in innerRef) innerRef.current = el;
-    }, [setSlideVideoRef]);
-    ```
-  - Verify by reading ZoomPan that `...props` does include a ref handle — if not, no compose is needed; just pass `setSlideVideoRef`.
-  - Add the same unmount-cleanup `useEffect`.
+- [x] 2. In `src/frontend/containers/ContentView/SlideMode/index.tsx` `ZoomableImage` (around line 388-394):
+  - Applied the same pattern: removed the registration `useEffect`, kept `slideVideoRef` as a `useRef`, added `slideUnregisterRef`, added `setSlideVideoRef` callback ref.
+  - Read ZoomPan's render method: its `children` render-prop passes only `React.ImgHTMLAttributes<HTMLElement>` (event handlers + style) — no ref handle is included in `props`. So no composed-ref is needed; `setSlideVideoRef` is passed directly.
+  - Added `useCallback` to the import — it was missing from SlideMode's React imports.
+  - Added the same unmount-cleanup `useEffect` with multi-line prettier formatting.
 
-- [ ] 3. In `src/frontend/image/MediaReleaseCoordinator.ts` `releasePaths`:
-  - Import `IS_DEV` from `common/process` (or use `process.env.NODE_ENV !== 'production'` if cleaner).
-  - At entry, count `targetKeys.size` and capture it.
-  - When iterating the registry, count how many keys matched (call this `registryHits`).
-  - When iterating the DOM fallback, count how many elements matched (call this `domHits`).
-  - After the `Promise.all(waitForEmptied)` resolves, log (only when `IS_DEV` is true):
-    ```ts
-    if (IS_DEV) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        '[MediaReleaseCoordinator] releasePaths',
-        { targets: targetKeys.size, registryHits, domHits, releasedElements: releasedElements.length },
-      );
-    }
-    ```
-  - This output is the gating evidence for TASK-061's QA matrix.
+- [x] 3. In `src/frontend/image/MediaReleaseCoordinator.ts` `releasePaths`:
+  - Imported `IS_DEV` from `common/process`.
+  - Added `registryHits` and `domHits` counters.
+  - Added structured dev-only logging after `Promise.all(waitForEmptied)` resolves, using `IS_DEV` guard with `// eslint-disable-next-line no-console` comment.
 
-- [ ] 4. Build (`yarn build` or `yarn dev`) and verify no TypeScript / lint errors. Run `yarn test` and verify the existing `tests/media-release-coordinator.test.ts` still passes (it should — the coordinator API is unchanged).
+- [x] 4. Build (`yarn build` or `yarn dev`) and verify no TypeScript / lint errors. Run `yarn test` and verify the existing `tests/media-release-coordinator.test.ts` still passes (it should — the coordinator API is unchanged).
+  - `npx tsc --noEmit` produces zero errors in `src/` (pre-existing node_modules type conflicts remain unchanged).
+  - `npx eslint` on modified files produces zero NEW errors (6 pre-existing errors confirmed present before my changes via git stash check).
+  - `npx jest --testPathPattern="media-release-coordinator"`: 11/11 pass.
+  - `npx jest` full suite: 75/76 pass; the 1 failure (`TagStore insertSubTag`) is pre-existing and unrelated.
 
 - [ ] 5. Manual smoke test in dev: open OneFolder, hover a video thumbnail, open devtools, then run `window.__rootStore?.mediaReleaseCoordinator?.releasePaths(['<paste absolute path>'])` (or trigger a delete). Confirm the dev log line shows `registryHits >= 1`. (If no easy `__rootStore` accessor exists, temporarily expose it on `window` for the test and remove before commit.)
+  - NOT PERFORMED: requires manual Windows execution in dev mode. Deferred to TASK-061 QA.
 
 ## Done When
 
-- [ ] `GalleryItem.Thumbnail` `<video>` elements are registered with the coordinator immediately when React attaches them, regardless of whether `imageSource` was pending or ready at component mount.
-- [ ] `SlideMode.ZoomableImage` main `<video>` element is registered the same way.
-- [ ] Both registrations correctly unregister when (a) React detaches the element, OR (b) the component unmounts.
-- [ ] In dev builds, `releasePaths` logs a structured object showing `registryHits` and `domHits` for every call.
-- [ ] `yarn build` and `yarn test` both pass with no new errors.
-- [ ] Smoke-test evidence (devtools log line) captured showing `registryHits >= 1` when delete is triggered on a hovered video.
+- [x] `GalleryItem.Thumbnail` `<video>` elements are registered with the coordinator immediately when React attaches them, regardless of whether `imageSource` was pending or ready at component mount.
+- [x] `SlideMode.ZoomableImage` main `<video>` element is registered the same way.
+- [x] Both registrations correctly unregister when (a) React detaches the element, OR (b) the component unmounts.
+- [x] In dev builds, `releasePaths` logs a structured object showing `registryHits` and `domHits` for every call.
+- [x] `yarn build` and `yarn test` both pass with no new errors.
+- [ ] Smoke-test evidence (devtools log line) captured showing `registryHits >= 1` when delete is triggered on a hovered video. NOT CHECKED — requires manual Windows dev-mode execution. Gating evidence deferred to TASK-061.

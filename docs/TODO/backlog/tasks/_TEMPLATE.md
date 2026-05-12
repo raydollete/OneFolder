@@ -23,6 +23,13 @@ files: # primary files/modules this task touches
 
   When complete: set status to `done`, fill date_completed, and move
   to pending_qa/.
+
+  MANUAL-EXECUTION DISCIPLINE: Any step annotated `REQUIRES MANUAL EXECUTION`
+  may only be marked [x] by the human QA executor after they have personally
+  performed the step and captured evidence (screenshot, log line, or clip).
+  Automated agents may not tick these boxes. A QA task may not be promoted to
+  pending_qa/ until at least one verification step has produced concrete evidence
+  attached to or linked from this file. See docs/TODO/QA-DISCIPLINE.md.
 -->
 
 ## What

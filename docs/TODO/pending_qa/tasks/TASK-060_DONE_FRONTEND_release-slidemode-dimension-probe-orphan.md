@@ -2,14 +2,16 @@
 id: TASK-060
 title: 'Tear down SlideMode dimension-probe orphan <video> after metadata read'
 investigation: INV-014
-status: planned
+status: done
 priority: high
 blocked_by: []
 date_created: 2026-05-04
-date_completed:
+date_completed: 2026-05-12
 files:
   - src/frontend/containers/ContentView/SlideMode/index.tsx
 ---
+
+> Adheres to [QA-DISCIPLINE](../../QA-DISCIPLINE.md) — planned as part of the INV-014 batch that introduced the manual-execution discipline.
 
 ## What
 
@@ -42,7 +44,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
 
 ## Implementation Steps
 
-- [ ] 1. Locate the `usePromise` body in `src/frontend/containers/ContentView/SlideMode/index.tsx`
+- [x] 1. Locate the `usePromise` body in `src/frontend/containers/ContentView/SlideMode/index.tsx`
       that resolves the video dimensions. Currently at approximately:
   ```ts
   const image = usePromise(
@@ -63,7 +65,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
       ...
   ```
 
-- [ ] 2. The `usePromise` body cannot easily access `mediaReleaseCoordinator` (it's a
+- [x] 2. The `usePromise` body cannot easily access `mediaReleaseCoordinator` (it's a
       pure async function passed to `usePromise`, and `usePromise` does not give us a
       way to inject store dependencies). Two options:
   - **Option A (preferred — minimal refactor):** capture `mediaReleaseCoordinator` from
@@ -83,7 +85,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
   - Pick Option A unless the team prefers Option B; document the choice in a code
     comment referencing INV-014.
 
-- [ ] 3. Inside the video branch of the `usePromise` body, after creating
+- [x] 3. Inside the video branch of the `usePromise` body, after creating
       `img = document.createElement('video')` and before assigning `.src`:
   ```ts
   const unregisterProbe = coordinatorRef.current.register(src, img);
@@ -91,7 +93,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
       (Use `src`, the absolute path, as the registry key — this is the same value
       `encodeFilePath` will be called with for the `.src` attribute.)
 
-- [ ] 4. In both `onloadedmetadata` and `onerror` handlers, BEFORE calling `resolve(...)`,
+- [x] 4. In both `onloadedmetadata` and `onerror` handlers, BEFORE calling `resolve(...)`,
       add explicit teardown:
   ```ts
   img.onloadedmetadata = function (this: any) {
@@ -118,13 +120,13 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
       element never started playing (it's a defensive belt — `pause` on a metadata-only
       element is usually a no-op).
 
-- [ ] 5. Sanity check: confirm the dimensions are still correctly read by
+- [x] 5. Sanity check: confirm the dimensions are still correctly read by
       `onloadedmetadata`. The `videoWidth`/`videoHeight` properties are sampled BEFORE
       teardown, so they remain valid in the `resolve` payload. If for any reason the
       teardown sequence interferes with reading width/height, sample them into local
       vars first, then tear down, then resolve with the sampled values.
 
-- [ ] 6. (Optional, recommended) Add a comment in the file referencing INV-014 and
+- [x] 6. (Optional, recommended) Add a comment in the file referencing INV-014 and
       explaining why the registration + teardown is required:
   ```ts
   // The probe element holds a Chromium media-pipeline handle on the file for as long as
@@ -134,17 +136,17 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
   // read so the steady-state case does not depend on GC. (INV-014 Root Cause #3)
   ```
 
-- [ ] 7. Build (`yarn build` or `yarn dev`) and verify no TypeScript / lint errors. The
+- [x] 7. Build (`yarn build` or `yarn dev`) and verify no TypeScript / lint errors. The
       existing `usePromise` typing should be unaffected because the closure body's
       shape and return type don't change.
 
 ## Done When
 
-- [ ] The dimension-probe `<video>` is registered with the coordinator on creation.
-- [ ] The element is explicitly torn down (`pause/removeAttribute/load`) and unregistered
+- [x] The dimension-probe `<video>` is registered with the coordinator on creation.
+- [x] The element is explicitly torn down (`pause/removeAttribute/load`) and unregistered
       after both `onloadedmetadata` and `onerror`.
-- [ ] Resolved dimensions still match what was read from `videoWidth`/`videoHeight`
+- [x] Resolved dimensions still match what was read from `videoWidth`/`videoHeight`
       (no regression to dimension accuracy).
-- [ ] `yarn build` passes; existing tests pass.
-- [ ] Comment in the source code explains why this teardown is required and references
+- [x] `yarn build` passes; existing tests pass (1 pre-existing unrelated TagStore failure unchanged).
+- [x] Comment in the source code explains why this teardown is required and references
       INV-014.

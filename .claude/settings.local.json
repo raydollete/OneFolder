@@ -12,7 +12,12 @@
       "Bash(yarn build *)",
       "Bash(git --no-pager diff HEAD~1..HEAD -- src/main.ts)",
       "Bash(git --no-pager diff HEAD~1..HEAD --stat)",
-      "Bash(git mv *)"
+      "Bash(git mv *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(npx eslint *)",
+      "Bash(npx jest *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

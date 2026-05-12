@@ -2,7 +2,7 @@ import { shell } from 'electron';
 import { autorun, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import SysPath from 'path';
-import React, { useEffect, useMemo, useRef, useState, RefObject } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, RefObject } from 'react';
 import { ClientFile } from 'src/frontend/entities/File';
 import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';
@@ -303,6 +303,13 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
   }: ZoomableImageProps) => {
     const { imageLoader, uiStore, mediaReleaseCoordinator } = useStore();
     const { absolutePath, width: imgWidth, height: imgHeight } = file;
+
+    // Stable ref so the usePromise async closure can always read the current
+    // coordinator without being listed in usePromise's dependency array.
+    // Option A from INV-014 Task-060: minimal-refactor capture via ref.
+    const coordinatorRef = useRef(mediaReleaseCoordinator);
+    coordinatorRef.current = mediaReleaseCoordinator;
+
     // Image src can be set asynchronously: keep track of it in a state
     // Needed for image formats not natively supported by the browser (e.g. tiff): will be converted to another format
     const source = usePromise(file, thumbnailSrc, async (file, thumbnailPath) => {
@@ -323,29 +330,64 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
             const src = source.value.ok;
             const dimension = await new Promise<{ src: string; dimension: Vec2 }>(
               (resolve, reject) => {
-                let img;
+                let img: HTMLVideoElement | HTMLImageElement;
                 if (isFileExtensionVideo(fileExtension)) {
-                  img = document.createElement('video');
-                  img.onloadedmetadata = function (this: any) {
+                  // Use a typed constant so that closures below close over a
+                  // HTMLVideoElement rather than the outer `let img` (whose type
+                  // TypeScript cannot narrow inside closures in strict mode).
+                  const probeVideo = document.createElement('video');
+                  img = probeVideo;
+
+                  // The probe element holds a Chromium media-pipeline handle on
+                  // the file for as long as it lives in the JS heap. Without
+                  // explicit teardown, V8 GC alone may not release the handle
+                  // in time for a fast delete-after-open scenario on Windows.
+                  // Register with the coordinator so a concurrent delete picks
+                  // it up; tear down explicitly after metadata read so the
+                  // steady-state case does not depend on GC. (INV-014 Root Cause #3)
+                  const unregisterProbe = coordinatorRef.current.register(src, probeVideo);
+
+                  probeVideo.onloadedmetadata = function (this: any) {
                     // Videos fire 'loadedmetadata' event, not 'onload'
-                    // Use videoWidth/videoHeight for actual video dimensions
+                    // Use videoWidth/videoHeight for actual video dimensions.
+                    // Sample dimensions into locals BEFORE teardown so the values
+                    // are captured regardless of what load() does to the element.
                     const videoWidth = this.videoWidth || imgWidth || 1920;
                     const videoHeight = this.videoHeight || imgHeight || 1080;
+                    // Release the OS handle immediately — don't wait for GC.
+                    try {
+                      probeVideo.pause();
+                    } catch (_) {
+                      /* defensive: pause throws on some Chromium builds for never-played elements */
+                    }
+                    probeVideo.removeAttribute('src');
+                    probeVideo.load();
+                    unregisterProbe();
                     resolve({
                       src,
                       dimension: createDimension(videoWidth, videoHeight),
                     });
                   };
-                  img.onerror = (error) => {
+                  probeVideo.onerror = (error) => {
                     // Fallback to stored dimensions if video metadata loading fails
                     console.warn('Video metadata loading failed, using stored dimensions:', error);
+                    // Still release the handle even on error — the element may
+                    // have opened the file before the error fired.
+                    try {
+                      probeVideo.pause();
+                    } catch (_) {
+                      /* defensive */
+                    }
+                    probeVideo.removeAttribute('src');
+                    probeVideo.load();
+                    unregisterProbe();
                     resolve({
                       src,
                       dimension: createDimension(imgWidth || 1920, imgHeight || 1080),
                     });
                   };
                   // Only load metadata, not the full video content
-                  img.preload = 'metadata';
+                  probeVideo.preload = 'metadata';
                 } else {
                   img = new Image();
                   img.onload = function (this: any) {
@@ -383,15 +425,39 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
     );
 
     // Ref for the SlideMode video element so the MediaReleaseCoordinator can
-    // release its OS handle before a trash/move op. See INV-008.
-    const slideVideoRef = useRef<HTMLVideoElement>(null);
-    useEffect(() => {
-      if (slideVideoRef.current === null || !isFileExtensionVideo(file.extension)) {
-        return;
-      }
-      const unregister = mediaReleaseCoordinator.register(file.absolutePath, slideVideoRef.current);
-      return unregister;
-    }, [slideVideoRef, file.absolutePath, file.extension, mediaReleaseCoordinator]);
+    // release its OS handle before a trash/move op. See INV-014.
+    //
+    // Same fix as GalleryItem.Thumbnail: the prior useEffect-based registration
+    // was a no-op because the <video> is conditionally rendered on
+    // image.tag === 'ready', so slideVideoRef.current was null when the effect
+    // first ran and the dep list never changed to trigger a re-run.
+    // A callback ref fires synchronously on attach/detach.
+    //
+    // ZoomPan's children render-prop passes only event handlers and style —
+    // no ref — so no composed-ref is required here.
+    const slideVideoRef = useRef<HTMLVideoElement | null>(null);
+    const slideUnregisterRef = useRef<(() => void) | null>(null);
+    const setSlideVideoRef = useCallback(
+      (el: HTMLVideoElement | null) => {
+        if (slideUnregisterRef.current) {
+          slideUnregisterRef.current();
+          slideUnregisterRef.current = null;
+        }
+        slideVideoRef.current = el;
+        if (el && isFileExtensionVideo(file.extension)) {
+          slideUnregisterRef.current = mediaReleaseCoordinator.register(file.absolutePath, el);
+        }
+      },
+      [file.absolutePath, file.extension, mediaReleaseCoordinator],
+    );
+    // Ensure unregistration on unmount regardless of React's ref-callback order.
+    useEffect(
+      () => () => {
+        slideUnregisterRef.current?.();
+        slideUnregisterRef.current = null;
+      },
+      [],
+    );
 
     if (image.tag === 'ready' && 'err' in image.value) {
       const isVideo = isFileExtensionVideo(file.extension);
@@ -434,7 +500,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
             {(props) => (
               <video
                 {...props}
-                ref={slideVideoRef}
+                ref={setSlideVideoRef}
                 src={encodeFilePath(src)}
                 width={dimension[0]}
                 height={dimension[1]}

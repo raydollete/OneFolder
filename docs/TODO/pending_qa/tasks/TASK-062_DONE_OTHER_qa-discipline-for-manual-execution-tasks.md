@@ -2,11 +2,11 @@
 id: TASK-062
 title: 'Document QA discipline: manual-execution steps may not be marked DONE without evidence'
 investigation: INV-014
-status: planned
+status: DONE
 priority: medium
 blocked_by: []
 date_created: 2026-05-04
-date_completed:
+date_completed: 2026-05-12
 files:
   - docs/TODO/backlog/tasks/_TEMPLATE.md
   - docs/TODO/backlog/investigations/_TEMPLATE.md
@@ -48,7 +48,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
 
 ## Implementation Steps
 
-- [ ] 1. Decide the canonical home for the rule. Inspect `docs/TODO/` for an existing
+- [x] 1. Decide the canonical home for the rule. Inspect `docs/TODO/` for an existing
       README or workflow doc:
   - If `docs/TODO/README.md` or `docs/TODO/WORKFLOW.md` exists, add a new section
     "QA Discipline" there.
@@ -58,7 +58,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
     `docs/TODO/backlog/investigations/_TEMPLATE.md` so the rule is visible at
     file-creation time.
 
-- [ ] 2. The text to add (adjust wording to match the project's voice; this is a
+- [x] 2. The text to add (adjust wording to match the project's voice; this is a
       starting point):
   ```markdown
   ## QA Discipline (Manual-Execution Tasks)
@@ -83,7 +83,7 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
   unverified fixes is large.
   ```
 
-- [ ] 3. Cross-reference: at the top of TASK-058, TASK-059, TASK-060, TASK-061 (i.e.,
+- [x] 3. Cross-reference: at the top of TASK-058, TASK-059, TASK-060, TASK-061 (i.e.,
       the tasks INV-014 spawns), add a brief `> Adheres to QA-DISCIPLINE` note under
       the title or in the description. (Optional but useful — it signals to future
       readers that this batch was specifically planned with the discipline in mind.)
@@ -96,8 +96,8 @@ See [INV-014](../investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-
 
 ## Done When
 
-- [ ] The QA-discipline rule is documented in a canonical location under `docs/TODO/`.
-- [ ] Both `_TEMPLATE.md` files (tasks and investigations) reference the rule so it is
+- [x] The QA-discipline rule is documented in a canonical location under `docs/TODO/`.
+- [x] Both `_TEMPLATE.md` files (tasks and investigations) reference the rule so it is
       visible at file-creation time.
-- [ ] (If step 3 is done) TASK-058, TASK-059, TASK-060, TASK-061 carry a brief
+- [x] (If step 3 is done) TASK-058, TASK-059, TASK-060, TASK-061 carry a brief
       forward-reference to the discipline doc.

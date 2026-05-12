@@ -24,6 +24,12 @@ affects: # high-level systems impacted
 
   Do NOT delete completed investigations — move them to completed/.
   They are institutional knowledge.
+
+  MANUAL-EXECUTION DISCIPLINE: This investigation may not be promoted from
+  backlog/ to pending_qa/ until its spawned QA task has been marked DONE with
+  concrete evidence (screenshot, log line, or clip) attached to or linked from
+  the QA task file. Automated agents may not tick REQUIRES MANUAL EXECUTION
+  checkboxes on behalf of the human QA executor. See docs/TODO/QA-DISCIPLINE.md.
 -->
 
 ## Bug Report

@@ -11,6 +11,8 @@ files:
   - docs/TODO/backlog/investigations/INV-014_HIGH_FRONTEND_video-delete-ebusy-recurs-fix-incomplete.md
 ---
 
+> Adheres to [QA-DISCIPLINE](../../QA-DISCIPLINE.md) — this task IS the evidence-gated QA gate that INV-014 introduced the discipline to enforce. All `REQUIRES MANUAL EXECUTION ON WINDOWS` steps may only be marked `[x]` by the human QA executor after performing the step and capturing evidence.
+
 ## What
 
 Run the full INV-008 reproduction matrix on Windows after TASK-058, TASK-059, and
