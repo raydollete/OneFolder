@@ -686,6 +686,64 @@ MainMessenger.onMessageBoxSync(dialog);
 MainMessenger.onGetPath((path) => app.getPath(path));
 
 /**
+ * Absolute path to the delete-debug log. Written next to the portable .exe
+ * (PORTABLE_EXECUTABLE_DIR), or the repo root in dev. Open this file after a
+ * failed delete to see exactly why `shell.trashItem` failed. See INV-014.
+ */
+const DELETE_DEBUG_LOG_PATH = path.join(_portableAppDir, 'delete-debug.log');
+
+/** Append a timestamped line to the delete-debug log. Best-effort; never throws. */
+function appendDeleteLog(line: string): void {
+  try {
+    fse.appendFileSync(DELETE_DEBUG_LOG_PATH, `[${new Date().toISOString()}] ${line}\n`);
+  } catch (e) {
+    console.error('[delete-debug] could not write log:', e);
+  }
+}
+
+/**
+ * Probe whether `absolutePath` is currently locked by attempting to open it.
+ *
+ * `fs.open(path, 'r+')` requires the file to be openable for writing; if any
+ * other process holds the file without FILE_SHARE_WRITE (media players, AV
+ * mid-scan, Windows Search, etc.) this fails with EBUSY/EPERM — a strong proxy
+ * for "this file is locked". If the write-probe SUCCEEDS, the file is not
+ * locked and a `shell.trashItem` failure is caused by something else entirely
+ * (Recycle Bin, permissions, path length, drive type) — which would mean the
+ * INV-008/INV-014 "renderer holds a <video> handle" premise is not the cause.
+ */
+async function probeFileLock(absolutePath: string): Promise<string> {
+  const parts: string[] = [];
+  try {
+    const st = await fse.stat(absolutePath);
+    parts.push(
+      `exists=true size=${st.size} mtime=${st.mtime.toISOString()} ` +
+        `readonly=${!(st.mode & 0o200)}`,
+    );
+  } catch (e: any) {
+    return `stat-failed code=${e?.code} msg=${JSON.stringify(e?.message)}`;
+  }
+  try {
+    const fd = await fse.open(absolutePath, 'r');
+    await fse.close(fd);
+    parts.push('read-open=OK');
+  } catch (e: any) {
+    parts.push(`read-open=FAIL code=${e?.code} errno=${e?.errno} msg=${JSON.stringify(e?.message)}`);
+  }
+  try {
+    const fd = await fse.open(absolutePath, 'r+');
+    await fse.close(fd);
+    parts.push('write-open=OK(file is NOT locked against writes)');
+  } catch (e: any) {
+    parts.push(
+      `write-open=FAIL code=${e?.code} errno=${e?.errno} ` +
+        `msg=${JSON.stringify(e?.message)}(file IS locked or read-only)`,
+    );
+  }
+  return parts.join(' ');
+}
+
+/**
  * Trash a file with a single EBUSY/EPERM retry after 150 ms.
  *
  * The renderer's MediaReleaseCoordinator releases `<video>` file handles
@@ -693,11 +751,31 @@ MainMessenger.onGetPath((path) => app.getPath(path));
  * asynchronous and can finish a few milliseconds later on slow or contended
  * systems.  A single short retry bridges that race window without masking
  * legitimate persistent failures (antivirus locks, permission errors, etc.).
+ *
+ * Every attempt is logged verbosely to `delete-debug.log` next to the portable
+ * .exe: the pre-flight lock probe, the full error object on each failure, and
+ * a re-probe between attempts. See INV-014.
  */
 async function trashWithRetry(absolutePath: string): Promise<void> {
+  appendDeleteLog(`trashItem requested: ${JSON.stringify(absolutePath)}`);
+  appendDeleteLog(`  pre-flight lock probe: ${await probeFileLock(absolutePath)}`);
+
+  const dumpError = (label: string, err: any): void => {
+    appendDeleteLog(
+      `  ${label}: code=${err?.code} errno=${err?.errno} syscall=${err?.syscall} ` +
+        `path=${JSON.stringify(err?.path)} message=${JSON.stringify(err?.message)}`,
+    );
+    if (err?.stack) {
+      appendDeleteLog(`  ${label} stack: ${err.stack}`);
+    }
+  };
+
   try {
     await shell.trashItem(absolutePath);
+    appendDeleteLog('  attempt 1: SUCCESS');
   } catch (err: any) {
+    dumpError('attempt 1 FAILED', err);
+
     const code: string | undefined = err?.code;
     const message: string = err?.message ?? '';
     const isTransientLock =
@@ -707,6 +785,7 @@ async function trashWithRetry(absolutePath: string): Promise<void> {
       message.includes('scandir');
 
     if (!isTransientLock) {
+      appendDeleteLog('  error is not a recognized transient lock — not retrying');
       throw err;
     }
 
@@ -715,19 +794,85 @@ async function trashWithRetry(absolutePath: string): Promise<void> {
         code ?? message
       }). Retrying after 150 ms…`,
     );
+    appendDeleteLog('  transient lock detected — waiting 150 ms then re-probing…');
     await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    appendDeleteLog(`  re-probe before retry: ${await probeFileLock(absolutePath)}`);
     try {
       await shell.trashItem(absolutePath);
+      appendDeleteLog('  attempt 2 (retry): SUCCESS');
       console.info(`[trashWithRetry] Retry succeeded for "${absolutePath}".`);
     } catch (retryErr) {
       // Retry also failed — surface the original error unchanged so the
       // renderer's error-handling path (RemovalAlert.tsx) sees a failure.
+      dumpError('attempt 2 (retry) FAILED', retryErr);
+      appendDeleteLog('  both attempts failed — surfacing original error to renderer');
       throw err;
     }
   }
 }
 
+/**
+ * Best-effort check: does the volume containing `absolutePath` have a usable
+ * Recycle Bin?
+ *
+ * `shell.trashItem` fails with a generic "Failed to perform delete operation"
+ * (no error code) on volumes that lack a `$Recycle.Bin` — e.g. some archive
+ * drives, network shares, and removable media. INV-014 confirmed this is the
+ * actual cause of the long-standing "can't delete" reports, NOT a held video
+ * file handle. When this returns false, the renderer routes the delete to
+ * `deleteFilePermanently` instead, after warning the user up-front.
+ *
+ * Cached per drive root — Recycle Bin availability does not change mid-session.
+ */
+const recycleBinSupportCache = new Map<string, boolean>();
+function driveSupportsRecycleBin(absolutePath: string): boolean {
+  const root = path.parse(absolutePath).root;
+  if (root === '') {
+    return true; // can't determine the volume — let shell.trashItem try
+  }
+  const cached = recycleBinSupportCache.get(root);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let supported: boolean;
+  try {
+    supported = fse.pathExistsSync(path.join(root, '$Recycle.Bin'));
+  } catch {
+    supported = true; // probe failed — don't block, let shell.trashItem try
+  }
+  recycleBinSupportCache.set(root, supported);
+  appendDeleteLog(`driveSupportsRecycleBin(${JSON.stringify(root)}) = ${supported}`);
+  return supported;
+}
+
+/**
+ * Permanently delete a file (no Recycle Bin). Used when the target volume has
+ * no Recycle Bin — the renderer has already warned the user that this is
+ * unrecoverable. Logs verbosely to `delete-debug.log`. See INV-014.
+ */
+async function deleteFilePermanently(absolutePath: string): Promise<void> {
+  appendDeleteLog(`permanent delete requested: ${JSON.stringify(absolutePath)}`);
+  appendDeleteLog(`  pre-flight lock probe: ${await probeFileLock(absolutePath)}`);
+  try {
+    await fse.remove(absolutePath);
+    appendDeleteLog('  permanent delete: SUCCESS');
+  } catch (err: any) {
+    appendDeleteLog(
+      `  permanent delete FAILED: code=${err?.code} errno=${err?.errno} ` +
+        `syscall=${err?.syscall} message=${JSON.stringify(err?.message)}`,
+    );
+    if (err?.stack) {
+      appendDeleteLog(`  permanent delete FAILED stack: ${err.stack}`);
+    }
+    throw err;
+  }
+}
+
 MainMessenger.onTrashFile((absolutePath) => trashWithRetry(absolutePath));
+
+MainMessenger.onDeleteFilePermanently((absolutePath) => deleteFilePermanently(absolutePath));
+
+MainMessenger.onCheckRecyclable((paths) => paths.filter((p) => !driveSupportsRecycleBin(p)));
 
 MainMessenger.onIsFullScreen(() => mainWindow?.isFullScreen() ?? false);
 

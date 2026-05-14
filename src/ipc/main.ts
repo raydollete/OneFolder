@@ -44,6 +44,8 @@ import {
   TOGGLE_CHECK_UPDATES_ON_STARTUP,
   TOGGLE_DEV_TOOLS,
   TRASH_FILE,
+  DELETE_FILE_PERMANENTLY,
+  CHECK_RECYCLABLE,
   WindowSystemButtonPress,
   WINDOW_BLUR,
   WINDOW_FOCUS,
@@ -105,6 +107,19 @@ export class MainMessenger {
         return e;
       }
     });
+
+  static onDeleteFilePermanently = (cb: (absolutePath: string) => Promise<void>) =>
+    ipcMain.handle(DELETE_FILE_PERMANENTLY, async (_, absolutePath) => {
+      try {
+        await cb(absolutePath);
+      } catch (e) {
+        return e;
+      }
+    });
+
+  /** Returns the subset of `paths` whose drive has no usable Recycle Bin. */
+  static onCheckRecyclable = (cb: (paths: string[]) => string[]) =>
+    ipcMain.handle(CHECK_RECYCLABLE, (_, paths) => cb(paths));
 
   static onSetFullScreen = (cb: (isFullScreen: boolean) => void) =>
     ipcMain.handle(SET_FULL_SCREEN, (_, isFullScreen) => cb(isFullScreen));

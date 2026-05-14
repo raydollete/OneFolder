@@ -124,29 +124,72 @@ export const FileRemoval = observer(() => {
 export const MoveFilesToTrashBin = observer(() => {
   const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
   const selection = uiStore.fileSelection;
+  const isOpen = uiStore.isMoveFilesToTrashOpen;
+
+  // Paths whose drive has no Recycle Bin — these will be PERMANENTLY deleted.
+  // Determined up-front (the main process checks for a `$Recycle.Bin` folder on
+  // the volume) so the confirmation dialog can warn before the user commits.
+  // INV-014 found that the long-standing "can't delete" reports were caused by
+  // `shell.trashItem` failing on Recycle-Bin-less drives — not a held <video>
+  // file handle, which is what INV-008 had assumed.
+  const [nonRecyclable, setNonRecyclable] = React.useState<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setNonRecyclable(new Set());
+      return;
+    }
+    let cancelled = false;
+    const paths = Array.from(uiStore.fileSelection, (f) => f.absolutePath);
+    RendererMessenger.checkRecyclable(paths)
+      .then((nonRecyclablePaths) => {
+        if (!cancelled) {
+          setNonRecyclable(new Set(nonRecyclablePaths));
+        }
+      })
+      .catch(() => {
+        // If the check fails, assume everything is recyclable and let
+        // shell.trashItem surface any real failure as it did before.
+        if (!cancelled) {
+          setNonRecyclable(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, uiStore]);
 
   const handleConfirm = action(async () => {
     uiStore.closeMoveFilesToTrash();
 
-    // Release any <video> handles for the selected files BEFORE calling
-    // shell.trashItem, so Windows does not return EBUSY. (INV-008)
+    // Release any <video> handles for the selected files before touching them
+    // on disk. (INV-008; kept as harmless defence-in-depth — INV-014 showed it
+    // is not what fixes the actual "can't delete" failure.)
     const paths = Array.from(selection, (f) => f.absolutePath);
     await mediaReleaseCoordinator.releasePaths(paths);
 
-    const files = [];
+    const deleted = [];
+    let permanentCount = 0;
     for (const file of selection) {
-      // File deletion used to be possible in renderer process, not in new electron version
-      // await shell.trashItem(file.absolutePath);
-      // https://github.com/electron/electron/issues/29598
-      const error = await RendererMessenger.trashFile(file.absolutePath);
+      const isPermanent = nonRecyclable.has(file.absolutePath);
+      const error = isPermanent
+        ? await RendererMessenger.deleteFilePermanently(file.absolutePath)
+        : await RendererMessenger.trashFile(file.absolutePath);
       if (!error) {
-        files.push(file);
+        deleted.push(file);
+        if (isPermanent) {
+          permanentCount++;
+        }
       } else {
-        console.warn('Could not move file to trash', file.absolutePath, error);
+        console.warn(
+          isPermanent ? 'Could not permanently delete file' : 'Could not move file to trash',
+          file.absolutePath,
+          error,
+        );
       }
     }
-    fileStore.deleteFiles(files);
-    if (files.length !== selection.size) {
+    fileStore.deleteFiles(deleted);
+    if (deleted.length !== selection.size) {
       AppToaster.show({
         message: 'Some files could not be deleted.',
         clickAction: {
@@ -155,24 +198,55 @@ export const MoveFilesToTrashBin = observer(() => {
         },
         timeout: 8000,
       });
+    } else if (permanentCount > 0) {
+      AppToaster.show({
+        message:
+          permanentCount === deleted.length
+            ? `Permanently deleted ${permanentCount} file${
+                permanentCount > 1 ? 's' : ''
+              } (no Recycle Bin on that drive).`
+            : `${permanentCount} file${
+                permanentCount > 1 ? 's' : ''
+              } permanently deleted (no Recycle Bin); the rest went to the Recycle Bin.`,
+        timeout: 6000,
+      });
     }
   });
 
   const isMulti = selection.size > 1;
+  const allPermanent = nonRecyclable.size > 0 && nonRecyclable.size >= selection.size;
+  const somePermanent = nonRecyclable.size > 0 && !allPermanent;
+
+  let information: string;
+  if (allPermanent) {
+    information = `${
+      isMulti ? 'These files are' : 'This file is'
+    } on a drive with no Recycle Bin and will be PERMANENTLY deleted. This cannot be undone. All assigned tags in OneFolder will also be lost.`;
+  } else if (somePermanent) {
+    information = `${nonRecyclable.size} of these files ${
+      nonRecyclable.size > 1 ? 'are' : 'is'
+    } on a drive with no Recycle Bin and will be PERMANENTLY deleted (this cannot be undone); the rest will be moved to your Recycle Bin. All assigned tags in OneFolder will be lost.`;
+  } else {
+    information = `You will be able to recover ${
+      isMulti ? 'them' : 'it'
+    } from your system's trash bin, but all assigned tags to ${
+      isMulti ? 'them' : 'it'
+    } in OneFolder will be lost.`;
+  }
 
   return (
     <RemovalAlert
-      open={uiStore.isMoveFilesToTrashOpen}
+      open={isOpen}
       title={`Are you sure you want to delete ${selection.size} file${isMulti ? 's' : ''}?`}
-      information={`You will be able to recover ${
-        isMulti ? 'them' : 'it'
-      } from your system's trash bin, but all assigned tags to ${
-        isMulti ? 'them' : 'it'
-      } in OneFolder will be lost.`}
+      information={information}
+      primaryButtonText={allPermanent ? 'Permanently Delete' : undefined}
       body={
         <div className="deletion-confirmation-list">
           {Array.from(selection).map((f) => (
-            <div key={f.id}>{f.absolutePath}</div>
+            <div key={f.id}>
+              {f.absolutePath}
+              {nonRecyclable.has(f.absolutePath) && ' — permanent'}
+            </div>
           ))}
         </div>
       }
@@ -214,7 +288,7 @@ const RemovalAlert = (props: IRemovalAlertProps) => (
     title={props.title}
     icon={IconSet.WARNING}
     type="danger"
-    primaryButtonText="Delete"
+    primaryButtonText={props.primaryButtonText ?? 'Delete'}
     defaultButton={DialogButton.PrimaryButton}
     onClick={(button) =>
       button === DialogButton.CloseButton ? props.onCancel() : props.onConfirm()

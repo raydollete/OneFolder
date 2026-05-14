@@ -44,6 +44,8 @@ import {
   TOGGLE_CHECK_UPDATES_ON_STARTUP,
   TOGGLE_DEV_TOOLS,
   TRASH_FILE,
+  DELETE_FILE_PERMANENTLY,
+  CHECK_RECYCLABLE,
   WindowSystemButtonPress,
   WINDOW_BLUR,
   WINDOW_FOCUS,
@@ -88,6 +90,13 @@ export class RendererMessenger {
 
   static trashFile = (absolutePath: string): Promise<Error | undefined> =>
     ipcRenderer.invoke(TRASH_FILE, absolutePath);
+
+  static deleteFilePermanently = (absolutePath: string): Promise<Error | undefined> =>
+    ipcRenderer.invoke(DELETE_FILE_PERMANENTLY, absolutePath);
+
+  /** Returns the subset of `paths` whose drive has no usable Recycle Bin. */
+  static checkRecyclable = (paths: string[]): Promise<string[]> =>
+    ipcRenderer.invoke(CHECK_RECYCLABLE, paths);
 
   static setFullScreen = (isFullScreen: boolean) =>
     ipcRenderer.invoke(SET_FULL_SCREEN, isFullScreen);
