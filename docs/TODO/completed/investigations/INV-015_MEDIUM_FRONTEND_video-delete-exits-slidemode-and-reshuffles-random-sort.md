@@ -3,7 +3,7 @@ id: INV-015
 title: 'Deleting a video from SlideMode exits to the index and re-randomizes the gallery; should auto-advance to the next file without reshuffling'
 reported_bug: 'After deleting a video from the video viewer, the user is taken back to the thumbnail index. If the sort order was random, the index re-randomizes. The video player should auto-advance to the next video if possible, remove the deleted video from the index, and not re-randomize. If the deleted video is the last one in the index, then return the user to the index — but again, preserve the existing order rather than reshuffling.'
 date: 2026-05-15
-status: active
+status: resolved
 superseded_by:
 tasks_spawned: [TASK-063, TASK-064, TASK-065]
 root_cause_category: architectural-shortcoming

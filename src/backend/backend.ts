@@ -145,6 +145,15 @@ export default class Backend implements DataStorage {
       return shuffleArray(await this.#files.toArray());
     }
 
+    if (order === 'tagCountRandom') {
+      // Shuffle first so equal-count ties are randomly ordered, then stable-sort by tag count ascending.
+      // Array.prototype.sort is stable (ES2019+), so the shuffle within each equal-count run is preserved.
+      const all = await this.#files.toArray();
+      shuffleArray(all);
+      all.sort((a, b) => a.tags.length - b.tags.length);
+      return all;
+    }
+
     const collection = this.#files.orderBy(order);
     const items = await collection.toArray();
 
@@ -190,6 +199,15 @@ export default class Backend implements DataStorage {
     if (order === 'random') {
       return shuffleArray(await collection.toArray());
     }
+
+    if (order === 'tagCountRandom') {
+      // Shuffle first so equal-count ties are randomly ordered, then stable-sort by tag count ascending.
+      const all = await collection.toArray();
+      shuffleArray(all);
+      all.sort((a, b) => a.tags.length - b.tags.length);
+      return all;
+    }
+
     // table.reverse() can be an order of magnitude slower than a javascript .reverse() call
     // (tested at ~5000 items, 500ms instead of 100ms)
     // easy to verify here https://jsfiddle.net/dfahlander/xf2zrL4p

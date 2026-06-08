@@ -559,7 +559,21 @@ class LocationStore {
     ).toCondition();
     const files = await this.backend.searchFiles(crit, 'id', OrderDirection.Asc);
     await this.backend.removeFiles(files.map((f) => f.id));
-    this.rootStore.fileStore.refetch();
+
+    // Splice the removed files out of the in-memory fileList in place rather
+    // than refetching, so the visible gallery order is preserved (no reshuffle
+    // under random sort). Resolve backend FileDTO rows to ClientFile instances
+    // via the fileStore index; files not present in fileList (e.g. already
+    // hidden as broken) are safely skipped.
+    const { fileStore } = this.rootStore;
+    const removedIds = new Set(files.map((f) => f.id));
+    const clientFilesToRemove = fileStore.fileList.filter((cf) => removedIds.has(cf.id));
+    if (clientFilesToRemove.length > 0) {
+      for (const cf of clientFilesToRemove) {
+        cf.dispose();
+      }
+      fileStore.removeFilesFromListInPlace(clientFilesToRemove);
+    }
   }
 
   /** Source is moved to where Target currently is */

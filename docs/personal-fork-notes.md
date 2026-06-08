@@ -58,6 +58,22 @@ The shipped binary is an unsigned `brave.exe` that is not actually Brave. Window
 
 If this fork is ever to be distributed more widely, this deviation must be reverted — the rename is acceptable for single-user personal use only. Packaging a binary named after another vendor's product under a different publisher's signature is a trademark issue and a malware-heuristic trigger.
 
+## FileStore mutation model: in-place splice on destructive ops, refetch on semantic changes
+
+Destructive file mutations and user-initiated re-queries have different semantics in `FileStore`, and that distinction is intentional.
+
+**In-place splice (no refetch):** `FileStore.deleteFiles` and `LocationStore.removeSublocationFiles` splice files out of `fileList` without issuing any backend re-query. The mutation primitive is `FileStore.removeFilesFromListInPlace` — model any new destructive code path on it, not on `refetch()`. Adding a `refetch()` call after a delete would re-introduce the reshuffle bug fixed in INV-015.
+
+- In-place splice callers: `FileStore.deleteFiles`, `LocationStore.removeSublocationFiles` (and any future caller that removes a known set of specific files).
+
+**Refetch (re-sample; may reshuffle under random sort):** `FileStore.fetchAllFiles`, `fetchUntaggedFiles`, `fetchFilesByQuery`, `fetchDuplicatesFiles`, `fetchMissingFiles` — invoked by content-mode switches, tag add/delete/merge, search criteria changes, location additions, sort-order or sort-direction flips, and the chokidar post-startup new-files discovery.
+
+- Random reshuffles on every refetch by design (INV-011); this is the accepted behavior for all of the semantic-change triggers listed above.
+
+The two behaviors are intentional and complementary: destructive splices preserve the user's browsing context (current SlideMode position and visible gallery order) across deletes; semantic changes re-sample the backend because the relevant file set may have genuinely changed.
+
+Cross-references: INV-011 (random as default sort; "reshuffle on every fetch by design" accepted), INV-015 (delete reshuffle bug; introduced `removeFilesFromListInPlace` and rewrote `deleteFiles` to use it).
+
 ## Reference
 
 - Investigation: [INV-005](TODO/pending_qa/investigations/INV-005_MEDIUM_ELECTRON_brave-exe-rename-for-nvidia-vsr-and-portable-only.md)

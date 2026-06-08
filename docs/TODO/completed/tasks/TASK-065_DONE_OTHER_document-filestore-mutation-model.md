@@ -2,11 +2,11 @@
 id: TASK-065
 title: 'Document FileStore mutation model: destructive splices in place, re-queries refetch'
 investigation: INV-015
-status: planned
+status: done
 priority: low
 blocked_by: [TASK-063]
 date_created: 2026-05-15
-date_completed:
+date_completed: 2026-05-15
 files:
   - docs/personal-fork-notes.md
 ---
@@ -51,12 +51,12 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
 
 ## Implementation Steps
 
-- [ ] 1. Read `docs/personal-fork-notes.md` to understand the existing
+- [x] 1. Read `docs/personal-fork-notes.md` to understand the existing
       tone and section structure. Identify where the new subsection
       best fits — likely near any existing UX/behavior notes,
       probably toward the end of the file.
 
-- [ ] 2. Add a new subsection (heading level matching neighbors).
+- [x] 2. Add a new subsection (heading level matching neighbors).
       Suggested title: "FileStore mutation model: in-place splice on
       destructive ops, refetch on semantic changes". Draft contents:
   - One paragraph stating the rule.
@@ -78,22 +78,25 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
     is `FileStore.removeFilesFromListInPlace` — model new destructive
     code paths on it, not on `refetch()`."
 
-- [ ] 3. If `docs/personal-fork-notes.md` does not exist (the
+- [x] 3. If `docs/personal-fork-notes.md` does not exist (the
       investigation referenced it as the docs site for the INV-011
       decision; verify), create the section heading and a brief
       preamble before adding the subsection. Defer to maintainer
       preference if a different docs file is more appropriate.
+      (File already existed — no creation needed.)
 
-- [ ] 4. Submit alongside TASK-063 so the docs land in the same
+- [x] 4. Submit alongside TASK-063 so the docs land in the same
       change as the code that motivates them.
+      (TASK-063 is already merged; this lands as a follow-up doc
+      commit referencing INV-015, per the task's own allowance.)
 
 ## Done When
 
-- [ ] `docs/personal-fork-notes.md` (or chosen alternative) has a
+- [x] `docs/personal-fork-notes.md` (or chosen alternative) has a
       new subsection documenting the FileStore mutation model.
-- [ ] The subsection cross-references INV-011 and INV-015 by ID.
-- [ ] The subsection names the new helper
+- [x] The subsection cross-references INV-011 and INV-015 by ID.
+- [x] The subsection names the new helper
       (`removeFilesFromListInPlace`) so a developer searching the
       docs can find it.
-- [ ] The change is committed alongside TASK-063 (or merged into
+- [x] The change is committed alongside TASK-063 (or merged into
       master in a separate doc commit referencing INV-015).

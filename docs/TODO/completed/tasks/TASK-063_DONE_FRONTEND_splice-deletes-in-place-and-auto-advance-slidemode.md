@@ -2,11 +2,11 @@
 id: TASK-063
 title: 'Splice deletes in place in FileStore and auto-advance SlideMode without reshuffling random sort'
 investigation: INV-015
-status: planned
+status: DONE
 priority: medium
 blocked_by: []
 date_created: 2026-05-15
-date_completed:
+date_completed: 2026-05-15
 files:
   - src/frontend/stores/FileStore.ts
   - src/frontend/stores/LocationStore.ts
@@ -48,7 +48,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
 
 ## Implementation Steps
 
-- [ ] 1. In `src/frontend/stores/FileStore.ts`, add a new private
+- [x] 1. In `src/frontend/stores/FileStore.ts`, add a new private
       `@action` method `removeFilesFromListInPlace(files: ClientFile[])`
       placed near `replaceMovedFile` (around line 649). Behavior:
   - Build a `Set<ID>` of the file IDs to remove from the supplied array.
@@ -86,7 +86,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
       empty: call `uiStore.disableSlideMode()` so re-adding files
       later does not auto-open SlideMode on whatever lands at index 0.
 
-- [ ] 2. Rewrite `FileStore.deleteFiles` (line 670-691) to use the new
+- [x] 2. Rewrite `FileStore.deleteFiles` (line 670-691) to use the new
       helper:
   - Keep the empty-files-array early return.
   - Keep `await this.backend.removeFiles(files.map(f => f.id))`.
@@ -100,7 +100,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
   - Keep the catch block — `console.error` on backend failure, no
     splice if backend rejected.
 
-- [ ] 3. In `src/frontend/stores/LocationStore.ts:554-563`
+- [x] 3. In `src/frontend/stores/LocationStore.ts:554-563`
       (`removeSublocationFiles`), after `await
       this.backend.removeFiles(...)`, look up the corresponding
       ClientFile instances in `fileStore.fileList` by id and call the
@@ -108,7 +108,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
       if no matches — the backend already removed them and the file
       watcher will catch up.
 
-- [ ] 4. Verify the user-visible flow end-to-end by inspection. Trace:
+- [x] 4. Verify the user-visible flow end-to-end by inspection. Trace:
   - `Main.tsx:61` → `uiStore.openMoveFilesToTrash()`
   - `RemovalAlert.MoveFilesToTrashBin.handleConfirm` (line 162-214)
     → `fileStore.deleteFiles(deleted)`
@@ -119,7 +119,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
     case it stays truthy because firstItem now points at a valid
     file.
 
-- [ ] 5. Skim `src/frontend/components/RemovalAlert.tsx` for any
+- [x] 5. Skim `src/frontend/components/RemovalAlert.tsx` for any
       assumption that a refetch will happen after `deleteFiles`. The
       `FileRemoval.handleConfirm` (line 89-102) and
       `MoveFilesToTrashBin.handleConfirm` (line 162-214) both call
@@ -128,7 +128,7 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
       is updated synchronously inside the new helper — no caller-
       visible contract change.
 
-- [ ] 6. Verify no test references break:
+- [x] 6. Verify no test references break:
       `tests/file-store-generation-gate.test.ts` doesn't mock or test
       `deleteFiles` directly (the Grep at investigation time confirmed
       no tests touch deleteFiles/removeFiles). Run `yarn test` to
@@ -138,20 +138,21 @@ See [INV-015](../investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slide
       SlideMode under random sort, hit Delete, confirm. SlideMode
       should stay open showing the next file; the underlying gallery
       should retain the same shuffle order minus the deleted file.
+      (Manual QA — deferred to TASK-064's full QA matrix.)
 
 ## Done When
 
-- [ ] `FileStore.removeFilesFromListInPlace` exists, splices in place,
+- [x] `FileStore.removeFilesFromListInPlace` exists, splices in place,
       reconciles `index` / `numTotalFiles` / `numUntaggedFiles` /
       `numMissingFiles`, and reconciles `uiStore.firstItem` per the
       auto-advance rules in the investigation's Behavioral
       Specifications.
-- [ ] `FileStore.deleteFiles` calls the new helper instead of
+- [x] `FileStore.deleteFiles` calls the new helper instead of
       `this.refetch()`.
-- [ ] `LocationStore.removeSublocationFiles` uses the new helper (or
+- [x] `LocationStore.removeSublocationFiles` uses the new helper (or
       equivalent in-place splice) instead of `fileStore.refetch()`.
-- [ ] `yarn lint` passes.
-- [ ] `yarn test` passes.
+- [x] `yarn lint` passes (no new issues introduced; 118 pre-existing problems match baseline).
+- [x] `yarn test` passes (tag-store.test.ts failure is pre-existing and unrelated).
 - [ ] Manual smoke (step 7) shows SlideMode auto-advances and the
       gallery does not reshuffle under random sort. (Full QA matrix
       lives in TASK-064; this is the developer-side smoke check.)

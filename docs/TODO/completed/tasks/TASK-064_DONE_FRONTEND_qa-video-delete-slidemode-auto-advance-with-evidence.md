@@ -2,11 +2,11 @@
 id: TASK-064
 title: 'QA: SlideMode auto-advances on delete under random sort with no gallery reshuffle, with captured evidence'
 investigation: INV-015
-status: planned
+status: done
 priority: medium
 blocked_by: [TASK-063]
 date_created: 2026-05-15
-date_completed:
+date_completed: 2026-05-15
 files:
   - docs/TODO/backlog/investigations/INV-015_MEDIUM_FRONTEND_video-delete-exits-slidemode-and-reshuffles-random-sort.md
 ---

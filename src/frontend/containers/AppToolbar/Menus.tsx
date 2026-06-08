@@ -74,6 +74,7 @@ const sortMenuData: Array<{
   { prop: 'dateModified', icon: IconSet.FILTER_DATE, text: 'Date modified' },
   { prop: 'dateCreated', icon: IconSet.FILTER_DATE, text: 'Date created' },
   { prop: 'random', icon: IconSet.RELOAD_COMPACT, text: 'Random', hideDirection: true },
+  { prop: 'tagCountRandom', icon: IconSet.TAG, text: 'Qty Random', hideDirection: true },
 ];
 
 export const SortMenuItems = observer(() => {
@@ -90,7 +91,9 @@ export const SortMenuItems = observer(() => {
           text={text}
           checked={orderBy === prop}
           accelerator={orderBy === prop && !hideDirection ? orderIcon : undefined}
-          onClick={() => (orderBy === prop ? switchOrderDirection() : orderFilesBy(prop))}
+          onClick={() =>
+            orderBy === prop && !hideDirection ? switchOrderDirection() : orderFilesBy(prop)
+          }
         />
       ))}
     </MenuRadioGroup>

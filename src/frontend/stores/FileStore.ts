@@ -666,6 +666,129 @@ class FileStore {
     }
   }
 
+  /**
+   * Splices the given files out of `fileList` in place, updates all derived
+   * state, and reconciles `uiStore.firstItem` so SlideMode auto-advances to
+   * the next surviving file (or the previous one if the deleted file was at
+   * the tail). Never re-queries the backend — the in-memory fileList is the
+   * source of truth for the current visible order.
+   *
+   * This is the destructive analogue of `replaceMovedFile`. Any code that
+   * removes files from the visible list without changing the content mode
+   * should call this instead of `refetch()`.
+   *
+   * Cross-store write: this method writes `uiStore.firstItem`, which is
+   * idiomatic for this project (see `cleanFileSelection` reaching into
+   * `uiStore.fileSelection`).
+   */
+  @action removeFilesFromListInPlace(files: ClientFile[]): void {
+    if (files.length === 0) {
+      return;
+    }
+
+    const ids = new Set<ID>(files.map((f) => f.id));
+    const { uiStore } = this.rootStore;
+
+    // Snapshot the currently-viewed file AND the old fileList order BEFORE
+    // mutating fileList — both are needed for the auto-advance calculation.
+    const oldFirstItem = uiStore.firstItem;
+    // oldFileList is a shallow copy used for forward/backward scanning after the splice.
+    // oldFirstItemId is the ID of the file the user was viewing (undefined if
+    // firstItem was out of range, which shouldn't happen in practice).
+    const oldFileList = this.fileList.slice();
+    const oldFirstItemId: ID | undefined =
+      oldFirstItem < oldFileList.length ? oldFileList[oldFirstItem].id : undefined;
+
+    // Splice: for small batches use per-item remove (O(n*k)); for larger
+    // batches use a bulk replace to avoid quadratic blowup.
+    let actualRemovals = 0;
+    if (ids.size > 50) {
+      const survivors = this.fileList.filter((f) => !ids.has(f.id));
+      actualRemovals = this.fileList.length - survivors.length;
+      this.fileList.replace(survivors);
+    } else {
+      for (let i = this.fileList.length - 1; i >= 0; i--) {
+        const f = this.fileList[i];
+        if (ids.has(f.id)) {
+          this.fileList.remove(f);
+          actualRemovals++;
+        }
+      }
+    }
+
+    // Rebuild index, numUntaggedFiles, numMissingFiles from the new fileList.
+    // updateFileListState() is the canonical writer of numUntaggedFiles, so we
+    // must call it rather than manually decrement to avoid invariant drift.
+    this.updateFileListState();
+
+    // Decrement the DB-total counter by the number of entries that were actually
+    // present in fileList (the caller may pass files that were already hidden as
+    // broken; only count entries that were genuinely spliced out).
+    this.numTotalFiles = Math.max(0, this.numTotalFiles - actualRemovals);
+
+    // Signal that the list has changed so downstream effects re-trigger
+    // (Preview window fade-in, MasonryRenderer scroll restore, etc.).
+    this.fileListLastModified = new Date();
+
+    // Drop any selection entries that referenced the now-removed files.
+    // `updateFileListState()` rebuilt `index`, so cleanFileSelection() can
+    // use `index.has(file.id)` to determine what is still present.
+    this.cleanFileSelection();
+
+    // Reconcile uiStore.firstItem for SlideMode auto-advance.
+    if (this.fileList.length === 0) {
+      // List is now empty — leave firstItem at 0 (LayoutSwitcher gate will
+      // unmount SlideMode via firstFileInView returning undefined), and
+      // explicitly disable SlideMode so re-adding files later does not
+      // auto-open the viewer.
+      uiStore.firstItem = 0;
+      if (uiStore.isSlideMode) {
+        uiStore.disableSlideMode();
+      }
+    } else if (oldFirstItemId !== undefined && ids.has(oldFirstItemId)) {
+      // The currently-viewed file was deleted. Scan the old list forward from
+      // oldFirstItem + 1 for the first surviving file, then scan backward from
+      // oldFirstItem - 1 if no forward survivor is found.
+      let targetFile: ClientFile | undefined;
+
+      // Forward scan (prefer the file that was directly "after" the deleted one).
+      for (let i = oldFirstItem + 1; i < oldFileList.length; i++) {
+        if (!ids.has(oldFileList[i].id)) {
+          targetFile = oldFileList[i];
+          break;
+        }
+      }
+
+      // Backward scan fallback (deleted file was at the tail or all forward
+      // neighbors were also deleted).
+      if (targetFile === undefined) {
+        for (let i = oldFirstItem - 1; i >= 0; i--) {
+          if (!ids.has(oldFileList[i].id)) {
+            targetFile = oldFileList[i];
+            break;
+          }
+        }
+      }
+
+      if (targetFile !== undefined) {
+        // Look up its new index in the rebuilt index map.
+        const newIndex = this.index.get(targetFile.id);
+        uiStore.firstItem = newIndex !== undefined ? newIndex : 0;
+      } else {
+        // No survivors found at all (shouldn't reach here because fileList.length
+        // > 0 guards this branch, but be defensive).
+        uiStore.firstItem = 0;
+      }
+    } else if (oldFirstItemId !== undefined) {
+      // The currently-viewed file survived. Update firstItem to its NEW index
+      // (the splice may have shifted it left).
+      const newIndex = this.index.get(oldFirstItemId);
+      if (newIndex !== undefined) {
+        uiStore.firstItem = newIndex;
+      }
+    }
+  }
+
   /** Removes a file from the internal state of this store and the DB. Does not remove from disk. */
   @action async deleteFiles(files: ClientFile[]): Promise<void> {
     if (files.length === 0) {
@@ -673,18 +796,23 @@ class FileStore {
     }
 
     try {
-      // Remove from backend
-      // Deleting non-exiting keys should not throw an error!
+      // Remove from backend.
+      // Deleting non-existing keys should not throw an error!
       await this.backend.removeFiles(files.map((f) => f.id));
 
-      // Remove files from stores
+      // Dispose ClientFile instances and remove their thumbnails.
+      // deselectFile is intentionally omitted here: removeFilesFromListInPlace
+      // calls cleanFileSelection() which performs the same cleanup in bulk.
       for (const file of files) {
         file.dispose();
-        this.rootStore.uiStore.deselectFile(file);
         this.removeThumbnail(file.absolutePath);
       }
-      this.fileListLastModified = new Date();
-      return this.refetch();
+
+      // Splice deleted entries out of fileList in place, update all derived
+      // state (index, counts, fileListLastModified), clean the selection, and
+      // reconcile uiStore.firstItem for SlideMode auto-advance. No refetch —
+      // the in-memory fileList is the source of truth for the visible order.
+      this.removeFilesFromListInPlace(files);
     } catch (err) {
       console.error('Could not remove files', err);
     }

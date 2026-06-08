@@ -470,6 +470,14 @@ export default class SQLiteBackend implements DataStorage {
       return rows.map(fileRowToDTO);
     }
 
+    if (order === 'tagCountRandom') {
+      // COUNT(ft.tagId) yields 0 for untagged files (LEFT JOIN produces NULL tagId; COUNT ignores NULLs)
+      const rows = this.#db
+        .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY COUNT(ft.tagId) ASC, RANDOM()`)
+        .all() as FileRow[];
+      return rows.map(fileRowToDTO);
+    }
+
     const direction = fileOrder === OrderDirection.Desc ? 'DESC' : 'ASC';
     const rows = this.#db
       .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY f.${order} ${direction}`)
@@ -529,7 +537,10 @@ export default class SQLiteBackend implements DataStorage {
     const allParams = clauses.flatMap((c) => c.params);
 
     let sql: string;
-    if (order === 'random') {
+    if (order === 'tagCountRandom') {
+      // COUNT(ft.tagId) yields 0 for untagged files; RANDOM() tie-breaks within equal-count buckets
+      sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY COUNT(ft.tagId) ASC, RANDOM()`;
+    } else if (order === 'random') {
       sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY RANDOM()`;
     } else {
       const direction = fileOrder === OrderDirection.Desc ? 'DESC' : 'ASC';
