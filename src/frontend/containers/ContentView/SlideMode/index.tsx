@@ -8,6 +8,7 @@ import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';
 import { usePromise } from 'src/frontend/hooks/usePromise';
 import { encodeFilePath, isFileExtensionVideo } from 'common/fs';
+import { attachVideoFreezeRecovery } from 'src/frontend/image/videoFreezeRecovery';
 import { Button, IconSet, Split } from 'widgets';
 import { UpscaleMode } from '../../../stores/UiStore';
 import Inspector from '../../Inspector';
@@ -437,24 +438,36 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
     // no ref — so no composed-ref is required here.
     const slideVideoRef = useRef<HTMLVideoElement | null>(null);
     const slideUnregisterRef = useRef<(() => void) | null>(null);
+    // Cleanup for the freeze-recovery watchdog (solution #2): detects a stuck
+    // <video> and self-heals it in place instead of requiring the user to switch
+    // videos and back. See src/frontend/image/videoFreezeRecovery.ts.
+    const freezeRecoveryCleanupRef = useRef<(() => void) | null>(null);
     const setSlideVideoRef = useCallback(
       (el: HTMLVideoElement | null) => {
         if (slideUnregisterRef.current) {
           slideUnregisterRef.current();
           slideUnregisterRef.current = null;
         }
+        if (freezeRecoveryCleanupRef.current) {
+          freezeRecoveryCleanupRef.current();
+          freezeRecoveryCleanupRef.current = null;
+        }
         slideVideoRef.current = el;
         if (el && isFileExtensionVideo(file.extension)) {
           slideUnregisterRef.current = mediaReleaseCoordinator.register(file.absolutePath, el);
+          freezeRecoveryCleanupRef.current = attachVideoFreezeRecovery(el);
         }
       },
       [file.absolutePath, file.extension, mediaReleaseCoordinator],
     );
-    // Ensure unregistration on unmount regardless of React's ref-callback order.
+    // Ensure unregistration + watchdog teardown on unmount regardless of React's
+    // ref-callback order.
     useEffect(
       () => () => {
         slideUnregisterRef.current?.();
         slideUnregisterRef.current = null;
+        freezeRecoveryCleanupRef.current?.();
+        freezeRecoveryCleanupRef.current = null;
       },
       [],
     );
