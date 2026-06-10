@@ -1020,9 +1020,10 @@ class UiStore {
         }
         this.setIsOutlinerOpen(prefs.isOutlinerOpen);
         this.isInspectorOpen = Boolean(prefs.isInspectorOpen);
-        if (prefs.thumbnailDirectory) {
-          this.setThumbnailDirectory(prefs.thumbnailDirectory);
-        }
+        // NOTE: thumbnailDirectory is intentionally NOT restored from prefs.
+        // It is always re-derived from the current executable location below
+        // (portable-only fork) so a stale absolute path from a previous
+        // drive letter / folder location can never take effect.
         if (prefs.importDirectory) {
           this.setImportDirectory(prefs.importDirectory);
         }
@@ -1095,16 +1096,21 @@ class UiStore {
     // See INV-011 Defect A.
     RendererMessenger.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
 
-    // Set default thumbnail directory in case none was specified.
-    // Pass the library ID so each library gets its own thumbnail subdirectory.
-    if (this.thumbnailDirectory.length === 0) {
-      RendererMessenger.getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined).then(
-        (defaultThumbDir) => {
-          this.setThumbnailDirectory(defaultThumbDir);
-          fse.ensureDirSync(this.thumbnailDirectory);
-        },
-      );
-    }
+    // Always re-derive the thumbnail directory from the current executable
+    // location on launch. This fork is portable-only, so the directory lives
+    // inside the app's data dir and travels with it. The path is persisted as
+    // an absolute string, so after the portable folder moves — a new drive
+    // letter, a USB remount, a relocated folder — any restored value points at
+    // a root that no longer exists and every thumbnail read/write targets an
+    // invalid location. Re-deriving here (overriding any stale persisted value)
+    // keeps thumbnails relative to the executable. Pass the library ID so each
+    // library gets its own thumbnail subdirectory.
+    RendererMessenger.getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined).then(
+      (defaultThumbDir) => {
+        this.setThumbnailDirectory(defaultThumbDir);
+        fse.ensureDirSync(this.thumbnailDirectory);
+      },
+    );
   }
 
   getPersistentPreferences(): Partial<Record<keyof UiStore, unknown>> {
