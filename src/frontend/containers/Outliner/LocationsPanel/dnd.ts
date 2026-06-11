@@ -1,3 +1,4 @@
+import { webUtils } from 'electron';
 import fse from 'fs-extra';
 import { action } from 'mobx';
 import path from 'path';
@@ -14,12 +15,26 @@ import FileStore from '../../../stores/FileStore';
 
 const ALLOWED_FILE_DROP_TYPES = IMG_EXTENSIONS.map((ext) => `image/${ext}`);
 
+/**
+ * A dropped OS file together with its resolved filesystem path.
+ *
+ * Electron 32 removed the non-standard `File.path` property; the path must now
+ * be resolved via `webUtils.getPathForFile()` while the original DataTransfer
+ * `File` is still available. We resolve it once at drop time (in getDropData)
+ * and carry it alongside the File from then on. `path` is the empty string for
+ * non-filesystem files (e.g. an image dragged out of a browser).
+ */
+export interface DroppedFile {
+  file: File;
+  path: string;
+}
+
 export const isAcceptableType = (e: React.DragEvent) =>
   e.dataTransfer.types.some((type) => ALLOWED_DROP_TYPES.includes(type));
 
 /** Returns the IDs of the files that match those in OneFolder given dropData. Returns false if one or files has no matches */
 export const findDroppedFileMatches = action(
-  (dropData: (File | string)[], fs: FileStore): ClientFile[] | false => {
+  (dropData: (DroppedFile | string)[], fs: FileStore): ClientFile[] | false => {
     const matches = dropData.map(
       (file) =>
         typeof file !== 'string' &&
@@ -60,16 +75,16 @@ export function handleDragLeave(event: React.DragEvent<HTMLDivElement>) {
   }
 }
 
-export async function storeDroppedImage(dropData: (string | File)[], directory: string) {
+export async function storeDroppedImage(dropData: (string | DroppedFile)[], directory: string) {
   for (const dataItem of dropData) {
     let fileData: StoreFileMessage | undefined;
 
     // Store file -> detected by watching the directory -> automatically imported
-    if (dataItem instanceof File) {
-      const buffer = dataItem.path ? await fse.readFile(dataItem.path) : dataItem;
+    if (typeof dataItem !== 'string') {
+      const buffer = dataItem.path ? await fse.readFile(dataItem.path) : dataItem.file;
       fileData = {
         directory,
-        filenameWithExt: path.basename(dataItem.path),
+        filenameWithExt: path.basename(dataItem.path) || dataItem.file.name,
         imgBase64: buffer.toString('base64'),
       };
     } else if (typeof dataItem === 'string') {
@@ -132,9 +147,9 @@ function getFilenameFromUrl(url: string, fallback: string) {
   return index !== -1 ? pathname.substring(index + 1) : pathname;
 }
 
-export async function getDropData(e: React.DragEvent): Promise<Array<File | string>> {
+export async function getDropData(e: React.DragEvent): Promise<Array<DroppedFile | string>> {
   // Using a set to filter out duplicates. For some reason, dropping URLs duplicates them 3 times (for me)
-  const dropItems = new Set<File | string>();
+  const dropItems = new Set<DroppedFile | string>();
 
   // First get all files in the drop event
   if (e.dataTransfer.files.length > 0) {
@@ -143,7 +158,9 @@ export async function getDropData(e: React.DragEvent): Promise<Array<File | stri
       const file = e.dataTransfer.files[i];
       // Check if file is an image
       if (ALLOWED_FILE_DROP_TYPES.includes(file.type)) {
-        dropItems.add(file);
+        // Resolve the filesystem path NOW, while the DataTransfer File is live —
+        // File.path no longer exists (removed in Electron 32).
+        dropItems.add({ file, path: webUtils.getPathForFile(file) });
       }
     }
   }
@@ -169,7 +186,7 @@ export async function getDropData(e: React.DragEvent): Promise<Array<File | stri
   // Filter out URLs that are not an image
   const imageChecks = await Promise.all(
     imageItems.map(async (item) => {
-      if (item instanceof File) {
+      if (typeof item !== 'string') {
         return true;
         // Check if the URL has an image extension, or perform a network request
       } else if (IMG_EXTENSIONS.some((ext) => item.toLowerCase().includes(`.${ext}`))) {

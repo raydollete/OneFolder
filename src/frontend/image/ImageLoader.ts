@@ -67,11 +67,18 @@ class ImageLoader {
   }
 
   async init(): Promise<void> {
+    // Log each decoder's init so a hang here is attributable to a specific
+    // loader from the packaged app's console output (see Electron 41 upgrade).
+    const probe = async (name: string, p: Promise<unknown>): Promise<void> => {
+      console.info(`ImageLoader: ${name} init...`);
+      await p;
+      console.info(`ImageLoader: ${name} init done`);
+    };
     await Promise.all([
-      this.tifLoader.init(),
-      this.exrLoader.init(),
-      this.psdLoader.init(),
-      this.heicLoader.init(),
+      probe('tif', this.tifLoader.init()),
+      probe('exr', this.exrLoader.init()),
+      probe('psd', this.psdLoader.init()),
+      probe('heic', this.heicLoader.init()),
     ]);
   }
 

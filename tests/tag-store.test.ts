@@ -9,7 +9,13 @@ describe('TagStore', () => {
     it(name, async () => {
       const db = dbInit(`Test_${TEST_DATABASE_ID_COUNTER++}`);
       const backend = await Backend.init(db, () => {});
-      const store = new TagStore(backend, {} as any);
+      // Tag hierarchy changes (e.g. insertSubTag) schedule a deferred
+      // fileStore.updateMetadataForTag via setTimeout — provide a no-op
+      // fileStore so that timer does not crash against an empty root store.
+      const mockRootStore = {
+        fileStore: { updateMetadataForTag: async () => {} },
+      };
+      const store = new TagStore(backend, mockRootStore as any);
       await store.init();
       await test(store);
       // FIXME: That is kind of our fault for automatically making backend calls in MobX reactions.

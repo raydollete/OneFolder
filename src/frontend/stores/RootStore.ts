@@ -57,6 +57,9 @@ class RootStore {
     this.locationStore = new LocationStore(backend, this, prefix);
     this.uiStore = new UiStore(this, prefix);
     this.searchStore = new SearchStore(backend, this);
+    // Cross-store reactions must be wired only after every store above exists;
+    // see FileStore.watchUiPreferences for why this cannot live in its constructor.
+    this.fileStore.watchUiPreferences();
     this.#backend = backend;
     this.#backup = backup;
     // Namespace the hierarchical separator key so each library can have its own

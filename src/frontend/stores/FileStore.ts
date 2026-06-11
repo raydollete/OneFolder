@@ -113,7 +113,20 @@ class FileStore {
 
     this.debouncedRefetch = debounce(this.refetch, 200).bind(this);
     this.debouncedSaveFilesToSave = debounce(this.saveFilesToSave, 100).bind(this);
+  }
 
+  /**
+   * Wire up reactions that read OTHER stores on the root store.
+   *
+   * Must be called by RootStore after ALL stores are constructed — not from
+   * this constructor: FileStore is built before UiStore, so a constructor
+   * reaction's immediate first evaluation would throw on the undefined
+   * uiStore. Because `rootStore.uiStore` is a plain (non-observable) field,
+   * MobX would never re-evaluate after the throw, silently disabling the
+   * reaction for the whole session. (This was a real bug: the hide-missing-
+   * files toggle did not refetch from the moment INV-004 shipped.)
+   */
+  watchUiPreferences(): void {
     // When the "hide missing files" preference toggles, re-run the current fetch so
     // the gallery immediately reflects the new setting without requiring a restart.
     reaction(

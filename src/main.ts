@@ -7,7 +7,6 @@ import {
   nativeImage,
   nativeTheme,
   screen,
-  session,
   shell,
   Rectangle,
 } from 'electron';
@@ -57,6 +56,18 @@ if (IS_PORTABLE_MODE) {
 // Inform the common/process module so other main-process code can read IS_PORTABLE.
 setPortableMode(IS_PORTABLE_MODE);
 
+// Enable SharedArrayBuffer WITHOUT cross-origin isolation.
+//
+// The masonry layout WASM uses shared memory (`shared:true` in
+// wasm/packages/masonry — its WebAssembly.Memory is posted to a worker), which
+// normally requires crossOriginIsolated, i.e. COOP/COEP response headers. But
+// under Chromium ~144, COEP: require-corp on the opaque file:// origin blocks
+// the webpack-bundled psd/heic worker scripts (no CORP header on file://
+// responses), hanging startup at the splash screen. This feature flag grants
+// SAB without the COOP/COEP headers, satisfying both: workers load normally
+// and masonry's shared memory keeps working. See the Electron 41 upgrade notes.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
+
 const basePath = app.getPath('userData');
 
 const preferencesFilePath = path.join(basePath, 'preferences.json');
@@ -97,19 +108,13 @@ let mainWindow: BrowserWindow | null = null;
 let previewWindow: BrowserWindow | null = null;
 
 function initialize() {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    if (details.responseHeaders === undefined) {
-      callback({});
-    } else {
-      callback({
-        responseHeaders: {
-          ...details.responseHeaders,
-          'Cross-Origin-Opener-Policy': ['same-origin'],
-          'Cross-Origin-Embedder-Policy': ['require-corp'],
-        },
-      });
-    }
-  });
+  // NOTE: a COOP/COEP header injection (added in the Electron 15 era, commit
+  // f29339ff) used to live here. It was removed during the Electron 41 upgrade:
+  // under Chromium ~144, COEP: require-corp on the opaque file:// origin blocks
+  // the webpack-bundled Web Worker scripts (psdReader/heicReader) from loading,
+  // which silently hangs ImageLoader.init() and leaves the app stuck on the
+  // splash screen. Nothing in the codebase uses SharedArrayBuffer or
+  // crossOriginIsolated, so cross-origin isolation is not needed.
 
   createWindow();
   createPreviewWindow();
@@ -278,7 +283,13 @@ function createWindow() {
       {
         label: 'Refresh',
         accelerator: 'F5',
-        click: (_, win) => win?.webContents.reload(),
+        // Menu click handlers receive a BaseWindow since Electron's BaseWindow
+        // split; narrow to BrowserWindow before touching webContents.
+        click: (_, win) => {
+          if (win instanceof BrowserWindow) {
+            win.webContents.reload();
+          }
+        },
       },
       { role: 'toggleDevTools' },
       { type: 'separator' },
@@ -286,7 +297,7 @@ function createWindow() {
         label: 'Actual Size',
         accelerator: 'CommandOrControl+0',
         click: (_, browserWindow) => {
-          if (browserWindow) {
+          if (browserWindow instanceof BrowserWindow) {
             browserWindow.webContents.zoomFactor = 1;
           }
         },
@@ -296,7 +307,7 @@ function createWindow() {
         // TODO: Fix by using custom solution...
         accelerator: 'CommandOrControl+=',
         click: (_, browserWindow) => {
-          if (browserWindow !== undefined) {
+          if (browserWindow instanceof BrowserWindow) {
             browserWindow.webContents.setZoomFactor(
               Math.min(browserWindow.webContents.zoomFactor + 0.1, MAX_ZOOM_FACTOR),
             );
@@ -307,7 +318,7 @@ function createWindow() {
         label: 'Zoom Out',
         accelerator: 'CommandOrControl+-',
         click: (_, browserWindow) => {
-          if (browserWindow !== undefined) {
+          if (browserWindow instanceof BrowserWindow) {
             browserWindow.webContents.setZoomFactor(
               Math.max(browserWindow.webContents.zoomFactor - 0.1, MIN_ZOOM_FACTOR),
             );
