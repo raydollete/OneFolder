@@ -63,6 +63,11 @@ import {
   DELETE_LIBRARY_AND_FILES,
   LibraryDiskPaths,
   DeleteLibraryAndFilesResult,
+  START_REENCODE,
+  REENCODE_PROGRESS,
+  CANCEL_REENCODE,
+  ReencodeProgressMessage,
+  ReencodeResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -232,4 +237,22 @@ export class MainMessenger {
 
   static onDeleteLibraryAndFiles = (cb: (id: string) => Promise<DeleteLibraryAndFilesResult>) =>
     ipcMain.handle(DELETE_LIBRARY_AND_FILES, (_, id: string) => cb(id));
+
+  // Re-encode (x264) job channels ------------------------------------------------
+
+  /**
+   * Register a handler for START_REENCODE invoke calls.
+   * The callback receives the originating WebContents so the handler can push
+   * REENCODE_PROGRESS events back to exactly that window.
+   */
+  static onStartReencode = (cb: (wc: WebContents, inputPath: string) => Promise<ReencodeResult>) =>
+    ipcMain.handle(START_REENCODE, (e, inputPath: string) => cb(e.sender, inputPath));
+
+  /** Push a progress event to the renderer that started the encode. */
+  static sendReencodeProgress = (wc: WebContents, msg: ReencodeProgressMessage): void =>
+    wc.send(REENCODE_PROGRESS, msg);
+
+  /** Register a handler for CANCEL_REENCODE fire-and-forget messages. */
+  static onCancelReencode = (cb: (jobId: string) => void) =>
+    ipcMain.on(CANCEL_REENCODE, (_, jobId: string) => cb(jobId));
 }

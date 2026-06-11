@@ -1069,7 +1069,13 @@ class FileStore {
 
   @action.bound decrementNumUntaggedFiles(): void {
     if (this.numUntaggedFiles === 0) {
-      throw new Error('Invalid Database State: Cannot have less than 0 untagged files.');
+      // The counter is only (re)written by updateFileListState() when showing all/untagged
+      // content (see its comment), so in filtered views it can be stale — e.g. tagging a
+      // freshly-ingested untagged file while a search/filter is active. A stale badge is
+      // recoverable (next all-content refetch rewrites it); throwing here aborts the
+      // caller's whole operation, so clamp instead.
+      console.warn('numUntaggedFiles would go below 0; leaving at 0 (stale counter in filtered view)');
+      return;
     }
     this.numUntaggedFiles--;
   }
@@ -1190,6 +1196,98 @@ class FileStore {
         console.error('Cannot parse persistent preferences:', key, e);
       }
     }
+  }
+
+  /**
+   * Waits for a file with the given absolute path to appear in fileList, i.e. to be ingested
+   * by the chokidar folder watcher. Resolves with the ClientFile once it appears, or rejects
+   * after timeoutMs milliseconds.
+   *
+   * Intended for use after a file-system operation that produces a new sibling file in a watched
+   * folder (e.g. a re-encode). The caller should await this before accessing the ClientFile.
+   *
+   * The 200 ms debouncedRefetch delay is accounted for: the reaction polls the live observable
+   * fileList and fires as soon as the new file is present.
+   *
+   * @param absolutePath  Full absolute path of the file to wait for.
+   * @param timeoutMs     Upper bound on the wait. Default 10 000 ms.
+   */
+  waitForIngestedFile(absolutePath: string, timeoutMs = 10000): Promise<ClientFile> {
+    // Separator-insensitive comparison: paths computed in the main process use win32
+    // backslashes, while ingested ClientFile.absolutePath uses forward slashes (the folder
+    // watcher normalizes its watch root for chokidar). Windows paths are case-insensitive,
+    // so compare lowercased as well.
+    const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+    const target = normalize(absolutePath);
+    const matches = (f: ClientFile) => normalize(f.absolutePath) === target;
+
+    return new Promise<ClientFile>((resolve, reject) => {
+      // Check immediately in case the file is already in the list (e.g. extremely fast ingest).
+      const existing = this.fileList.find(matches);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+
+      // Set up a bounded MobX reaction that watches fileList for the target path.
+      // The reaction is disposed on both success and timeout to avoid a leak.
+      const disposer = reaction(
+        () => this.fileList.find(matches),
+        (file, _prev, r) => {
+          if (file) {
+            r.dispose();
+            clearTimeout(timer);
+            resolve(file);
+          }
+        },
+      );
+
+      const timer = setTimeout(() => {
+        disposer();
+        reject(
+          new Error(
+            `waitForIngestedFile: timed out after ${timeoutMs} ms waiting for "${absolutePath}". ` +
+              'The file may be outside a watched location.',
+          ),
+        );
+      }, timeoutMs);
+    });
+  }
+
+  /**
+   * Copies all tags from the source ClientFile onto the target ClientFile.
+   *
+   * Two things happen in a single write:
+   * 1. `target.disableImmediateSync()` is called so that the loop of addTag() calls does not
+   *    trigger one ExifTool write per tag.
+   * 2. After all tags are added, the reenable function is called, which schedules exactly one
+   *    ExifTool writeTags() for the final tag set.
+   *
+   * This is the recommended single writer for the re-encode flow: metadata is written here in
+   * the renderer after ffmpeg has finished and released the file handle, via the addTag + reenable
+   * path. Do NOT also write tags in main-process code for the same file — that would double-write.
+   *
+   * @param source  The ClientFile whose tags should be copied.
+   * @param target  The freshly-ingested ClientFile to copy tags onto.
+   */
+  async copyTagsToFile(source: ClientFile, target: ClientFile): Promise<void> {
+    const hierarchy = Array.from(source.tags, (t) => t.path);
+
+    // Nothing to copy — skip the write entirely (ExifIO.writeTags with empty array is a valid
+    // "clear tags" call, but we have nothing to clear on a brand-new file).
+    if (hierarchy.length === 0) {
+      return;
+    }
+
+    // Disable immediate metadata sync so we batch all addTag() calls into one write.
+    const reenable = target.disableImmediateSync();
+
+    for (const tag of source.tags) {
+      target.addTag(tag);
+    }
+
+    // Re-enable sync and flush: writes the full tag set to the target file's EXIF/XMP exactly once.
+    await reenable();
   }
 
   getPersistentPreferences(): Partial<Record<keyof FileStore, unknown>> {

@@ -256,6 +256,115 @@ export const MoveFilesToTrashBin = observer(() => {
   );
 });
 
+/**
+ * Modal that appears after a successful re-encode, asking whether to delete
+ * the original source file. Mirrors MoveFilesToTrashBin's handle-release ->
+ * recyclable-check -> trashFile/deleteFilePermanently -> fileStore.deleteFiles
+ * flow (INV-008, INV-014) so the deletion behaviour is exactly consistent with
+ * the regular trash flow. (TASK-079 / INV-018)
+ */
+export const ReEncodeDeleteOriginal = observer(() => {
+  const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
+  const source = uiStore.reEncodeDeleteOriginalFile;
+  const isOpen = source !== null;
+
+  // Determine recyclability as soon as the modal opens.
+  const [isPermanent, setIsPermanent] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen || source === null) {
+      setIsPermanent(false);
+      return;
+    }
+    let cancelled = false;
+    RendererMessenger.checkRecyclable([source.absolutePath])
+      .then((nonRecyclablePaths) => {
+        if (!cancelled) {
+          setIsPermanent(nonRecyclablePaths.includes(source.absolutePath));
+        }
+      })
+      .catch(() => {
+        // If the check fails, fall back to the recyclable path and let
+        // shell.trashItem surface any real failure, matching MoveFilesToTrashBin.
+        if (!cancelled) {
+          setIsPermanent(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, source]);
+
+  const handleConfirm = action(async () => {
+    if (source === null) {
+      uiStore.closeReEncodeDeleteOriginal();
+      return;
+    }
+    uiStore.closeReEncodeDeleteOriginal();
+
+    // Release any open <video> handles before touching the file (INV-008).
+    await mediaReleaseCoordinator.releasePaths([source.absolutePath]);
+
+    const error = isPermanent
+      ? await RendererMessenger.deleteFilePermanently(source.absolutePath)
+      : await RendererMessenger.trashFile(source.absolutePath);
+
+    if (!error) {
+      // In-place splice — no refetch — consistent with INV-015.
+      fileStore.deleteFiles([source]);
+      if (isPermanent) {
+        AppToaster.show({
+          message: `Original permanently deleted (no Recycle Bin on that drive).`,
+          timeout: 5000,
+        });
+      }
+    } else {
+      console.warn(
+        isPermanent ? 'Could not permanently delete original' : 'Could not move original to trash',
+        source.absolutePath,
+        error,
+      );
+      AppToaster.show({
+        message: 'Could not delete the original file.',
+        clickAction: {
+          onClick: () => RendererMessenger.toggleDevTools(),
+          label: 'More info',
+        },
+        timeout: 8000,
+      });
+    }
+  });
+
+  const bodyText = isPermanent
+    ? `The re-encoded copy was saved. Permanently delete the original "${
+        source?.name ?? ''
+      }"? (This drive has no Recycle Bin — this cannot be undone.)`
+    : `The re-encoded copy was saved. Delete the original "${
+        source?.name ?? ''
+      }"? It will be moved to the Recycle Bin.`;
+
+  return (
+    <Alert
+      open={isOpen}
+      title="Delete original?"
+      icon={IconSet.WARNING}
+      type="warning"
+      primaryButtonText={isPermanent ? 'Permanently Delete' : 'Delete Original'}
+      closeButtonText="Keep Original"
+      defaultButton={DialogButton.PrimaryButton}
+      onClick={(button) => {
+        if (button === DialogButton.PrimaryButton) {
+          handleConfirm();
+        } else {
+          uiStore.closeReEncodeDeleteOriginal();
+        }
+      }}
+    >
+      <p>{bodyText}</p>
+    </Alert>
+  );
+});
+
 export const SavedSearchRemoval = observer((props: IRemovalProps<ClientFileSearchItem>) => {
   const { searchStore } = useStore();
   return (

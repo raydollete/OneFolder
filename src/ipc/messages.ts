@@ -142,3 +142,24 @@ export type DeleteLibraryAndFilesResult = {
   /** Paths where removal failed with a non-ENOENT error */
   failedPaths: { path: string; error: string }[];
 };
+
+//////////////// Re-encode (x264) job ////////////////
+export const START_REENCODE = 'START_REENCODE';
+export const REENCODE_PROGRESS = 'REENCODE_PROGRESS';
+export const CANCEL_REENCODE = 'CANCEL_REENCODE';
+
+/** Live progress event pushed from main to renderer during an ffmpeg encode. */
+export type ReencodeProgressMessage = {
+  jobId: string;
+  /** Encode progress 0–100, or undefined when total duration is unknown. */
+  percent?: number;
+  /** Encoded seconds so far (from ffmpeg out_time_ms). */
+  outTimeSec?: number;
+  /** Total source duration in seconds, or undefined when probing failed. */
+  totalSec?: number;
+};
+
+/** Returned by the START_REENCODE invoke when the encode completes successfully. */
+export type ReencodeResult = {
+  outputPath: string;
+};

@@ -63,6 +63,11 @@ import {
   DELETE_LIBRARY_AND_FILES,
   LibraryDiskPaths,
   DeleteLibraryAndFilesResult,
+  START_REENCODE,
+  REENCODE_PROGRESS,
+  CANCEL_REENCODE,
+  ReencodeProgressMessage,
+  ReencodeResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -237,4 +242,32 @@ export class RendererMessenger {
 
   static deleteLibraryAndFiles = (id: string): Promise<DeleteLibraryAndFilesResult> =>
     ipcRenderer.invoke(DELETE_LIBRARY_AND_FILES, id);
+
+  // Re-encode (x264) job channels ------------------------------------------------
+
+  /**
+   * Ask main to start an x264 re-encode of `inputPath`.
+   * Resolves with `{ outputPath }` on success; rejects on ffmpeg failure or cancel.
+   *
+   * The `jobId` is delivered to the renderer via the FIRST REENCODE_PROGRESS event
+   * (see `onReencodeProgress`) so that `cancelReencode(jobId)` can be called during
+   * the encode.  TASK-078's cancel button must subscribe to `onReencodeProgress`
+   * before calling `startReencode` and stash the first `msg.jobId` it receives.
+   */
+  static startReencode = (inputPath: string): Promise<ReencodeResult> =>
+    ipcRenderer.invoke(START_REENCODE, inputPath);
+
+  /**
+   * Subscribe to live progress events from the running encode.
+   * Returns an unsubscribe function — call it to stop receiving events
+   * (matches the `onMaximize` pattern in this file).
+   */
+  static onReencodeProgress = (cb: (msg: ReencodeProgressMessage) => void): (() => void) => {
+    const h = (_: Electron.IpcRendererEvent, msg: ReencodeProgressMessage) => cb(msg);
+    ipcRenderer.on(REENCODE_PROGRESS, h);
+    return () => ipcRenderer.removeListener(REENCODE_PROGRESS, h);
+  };
+
+  /** Send a cancel request for the given jobId. */
+  static cancelReencode = (jobId: string): void => ipcRenderer.send(CANCEL_REENCODE, jobId);
 }

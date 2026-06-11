@@ -25,6 +25,7 @@ import {
 } from '../common/library-registry';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress } from './ipc/messages';
+import { reEncodeManager } from './ReEncodeManager';
 
 // Portable mode detection — must run before any app.getPath() calls so that
 // app.setPath('userData') takes effect for all subsequent consumers.
@@ -464,6 +465,15 @@ app.on('activate', () => {
   }
 });
 
+// Kill any in-flight ffmpeg jobs and remove their partial outputs when the app
+// is about to quit (normal close, Ctrl+C, OS shutdown).  `killAll()` is
+// synchronous/best-effort and does not block the quit.  This handler must not
+// interfere with `forceRelaunch` (which calls `app.exit(0)` directly and
+// therefore bypasses the `before-quit` event — no double-cleanup risk).
+app.on('before-quit', () => {
+  reEncodeManager.killAll();
+});
+
 // Auto-updates: using electron-builders autoUpdater: https://www.electron.build/auto-update#quick-setup-guide
 // How it should go:
 // - Auto check for updates on startup (toggleable in settings) -> show toast message if update available
@@ -859,6 +869,54 @@ MainMessenger.onToggleCheckUpdatesOnStartup(() => {
 MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => preferences.checkForUpdatesOnStartup === true);
 
 MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
+
+// Re-encode (x264) IPC handlers — wired to ReEncodeManager (TASK-075 / TASK-076).
+//
+// START_REENCODE: the renderer invokes this and awaits a promise that resolves
+// with { outputPath } when the encode finishes, or rejects on failure/cancel.
+// The first REENCODE_PROGRESS event carries the jobId so the renderer can call
+// CANCEL_REENCODE if the user clicks cancel (see TASK-078).
+MainMessenger.onStartReencode((wc, inputPath) => {
+  return new Promise<{ outputPath: string }>((resolve, reject) => {
+    const { jobId, outputPath } = reEncodeManager.start(inputPath, {
+      onProgress: (progress) => {
+        // Guard against a destroyed WebContents (e.g. window closed mid-encode).
+        if (!wc.isDestroyed()) {
+          MainMessenger.sendReencodeProgress(wc, {
+            jobId: progress.jobId,
+            percent: progress.percent,
+            outTimeSec: progress.outTimeSec,
+            totalSec: progress.totalSec,
+          });
+        }
+      },
+      onDone: (result) => resolve({ outputPath: result.outputPath }),
+      onError: (err) => reject(err),
+      // Rejection with a distinguishable message lets the renderer treat cancel
+      // differently from a hard failure (no toast, just unlock the UI).
+      onCancelled: () => reject(new Error('REENCODE_CANCELLED')),
+    });
+
+    // Emit the very first progress event immediately so the renderer receives
+    // the jobId before any real encode progress arrives.  This allows TASK-078's
+    // cancel button to stash the jobId without waiting for the first encode frame.
+    if (!wc.isDestroyed()) {
+      MainMessenger.sendReencodeProgress(wc, {
+        jobId,
+        percent: 0,
+        outTimeSec: 0,
+        totalSec: undefined,
+      });
+    }
+    // outputPath is available synchronously; it's also returned via onDone.
+    void outputPath; // suppress unused-variable lint
+  });
+});
+
+// CANCEL_REENCODE: renderer sends the jobId it received from the first progress event.
+MainMessenger.onCancelReencode((jobId) => {
+  reEncodeManager.cancel(jobId);
+});
 
 // Library management IPC handlers
 MainMessenger.onGetLibraries(() => registry.getLibraries());

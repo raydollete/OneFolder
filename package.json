@@ -60,7 +60,9 @@
       ],
       "extraResources": [
         "resources/exiftool/exiftool.exe",
-        "resources/exiftool/.Exiftool_config"
+        "resources/exiftool/.Exiftool_config",
+        "resources/ffmpeg/ffmpeg.exe",
+        "resources/ffmpeg/ffprobe.exe"
       ]
     },
     "extraResources": [

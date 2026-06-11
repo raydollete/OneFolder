@@ -14,6 +14,11 @@ This is a personal, single-user fork of OneFolder. It is not intended for public
 
 1. On Windows, the Electron binary is named `brave.exe` instead of `OneFolder.exe`.
 2. The NSIS installer target is disabled; only the portable target ships.
+3. A second bundled binary is included alongside ExifTool: **ffmpeg + ffprobe**
+   under `resources/ffmpeg/`, compiled with `--enable-gpl --enable-libx264`.
+   This enables the inspector "Re-encode (x264)" tool.  The GPL licensing
+   caveat applies — see [Re-encode (x264)](reencode-x264.md) and the
+   [Licensing caveat](#ffmpeg--libx264-licensing-caveat) section below.
 
 Both changes live entirely in `package.json` under the `build` key. No source code is modified.
 
@@ -57,6 +62,21 @@ Portable mode is triggered by the presence of a `data/` directory or `portable.t
 The shipped binary is an unsigned `brave.exe` that is not actually Brave. Windows Defender should accept it based on runtime behavior, but heuristic AV scanners may false-positive on the name/publisher mismatch. Since this fork is used on a single known machine, the practical fix is to add an exclusion for the portable directory if needed.
 
 If this fork is ever to be distributed more widely, this deviation must be reverted — the rename is acceptable for single-user personal use only. Packaging a binary named after another vendor's product under a different publisher's signature is a trademark issue and a malware-heuristic trigger.
+
+## ffmpeg / libx264 licensing caveat
+
+The bundled `resources/ffmpeg/ffmpeg.exe` and `resources/ffmpeg/ffprobe.exe`
+are compiled with `--enable-gpl --enable-libx264`.  libx264 is licensed under
+the GPL v2+.  Distributing a GPL binary carries source-offer and attribution
+obligations.
+
+**This fork is a private, single-user build and is never distributed.**  The
+bundled GPL binary is therefore acceptable under personal-use terms — the same
+reasoning that applies to the `brave.exe` rename above.  If this fork is ever
+distributed more widely, the ffmpeg GPL obligations must be satisfied before
+distribution.
+
+See [Re-encode (x264)](reencode-x264.md) for full documentation of the tool.
 
 ## FileStore mutation model: in-place splice on destructive ops, refetch on semantic changes
 

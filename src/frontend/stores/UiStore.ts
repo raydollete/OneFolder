@@ -223,6 +223,24 @@ class UiStore {
   /** Dialog to warn the user when he tries to open too many files externally */
   @observable isManyExternalFilesOpen: boolean = false;
 
+  /**
+   * The source file for the delete-original prompt shown after a successful re-encode (TASK-079).
+   * null means the prompt is closed; a ClientFile value opens the prompt for that file.
+   */
+  @observable reEncodeDeleteOriginalFile: ClientFile | null = null;
+
+  /**
+   * Media-processing lock: set while a long-running file operation (e.g. re-encode) is in
+   * flight for a specific file. When active, navigation and destructive actions are blocked so
+   * the user cannot move away from or delete the source while it is being processed.
+   * Callers must always release the lock in a finally block — see beginMediaProcessing /
+   * endMediaProcessing.
+   */
+  @observable mediaProcessing: { active: boolean; path: string | null } = {
+    active: false,
+    path: null,
+  };
+
   // Selections
   // Observable arrays recommended like this here https://github.com/mobxjs/mobx/issues/669#issuecomment-269119270.
   // However, sets are more suitable because they have quicker lookup performance.
@@ -578,6 +596,11 @@ class UiStore {
   }
 
   @action.bound openMoveFilesToTrash(): void {
+    // Do not open the trash modal while a media-processing operation is in flight.
+    // The source file must not be deleted mid-encode; all entry points funnel through here.
+    if (this.mediaProcessing.active) {
+      return;
+    }
     this.isMoveFilesToTrashOpen = true;
   }
 
@@ -587,6 +610,41 @@ class UiStore {
 
   @action.bound closeManyExternalFiles(): void {
     this.isManyExternalFilesOpen = false;
+  }
+
+  /**
+   * Opens the delete-original prompt for the given source file after a successful re-encode.
+   * TASK-079 renders the actual Alert; this flag is the integration point.
+   */
+  @action.bound openReEncodeDeleteOriginal(file: ClientFile): void {
+    this.reEncodeDeleteOriginalFile = file;
+  }
+
+  @action.bound closeReEncodeDeleteOriginal(): void {
+    this.reEncodeDeleteOriginalFile = null;
+  }
+
+  /** True while a media-processing operation owns the current file (e.g. re-encode in flight). */
+  @computed get isMediaProcessing(): boolean {
+    return this.mediaProcessing.active;
+  }
+
+  /**
+   * Acquires the media-processing lock for the given file path.
+   * Navigation and destructive actions are blocked until endMediaProcessing() is called.
+   * Always pair with endMediaProcessing() in a finally block.
+   */
+  @action.bound beginMediaProcessing(path: string): void {
+    this.mediaProcessing = { active: true, path };
+  }
+
+  /**
+   * Releases the media-processing lock.
+   * Safe to call multiple times — idempotent so callers can always put it in a finally block
+   * without worrying about double-release errors.
+   */
+  @action.bound endMediaProcessing(): void {
+    this.mediaProcessing = { active: false, path: null };
   }
 
   @action.bound toggleToolbarTagPopover(): void {
@@ -961,7 +1019,30 @@ class UiStore {
       (document.querySelector('.searchbar input') as HTMLElement).focus();
     } else if (matches(hotkeyMap.advancedSearch)) {
       this.toggleAdvancedSearch();
-      // View
+      // View — navigation and destructive combos are blocked while a media-processing
+      // operation is in flight (e.g. re-encode). Harmless panel toggles above are
+      // still allowed; only file navigation (viewSlide / view-method switches) and
+      // the delete shortcut are gated here.
+    } else if (this.mediaProcessing.active) {
+      // During media processing: swallow navigation and delete combos so they are
+      // inert, but still mark them as "matched" (preventDefault) to prevent the
+      // browser's default behaviour for those keys.
+      if (
+        matches(hotkeyMap.deleteSelection) ||
+        matches(hotkeyMap.viewSlide) ||
+        matches(hotkeyMap.viewList) ||
+        matches(hotkeyMap.viewGrid) ||
+        matches(hotkeyMap.viewMasonryVertical) ||
+        matches(hotkeyMap.viewMasonryHorizontal) ||
+        matches(hotkeyMap.viewCalendar) ||
+        matches(hotkeyMap.viewFaces) ||
+        matches(hotkeyMap.viewMap) ||
+        matches(hotkeyMap.viewDuplicates)
+      ) {
+        // Block — do nothing, but let isMatch stay true so e.preventDefault() fires.
+      } else {
+        isMatch = false;
+      }
     } else if (matches(hotkeyMap.viewList)) {
       this.setMethodList();
     } else if (matches(hotkeyMap.viewGrid)) {

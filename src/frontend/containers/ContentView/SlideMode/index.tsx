@@ -103,6 +103,22 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
   // Detect left/right arrow keys to scroll between images. Top/down is already handled in the layout that's open in the background
   useEffect(() => {
     const handleUserKeyPress = (event: KeyboardEvent) => {
+      // While a media-processing operation is in flight (e.g. re-encode), block all
+      // navigation and destructive keys so the user cannot leave the source file or
+      // accidentally trigger a delete. Harmless keys (e.g. Escape) are also blocked
+      // for ArrowLeft/Right and Backspace/Delete specifically; Escape is kept as a
+      // no-op too so the full keyboard is inert for nav during processing.
+      if (uiStore.isMediaProcessing) {
+        if (
+          event.key === 'ArrowLeft' ||
+          event.key === 'ArrowRight' ||
+          event.key === 'Delete' ||
+          event.key === 'Backspace'
+        ) {
+          event.stopPropagation();
+        }
+        return;
+      }
       if (event.key === 'ArrowLeft') {
         decrImgIndex();
         event.stopPropagation();

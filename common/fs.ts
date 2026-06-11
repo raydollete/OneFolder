@@ -44,7 +44,7 @@ export async function isDirEmpty(dir: string) {
 }
 
 export function isFileExtensionVideo(fileExtension: string) {
-  return (fileExtension === 'webm' || fileExtension === 'mp4' || fileExtension === 'ogg');
+  return fileExtension === 'webm' || fileExtension === 'mp4' || fileExtension === 'ogg';
 }
 
 function hashString(s: string) {
@@ -64,6 +64,34 @@ function hashString(s: string) {
 }
 
 /**
+ * Returns a collision-free sibling path in `dir` with the given `baseName` and `ext`.
+ *
+ * Resolution order:
+ *   1. `dir/baseName.ext`      — used if the path does not exist
+ *   2. `dir/baseName 1.ext`    — if the first candidate is taken
+ *   3. `dir/baseName 2.ext`    — and so on
+ *
+ * This matches the auto-increment convention used throughout the codebase
+ * (e.g. re-encoding `clip.mp4` produces `clip 1.mp4`, then `clip 2.mp4`).
+ * The `ext` parameter must NOT include a leading dot.
+ */
+export function getUniqueSiblingPath(dir: string, baseName: string, ext: string): string {
+  const candidate = path.join(dir, `${baseName}.${ext}`);
+  if (!fse.existsSync(candidate)) {
+    return candidate;
+  }
+  let n = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const numbered = path.join(dir, `${baseName} ${n}.${ext}`);
+    if (!fse.existsSync(numbered)) {
+      return numbered;
+    }
+    n++;
+  }
+}
+
+/**
  * Gets the path to a resource set up in `"extraResources`" in the package.json.
  * See https://www.electron.build/configuration/contents#extraresources
  * Could look into process.resourcesPath, but that doesn't seem to work in dev mode
@@ -72,4 +100,28 @@ function hashString(s: string) {
 export function getExtraResourcePath(resourcePath: string): string {
   const relativeResourcesPath = (IS_DEV ? '../' : '../../') + 'resources';
   return path.resolve(__dirname, relativeResourcesPath, resourcePath);
+}
+
+/**
+ * Returns the path to the bundled ffmpeg binary (resources/ffmpeg/ffmpeg.exe on Windows).
+ * Resolves correctly in both dev mode (via ../resources) and the packaged portable build
+ * (via ../../resources), because it delegates to getExtraResourcePath.
+ *
+ * NOTE: This build ships ffmpeg with --enable-gpl --enable-libx264. If this fork is ever
+ * distributed publicly, the GPL obligations (source offer / license notice) must be
+ * addressed before distribution.
+ */
+export function getFfmpegPath(): string {
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  return getExtraResourcePath(`ffmpeg/${exe}`);
+}
+
+/**
+ * Returns the path to the bundled ffprobe binary (resources/ffmpeg/ffprobe.exe on Windows).
+ * Used for duration probing / progress calculation in the ffmpeg job runner (TASK-075).
+ * Same GPL caveat as getFfmpegPath.
+ */
+export function getFfprobePath(): string {
+  const exe = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  return getExtraResourcePath(`ffmpeg/${exe}`);
 }

@@ -42,4 +42,5 @@ OneFolder/
 | [Multi-Library Support](multi-library.md)                       | Multi-library registry, per-library on-disk layout, startup and switch flows |
 | [Missing Files](missing-files.md)                               | Detection, per-library hide preference, and recovery via the Outliner badge; also documents the **FileStore fetch-generation invariant** — stale fetcher results are silently dropped (see §Fetch generation invariant). |
 | [Video Only Filter](video-only-filter.md)                       | Persistent per-library display filter that restricts the gallery to video files; follows the same post-fetch splice pattern as Missing Files. |
-| [Personal Fork Notes](personal-fork-notes.md)                   | Fork-specific deviations: Windows binary renamed to `brave.exe` (for NVIDIA VSR), portable-only |
+| [Personal Fork Notes](personal-fork-notes.md)                   | Fork-specific deviations: Windows binary renamed to `brave.exe` (for NVIDIA VSR), portable-only; second bundled binary (ffmpeg + GPL caveat) |
+| [Re-encode (x264)](reencode-x264.md)                             | Inspector "Re-encode (x264)" tool: ffmpeg command, path resolution, media-job lock model, ingestion-await + tag-copy, delete-original prompt, GPL caveat |

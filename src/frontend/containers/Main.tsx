@@ -58,6 +58,8 @@ const Main = () => {
       e.preventDefault();
       uiStore.openToolbarTagPopover();
     } else if (matches(hotkeyMap.deleteSelection)) {
+      // openMoveFilesToTrash already guards against media-processing; call it unconditionally
+      // so the guard lives in one place (UiStore.openMoveFilesToTrash).
       uiStore.openMoveFilesToTrash();
     }
   });
