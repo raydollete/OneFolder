@@ -133,3 +133,5 @@ This prevents a stale in-flight fetch from overwriting the user's `fileList` if 
 **Observability:** when a stale apply is dropped in the dev build, `FileStore.logStaleDrop(phase, dropped)` emits a `console.debug('[INV-009] dropped stale apply', { phase, dropped, current, content, droppedTotal })` line. The `droppedApplyCount` observable accumulates the total; in the dev build this is accessible as `window.__inv009.droppedCount`. Zero drops under normal steady-state usage; one or two drops during the initial-scan window on a large library is expected and correct.
 
 See [INV-009](TODO/backlog/investigations/INV-009_HIGH_FRONTEND_stale-fetch-clobbers-user-filter-via-updateFromBackend.md) for the full analysis. Also see [INV-007](TODO/backlog/investigations/INV-007_HIGH_FRONTEND_untagged-selector-count-mismatch-and-filter-clobber.md) for the related criteria-list work (TASK-034).
+
+See also: [docs/video-only-filter.md](video-only-filter.md) (same post-fetch filter pattern).

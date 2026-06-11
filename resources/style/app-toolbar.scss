@@ -14,9 +14,25 @@
 }
 
 .searchbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.25rem 0.2rem;
   flex-grow: 1;
   min-width: 3rem;
+
+  // The list (QuickSearchList / CriteriaList) grows to fill available space
+  > :first-child {
+    flex-grow: 1;
+    min-width: 0; // allow the input to shrink instead of pushing the checkbox off-screen
+  }
+
+  // Video Only checkbox: fixed size, pinned to the right
+  > label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: var(--text-color-muted);
+  }
 
   .btn-icon-large {
     color: var(--text-color-muted);

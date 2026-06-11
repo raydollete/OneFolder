@@ -151,6 +151,7 @@ type PersistentPreferenceFields =
   | 'inspectorWidth'
   | 'isRememberSearchEnabled'
   | 'hideMissingFilesInBrowsing'
+  | 'showVideosOnly'
   // the following are only restored when isRememberSearchEnabled is enabled
   | 'isSlideMode'
   | 'firstItem'
@@ -193,6 +194,8 @@ class UiStore {
    *  All / Untagged / Query / Duplicates / Calendar / List views. The dedicated Missing Files
    *  recovery view is unaffected. */
   @observable hideMissingFilesInBrowsing: boolean = true;
+  /** When true, the gallery is filtered to only show video files (mp4, webm, ogg). Default false. */
+  @observable showVideosOnly: boolean = false;
   @observable inspectorIsDescriptionVisible: boolean = true;
   @observable inspectorIsPromptVisible: boolean = false;
   @observable inspectorIsParametersVisible: boolean = false;
@@ -431,6 +434,14 @@ class UiStore {
 
   @action.bound toggleHideMissingFilesInBrowsing(): void {
     this.hideMissingFilesInBrowsing = !this.hideMissingFilesInBrowsing;
+  }
+
+  @action.bound setShowVideosOnly(value: boolean): void {
+    this.showVideosOnly = value;
+  }
+
+  @action.bound toggleShowVideosOnly(): void {
+    this.showVideosOnly = !this.showVideosOnly;
   }
 
   @action.bound toggleInspectorDescriptionVisibility(): void {
@@ -1050,6 +1061,7 @@ class UiStore {
           prefs.isThumbnailResolutionOverlayEnabled ?? false,
         );
         this.hideMissingFilesInBrowsing = Boolean(prefs.hideMissingFilesInBrowsing ?? true);
+        this.showVideosOnly = Boolean(prefs.showVideosOnly ?? false);
         this.inspectorIsDescriptionVisible = Boolean(prefs.inspectorIsDescriptionVisible ?? true);
         this.inspectorIsPromptVisible = Boolean(prefs.inspectorIsPromptVisible ?? true);
         this.inspectorIsParametersVisible = Boolean(prefs.inspectorIsParametersVisible ?? false);
@@ -1143,6 +1155,7 @@ class UiStore {
       importMetadataAtReIndexing: this.importMetadataAtReIndexing,
       isThumbnailResolutionOverlayEnabled: this.isThumbnailResolutionOverlayEnabled,
       hideMissingFilesInBrowsing: this.hideMissingFilesInBrowsing,
+      showVideosOnly: this.showVideosOnly,
       outlinerWidth: this.outlinerWidth,
       inspectorWidth: this.inspectorWidth,
       isRememberSearchEnabled: this.isRememberSearchEnabled,

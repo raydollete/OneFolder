@@ -4,7 +4,7 @@ import React, { useRef } from 'react';
 import { useStore } from '../../contexts/StoreContext';
 
 const Searchbar = observer(() => {
-  const { uiStore } = useStore();
+  const { uiStore, fileStore } = useStore();
   const searchCriteriaList = uiStore.searchCriteriaList;
 
   // Only show quick search bar when all criteria are tags,
@@ -20,7 +20,20 @@ const Searchbar = observer(() => {
         (crit as ClientTagSearchCriteria).value,
     );
 
-  return <div className="searchbar">{isQuickSearch ? <QuickSearchList /> : <CriteriaList />}</div>;
+  return (
+    <div className="searchbar">
+      {isQuickSearch ? <QuickSearchList /> : <CriteriaList />}
+      <Checkbox
+        checked={uiStore.showVideosOnly}
+        onChange={(checked) => {
+          uiStore.setShowVideosOnly(checked);
+          fileStore.refetch();
+        }}
+      >
+        Video Only
+      </Checkbox>
+    </div>
+  );
 });
 
 export default Searchbar;
@@ -32,7 +45,7 @@ import {
 } from 'src/frontend/entities/SearchCriteria';
 import { ClientTag } from 'src/frontend/entities/Tag';
 
-import { IconButton, IconSet, Row, Tag } from 'widgets';
+import { Checkbox, IconButton, IconSet, Row, Tag } from 'widgets';
 
 import { TagSelector } from 'src/frontend/components/TagSelector';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';

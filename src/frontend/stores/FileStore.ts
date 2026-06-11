@@ -9,7 +9,7 @@ import {
   transaction,
 } from 'mobx';
 
-import { getThumbnailPath } from 'common/fs';
+import { getThumbnailPath, isFileExtensionVideo } from 'common/fs';
 import { IS_DEV } from 'common/process';
 import { promiseAllLimit } from 'common/promise';
 import { debounce } from 'common/timeout';
@@ -131,6 +131,12 @@ class FileStore {
     // the gallery immediately reflects the new setting without requiring a restart.
     reaction(
       () => this.rootStore.uiStore.hideMissingFilesInBrowsing,
+      () => this.refetch(),
+    );
+    // When the "video only" preference toggles, re-run the current fetch so
+    // the gallery immediately reflects the new setting without requiring a restart.
+    reaction(
+      () => this.rootStore.uiStore.showVideosOnly,
       () => this.refetch(),
     );
   }
@@ -1296,6 +1302,24 @@ class FileStore {
             this.fileListLastModified = new Date();
           }
 
+          // Post-fetch video-only display filter — mirrors the broken-file splice above.
+          // Not applied in the Missing-files content view (showsMissingContent), which is
+          // always unfiltered by design.
+          const showVideosOnly = this.rootStore.uiStore.showVideosOnly && !this.showsMissingContent;
+          if (showVideosOnly) {
+            // Re-derive from newClientFiles (not the possibly-already-spliced fileList)
+            // so the two display filters compose: keep files that are BOTH video and,
+            // if hide-missing is on, not broken.
+            const visible = newClientFiles.filter(
+              (f) => isFileExtensionVideo(f.extension) && !(shouldHide && f.isBroken),
+            );
+            this.fileList.clear();
+            this.fileList.push(...visible);
+            // Drop any stale selection references to non-video files that were removed.
+            this.cleanFileSelection();
+            this.fileListLastModified = new Date();
+          }
+
           // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
           // fileList looks like now (possibly filtered above).
           this.updateFileListState();
@@ -1309,8 +1333,8 @@ class FileStore {
           // All content. After the filter splice, fileList is smaller than the DB total,
           // so the Outliner "All Images" badge would show the visible count rather than
           // the true library size. Override with the full fetched count so the badge
-          // stays accurate even when broken files are hidden.
-          if (shouldHide && brokenCount > 0 && this.showsAllContent) {
+          // stays accurate even when files are hidden by either display filter.
+          if (this.showsAllContent && ((shouldHide && brokenCount > 0) || showVideosOnly)) {
             this.numTotalFiles = newClientFiles.length;
           }
         });
