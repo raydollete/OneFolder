@@ -63,11 +63,13 @@ import {
   DELETE_LIBRARY_AND_FILES,
   LibraryDiskPaths,
   DeleteLibraryAndFilesResult,
-  START_REENCODE,
-  REENCODE_PROGRESS,
-  CANCEL_REENCODE,
-  ReencodeProgressMessage,
-  ReencodeResult,
+  START_MEDIA_JOB,
+  MEDIA_JOB_PROGRESS,
+  CANCEL_MEDIA_JOB,
+  MediaJobType,
+  StartMediaJobMessage,
+  MediaJobProgressMessage,
+  MediaJobResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -243,31 +245,31 @@ export class RendererMessenger {
   static deleteLibraryAndFiles = (id: string): Promise<DeleteLibraryAndFilesResult> =>
     ipcRenderer.invoke(DELETE_LIBRARY_AND_FILES, id);
 
-  // Re-encode (x264) job channels ------------------------------------------------
+  // Media job channels (re-encode x264, normalize audio, …) ----------------------
 
   /**
-   * Ask main to start an x264 re-encode of `inputPath`.
+   * Ask main to start a media job of the given `jobType` on `inputPath`.
    * Resolves with `{ outputPath }` on success; rejects on ffmpeg failure or cancel.
    *
-   * The `jobId` is delivered to the renderer via the FIRST REENCODE_PROGRESS event
-   * (see `onReencodeProgress`) so that `cancelReencode(jobId)` can be called during
-   * the encode.  TASK-078's cancel button must subscribe to `onReencodeProgress`
-   * before calling `startReencode` and stash the first `msg.jobId` it receives.
+   * The `jobId` is delivered to the renderer via the FIRST MEDIA_JOB_PROGRESS event
+   * (see `onMediaJobProgress`) so that `cancelMediaJob(jobId)` can be called during
+   * the job.  Callers must subscribe to `onMediaJobProgress` before calling
+   * `startMediaJob` and stash the first `msg.jobId` they receive.
    */
-  static startReencode = (inputPath: string): Promise<ReencodeResult> =>
-    ipcRenderer.invoke(START_REENCODE, inputPath);
+  static startMediaJob = (jobType: MediaJobType, inputPath: string): Promise<MediaJobResult> =>
+    ipcRenderer.invoke(START_MEDIA_JOB, { inputPath, jobType } as StartMediaJobMessage);
 
   /**
-   * Subscribe to live progress events from the running encode.
+   * Subscribe to live progress events from the running media job.
    * Returns an unsubscribe function — call it to stop receiving events
    * (matches the `onMaximize` pattern in this file).
    */
-  static onReencodeProgress = (cb: (msg: ReencodeProgressMessage) => void): (() => void) => {
-    const h = (_: Electron.IpcRendererEvent, msg: ReencodeProgressMessage) => cb(msg);
-    ipcRenderer.on(REENCODE_PROGRESS, h);
-    return () => ipcRenderer.removeListener(REENCODE_PROGRESS, h);
+  static onMediaJobProgress = (cb: (msg: MediaJobProgressMessage) => void): (() => void) => {
+    const h = (_: Electron.IpcRendererEvent, msg: MediaJobProgressMessage) => cb(msg);
+    ipcRenderer.on(MEDIA_JOB_PROGRESS, h);
+    return () => ipcRenderer.removeListener(MEDIA_JOB_PROGRESS, h);
   };
 
   /** Send a cancel request for the given jobId. */
-  static cancelReencode = (jobId: string): void => ipcRenderer.send(CANCEL_REENCODE, jobId);
+  static cancelMediaJob = (jobId: string): void => ipcRenderer.send(CANCEL_MEDIA_JOB, jobId);
 }

@@ -63,11 +63,12 @@ import {
   DELETE_LIBRARY_AND_FILES,
   LibraryDiskPaths,
   DeleteLibraryAndFilesResult,
-  START_REENCODE,
-  REENCODE_PROGRESS,
-  CANCEL_REENCODE,
-  ReencodeProgressMessage,
-  ReencodeResult,
+  START_MEDIA_JOB,
+  MEDIA_JOB_PROGRESS,
+  CANCEL_MEDIA_JOB,
+  StartMediaJobMessage,
+  MediaJobProgressMessage,
+  MediaJobResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -238,21 +239,23 @@ export class MainMessenger {
   static onDeleteLibraryAndFiles = (cb: (id: string) => Promise<DeleteLibraryAndFilesResult>) =>
     ipcMain.handle(DELETE_LIBRARY_AND_FILES, (_, id: string) => cb(id));
 
-  // Re-encode (x264) job channels ------------------------------------------------
+  // Media job channels (re-encode x264, normalize audio, …) ----------------------
 
   /**
-   * Register a handler for START_REENCODE invoke calls.
+   * Register a handler for START_MEDIA_JOB invoke calls.
    * The callback receives the originating WebContents so the handler can push
-   * REENCODE_PROGRESS events back to exactly that window.
+   * MEDIA_JOB_PROGRESS events back to exactly that window.
    */
-  static onStartReencode = (cb: (wc: WebContents, inputPath: string) => Promise<ReencodeResult>) =>
-    ipcMain.handle(START_REENCODE, (e, inputPath: string) => cb(e.sender, inputPath));
+  static onStartMediaJob = (
+    cb: (wc: WebContents, msg: StartMediaJobMessage) => Promise<MediaJobResult>,
+  ) =>
+    ipcMain.handle(START_MEDIA_JOB, (e, msg: StartMediaJobMessage) => cb(e.sender, msg));
 
-  /** Push a progress event to the renderer that started the encode. */
-  static sendReencodeProgress = (wc: WebContents, msg: ReencodeProgressMessage): void =>
-    wc.send(REENCODE_PROGRESS, msg);
+  /** Push a progress event to the renderer that started the media job. */
+  static sendMediaJobProgress = (wc: WebContents, msg: MediaJobProgressMessage): void =>
+    wc.send(MEDIA_JOB_PROGRESS, msg);
 
-  /** Register a handler for CANCEL_REENCODE fire-and-forget messages. */
-  static onCancelReencode = (cb: (jobId: string) => void) =>
-    ipcMain.on(CANCEL_REENCODE, (_, jobId: string) => cb(jobId));
+  /** Register a handler for CANCEL_MEDIA_JOB fire-and-forget messages. */
+  static onCancelMediaJob = (cb: (jobId: string) => void) =>
+    ipcMain.on(CANCEL_MEDIA_JOB, (_, jobId: string) => cb(jobId));
 }

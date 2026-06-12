@@ -38,6 +38,15 @@ export class FolderWatcherWorker {
       disableGlobbing: true, // needed in order to support directories with brackets, quotes, asterisks, etc.
       alwaysStat: true, // we need stats anyways during importing
       depth: RECURSIVE_DIR_WATCH_DEPTH, // not really needed: added as a safety measure for infinite recursion between symbolic links
+      // Defer the 'add' event until the file has stopped growing for stabilityThreshold ms (INV-019).
+      // Without this, ffmpeg's output triggers 'add' at encode-start (the file is 0-byte/still growing),
+      // causing the DB row to be created with a partial stats.size and 0x0 dimensions that are never
+      // corrected (the 'change' handler is commented out). Chromium then issues a byte-range request
+      // for a range beyond the partial file's length, yielding net::ERR_REQUEST_RANGE_NOT_SATISFIABLE.
+      // awaitWriteFinish also defers large manual file-copy events, adding up to ~2 s latency to
+      // every 'add' in the normal drag-and-drop import flow — an acceptable tradeoff for correct
+      // ingestion. 2000 ms was chosen over 1000 ms to cover slow drives and large video writes.
+      awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 100 },
       ignored: (path: string, stats?: Stats) => {
         // We used to set `ignored` with regex patterns, but ran into problem with directories that
         // contain dots in their file name.

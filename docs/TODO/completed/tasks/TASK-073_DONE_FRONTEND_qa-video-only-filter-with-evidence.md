@@ -2,11 +2,11 @@
 id: TASK-073
 title: 'QA: Video Only filter — toggle, filtering, persistence, cross-mode (with evidence)'
 investigation: INV-017
-status: in-progress
+status: done
 priority: medium
 blocked_by: [TASK-069, TASK-070, TASK-071]
 date_created: 2026-06-11
-date_completed:
+date_completed: 2026-06-12
 files:
   - src/frontend/containers/AppToolbar/Searchbar.tsx
   - src/frontend/stores/UiStore.ts
@@ -50,6 +50,14 @@ Before the human runs the app, automated checks confirmed:
 9. `Searchbar.tsx:26-34` — `<Checkbox checked={uiStore.showVideosOnly} onChange={(checked) => { uiStore.setShowVideosOnly(checked); fileStore.refetch(); }}>Video Only</Checkbox>` rendered as sibling to QuickSearchList/CriteriaList.
 10. `app-toolbar.scss:16-35` — `.searchbar` is `display: flex; align-items: center; gap: 0.4rem` with `> :first-child { flex-grow: 1 }` and `> label { flex: 0 0 auto; white-space: nowrap }`.
 11. `common/fs.ts:46-48` — `isFileExtensionVideo` checks `webm | mp4 | ogg`. No extension list duplicated inline.
+
+## QA Result (2026-06-12)
+
+The human QA executor (Ray) confirmed on 2026-06-12 that INV-017 was manually
+tested in the running app and works as specified. The individual checkboxes
+below are left unticked because no captured artifacts (screenshots/clips) were
+attached to this file; the user's direct attestation in-session is the
+recorded evidence of completion, consistent with how TASK-064 was closed.
 
 ## Implementation Steps
 

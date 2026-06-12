@@ -44,3 +44,5 @@ OneFolder/
 | [Video Only Filter](video-only-filter.md)                       | Persistent per-library display filter that restricts the gallery to video files; follows the same post-fetch splice pattern as Missing Files. |
 | [Personal Fork Notes](personal-fork-notes.md)                   | Fork-specific deviations: Windows binary renamed to `brave.exe` (for NVIDIA VSR), portable-only; second bundled binary (ffmpeg + GPL caveat) |
 | [Re-encode (x264)](reencode-x264.md)                             | Inspector "Re-encode (x264)" tool: ffmpeg command, path resolution, media-job lock model, ingestion-await + tag-copy, delete-original prompt, GPL caveat |
+| [Normalize Audio](normalize-audio.md)                            | Inspector "Normalize Audio" tool: dynaudnorm command, `-c:v copy` container-compatibility limitation, shared media-job stack (ReEncodeManager, IPC, finalize, delete-original prompt) |
+| [Creating Inspector Tools](TOOLS.md)                             | How to build a new per-file tool: the media-job layer stack, order of operations, cross-process path/counter pitfalls, and a pre-flight checklist |

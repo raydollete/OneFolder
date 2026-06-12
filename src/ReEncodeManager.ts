@@ -1,23 +1,25 @@
 /**
- * ReEncodeManager — main-process ffmpeg job runner for the "Re-encode (x264)" tool.
+ * ReEncodeManager — main-process ffmpeg job runner for media tools (Re-encode x264, Normalize Audio, …).
  *
  * Responsibilities:
- *   - Compute a collision-free .mp4 output path beside the source (via getUniqueSiblingPath).
+ *   - Compute a collision-free output path beside the source (via getUniqueSiblingPath).
  *   - Spawn ffmpeg with `-hide_banner -progress pipe:1 -nostats` for machine-readable progress.
  *   - Probe source duration via ffprobe for percent progress; fall back to indeterminate.
- *   - Maintain a job registry keyed by jobId so IPC handlers (TASK-076) can reference jobs.
+ *   - Maintain a job registry keyed by jobId so IPC handlers can reference jobs.
  *   - Support `cancel(jobId)`: kill ffmpeg, remove any partial output, report cancellation.
  *   - On failure: remove partial output, surface stderr tail via onError.
  *   - On app quit: kill all live jobs and remove their partial outputs (best-effort).
  *
- * API shape chosen to map cleanly onto the IPC layer in TASK-076:
- *   - `start(inputPath, callbacks)` returns `{ jobId, outputPath }` synchronously (after path
- *     computation) and calls `onProgress` / `onDone` / `onError` / `onCancelled` asynchronously.
- *   - TASK-076 can immediately return `{ jobId, outputPath }` to the renderer, then push
- *     progress and the final outcome over separate IPC events.
+ * API shape:
+ *   - `start(inputPath, jobArgs, outputExt, callbacks)` returns `{ jobId, outputPath }`
+ *     synchronously (after path computation) and calls `onProgress` / `onDone` / `onError` /
+ *     `onCancelled` asynchronously.
+ *   - The caller (main.ts IPC handler) provides the ffmpeg codec/filter args and the output
+ *     extension; this manager only adds transport flags around them.
  *
- * Codec args (`-c:a copy -c:v libx264`) are preserved verbatim per INV-018. Only transport/
- * progress flags are added around them.
+ * Codec/filter args are passed in by the caller (defined in the job-spec map in src/main.ts)
+ * and are preserved verbatim per INV-018/INV-020. Only transport/progress flags are added
+ * around them by this manager.
  */
 
 import { spawn, ChildProcess } from 'child_process';
@@ -96,20 +98,24 @@ export class ReEncodeManager {
   }
 
   /**
-   * Start a re-encode job.
+   * Start a media job (re-encode, normalize audio, etc.).
+   *
+   * `jobArgs`   — ffmpeg codec/filter args (provided verbatim by the caller; only transport
+   *               flags are added around them by this manager).
+   * `outputExt` — file extension for the output (without leading dot, e.g. `'mp4'`).
    *
    * Returns `{ jobId, outputPath }` immediately after computing the output path.
    * Progress and completion are delivered asynchronously via `callbacks`.
    */
-  start(inputPath: string, callbacks: ReencodeCallbacks): StartResult {
+  start(inputPath: string, jobArgs: string[], outputExt: string, callbacks: ReencodeCallbacks): StartResult {
     const dir = path.dirname(inputPath);
     const baseName = path.basename(inputPath, path.extname(inputPath));
-    const outputPath = getUniqueSiblingPath(dir, baseName, 'mp4');
+    const outputPath = getUniqueSiblingPath(dir, baseName, outputExt);
     const jobId = randomUUID();
 
     // Fire-and-forget: probe duration then spawn. We don't await here so that
     // `start()` returns the jobId/outputPath synchronously to the caller.
-    this._runJob(jobId, inputPath, outputPath, callbacks).catch((err) => {
+    this._runJob(jobId, inputPath, outputPath, jobArgs, callbacks).catch((err) => {
       // If _runJob itself throws before registering the child (unlikely), forward to onError.
       callbacks.onError(err instanceof Error ? err : new Error(String(err)));
     });
@@ -157,22 +163,21 @@ export class ReEncodeManager {
     jobId: string,
     inputPath: string,
     outputPath: string,
+    jobArgs: string[],
     callbacks: ReencodeCallbacks,
   ): Promise<void> {
     // Step 1: probe source duration (best-effort; indeterminate on failure).
     const totalSec = await this._probeDuration(inputPath);
 
     // Step 2: spawn ffmpeg.
-    // Codec args (-c:a copy -c:v libx264) are preserved verbatim per INV-018.
+    // jobArgs (codec/filter args) are provided verbatim by the caller (job-spec map in main.ts).
+    // Only transport/progress flags are added around them here.
     // -y is safe because outputPath was freshly computed to be collision-free.
     const ffmpegArgs = [
       '-hide_banner',
       '-i',
       inputPath,
-      '-c:a',
-      'copy',
-      '-c:v',
-      'libx264',
+      ...jobArgs,
       '-progress',
       'pipe:1',
       '-nostats',

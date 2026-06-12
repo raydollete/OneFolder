@@ -24,8 +24,27 @@ import {
   getSqliteDbPath,
 } from '../common/library-registry';
 import { MainMessenger } from './ipc/main';
-import { WindowSystemButtonPress } from './ipc/messages';
+import { WindowSystemButtonPress, MediaJobType } from './ipc/messages';
 import { reEncodeManager } from './ReEncodeManager';
+
+// ---------------------------------------------------------------------------
+// Media job specs — map each job type to its ffmpeg codec/filter args and the
+// output file extension.  Only transport flags (-hide_banner, -progress, etc.)
+// are added by ReEncodeManager; these args are passed verbatim per INV-018/INV-020.
+// ---------------------------------------------------------------------------
+const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string }> = {
+  'reencode-x264': {
+    args: ['-c:a', 'copy', '-c:v', 'libx264'],
+    outputExt: 'mp4',
+  },
+  'normalize-audio': {
+    // -c:v copy: pass the video stream through untouched (user's 2026-06-11 amendment).
+    // -filter:a dynaudnorm=p=0.9:s=5: re-encode only the audio with dynamic normalization.
+    // The filter string is a single argument — spawn() runs without a shell, no quoting needed.
+    args: ['-c:v', 'copy', '-filter:a', 'dynaudnorm=p=0.9:s=5'],
+    outputExt: 'mp4',
+  },
+};
 
 // Portable mode detection — must run before any app.getPath() calls so that
 // app.setPath('userData') takes effect for all subsequent consumers.
@@ -870,19 +889,20 @@ MainMessenger.onIsCheckUpdatesOnStartupEnabled(() => preferences.checkForUpdates
 
 MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 
-// Re-encode (x264) IPC handlers — wired to ReEncodeManager (TASK-075 / TASK-076).
+// Media job IPC handlers — wired to ReEncodeManager (parameterized by job type, INV-020).
 //
-// START_REENCODE: the renderer invokes this and awaits a promise that resolves
-// with { outputPath } when the encode finishes, or rejects on failure/cancel.
-// The first REENCODE_PROGRESS event carries the jobId so the renderer can call
-// CANCEL_REENCODE if the user clicks cancel (see TASK-078).
-MainMessenger.onStartReencode((wc, inputPath) => {
+// START_MEDIA_JOB: the renderer invokes this and awaits a promise that resolves
+// with { outputPath } when the job finishes, or rejects on failure/cancel.
+// The first MEDIA_JOB_PROGRESS event carries the jobId so the renderer can call
+// CANCEL_MEDIA_JOB if the user clicks cancel.
+MainMessenger.onStartMediaJob((wc, { inputPath, jobType }) => {
+  const spec = MEDIA_JOB_SPECS[jobType];
   return new Promise<{ outputPath: string }>((resolve, reject) => {
-    const { jobId, outputPath } = reEncodeManager.start(inputPath, {
+    const { jobId, outputPath } = reEncodeManager.start(inputPath, spec.args, spec.outputExt, {
       onProgress: (progress) => {
-        // Guard against a destroyed WebContents (e.g. window closed mid-encode).
+        // Guard against a destroyed WebContents (e.g. window closed mid-job).
         if (!wc.isDestroyed()) {
-          MainMessenger.sendReencodeProgress(wc, {
+          MainMessenger.sendMediaJobProgress(wc, {
             jobId: progress.jobId,
             percent: progress.percent,
             outTimeSec: progress.outTimeSec,
@@ -894,14 +914,14 @@ MainMessenger.onStartReencode((wc, inputPath) => {
       onError: (err) => reject(err),
       // Rejection with a distinguishable message lets the renderer treat cancel
       // differently from a hard failure (no toast, just unlock the UI).
-      onCancelled: () => reject(new Error('REENCODE_CANCELLED')),
+      onCancelled: () => reject(new Error('MEDIA_JOB_CANCELLED')),
     });
 
     // Emit the very first progress event immediately so the renderer receives
-    // the jobId before any real encode progress arrives.  This allows TASK-078's
+    // the jobId before any real encode progress arrives.  This allows the
     // cancel button to stash the jobId without waiting for the first encode frame.
     if (!wc.isDestroyed()) {
-      MainMessenger.sendReencodeProgress(wc, {
+      MainMessenger.sendMediaJobProgress(wc, {
         jobId,
         percent: 0,
         outTimeSec: 0,
@@ -913,8 +933,8 @@ MainMessenger.onStartReencode((wc, inputPath) => {
   });
 });
 
-// CANCEL_REENCODE: renderer sends the jobId it received from the first progress event.
-MainMessenger.onCancelReencode((jobId) => {
+// CANCEL_MEDIA_JOB: renderer sends the jobId it received from the first progress event.
+MainMessenger.onCancelMediaJob((jobId) => {
   reEncodeManager.cancel(jobId);
 });
 

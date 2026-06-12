@@ -224,10 +224,11 @@ class UiStore {
   @observable isManyExternalFilesOpen: boolean = false;
 
   /**
-   * The source file for the delete-original prompt shown after a successful re-encode (TASK-079).
+   * The source file for the delete-original prompt shown after a successful media job (TASK-079 / INV-020).
    * null means the prompt is closed; a ClientFile value opens the prompt for that file.
+   * Shared by all tools that produce a derived output (Re-encode, Normalize Audio, etc.).
    */
-  @observable reEncodeDeleteOriginalFile: ClientFile | null = null;
+  @observable deleteOriginalAfterJobFile: ClientFile | null = null;
 
   /**
    * Media-processing lock: set while a long-running file operation (e.g. re-encode) is in
@@ -613,15 +614,16 @@ class UiStore {
   }
 
   /**
-   * Opens the delete-original prompt for the given source file after a successful re-encode.
-   * TASK-079 renders the actual Alert; this flag is the integration point.
+   * Opens the delete-original prompt for the given source file after a successful media job.
+   * Shared by all tools that produce a derived output (Re-encode, Normalize Audio, etc.).
+   * The actual Alert is rendered by DeleteOriginalAfterJob in RemovalAlert.tsx.
    */
-  @action.bound openReEncodeDeleteOriginal(file: ClientFile): void {
-    this.reEncodeDeleteOriginalFile = file;
+  @action.bound openDeleteOriginalPrompt(file: ClientFile): void {
+    this.deleteOriginalAfterJobFile = file;
   }
 
-  @action.bound closeReEncodeDeleteOriginal(): void {
-    this.reEncodeDeleteOriginalFile = null;
+  @action.bound closeDeleteOriginalPrompt(): void {
+    this.deleteOriginalAfterJobFile = null;
   }
 
   /** True while a media-processing operation owns the current file (e.g. re-encode in flight). */

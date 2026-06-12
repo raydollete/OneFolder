@@ -185,32 +185,85 @@ lock-leak.
 
 ---
 
-## Ingestion-Await and Tag Copy
+## Watcher Ingestion of Encode Outputs
 
-After a successful encode, the renderer:
+The folder watcher (`src/frontend/workers/folderWatcher.worker.ts`) uses
+chokidar's `awaitWriteFinish` option:
 
-1. Calls `fileStore.waitForIngestedFile(outputPath, 10000)` — a MobX
-   `reaction` on `fileStore.fileList` that resolves when the watcher's `chokidar
-   add` event causes the output to appear as a `ClientFile`, with a 10-second
-   timeout.  If the timeout fires (output folder not inside a watched location),
-   a toast "Encoded to \<path\> but it is outside a watched folder; tags not
-   attached" is shown and the encode is considered done without tag copy.
+```typescript
+awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 100 },
+```
 
-2. Calls `fileStore.copyTagsToFile(source, newFile)` — writes the source's tag
-   hierarchy to the output file's EXIF/XMP metadata via ExifTool and adds the
-   same `ClientTag` objects to the output `ClientFile` under
-   `disableImmediateSync()` to avoid a redundant double-write.
+This defers the `add` event until the file has not changed size for 2000 ms,
+ensuring the encode output is ingested only once ffmpeg has fully written it.
+Without this, the watcher fires `add` the moment ffmpeg creates the output
+(while still writing), capturing a partial `stats.size` and `0×0` dimensions
+that are never corrected (the `change` handler is intentionally commented out).
+Chromium would then issue a byte-range request for a range beyond the partial
+file's length, yielding `net::ERR_REQUEST_RANGE_NOT_SATISFIABLE` (INV-019).
 
-3. Calls `uiStore.selectFile(newFile, true)` and `uiStore.enableSlideMode()` to
-   auto-open the output in the viewer.
+The 2000 ms threshold also applies to manually dropped/imported files, adding up
+to ~2 s latency before a new drag-and-drop file appears in the library — an
+acceptable tradeoff for correct size and dimensions on every ingested file.
+Because the `finalizeEncodedOutput` helper (below) polls the DB for the output
+row (bounded ~3 s), the extra stabilization delay is already within that budget.
+
+---
+
+## Post-Encode Finalization (Ingestion, Tag Copy, and Selection)
+
+After a successful encode, the renderer calls
+`fileStore.finalizeEncodedOutput(source, outputPath)`, which runs the corrected
+post-encode order (INV-019):
+
+1. **DB-level tag copy first** (`copyTagsToOutputPath`) — because
+   `awaitWriteFinish` is active, chokidar `add` fires only after the file has
+   stopped growing (i.e. after the encode finishes, plus up to 2 s stabilization).
+   `copyTagsToOutputPath` polls the DB for up to ~3 s — covering the
+   stabilization window — waiting for the row to be created.  Tags are then
+   written onto the DTO via the backend by path, without requiring the output to
+   be in the view-dependent `fileList`.  This is mandatory: in a tag-filtered
+   view the tag-less output never matches the filter, so it could not enter
+   `fileList` until tagged.  `fileList` is a view model (the result of the active
+   search query), **not** a complete file index.  Tags are also written to
+   EXIF/XMP exactly once here.  Zero-tag sources skip the EXIF/XMP write
+   entirely.
+
+2. **Immediate refetch** (`refetch()`) — re-runs the active query so the
+   now-tagged output can enter `fileList` if it matches the current filter.
+
+3. **Bounded wait** (`waitForIngestedFile(outputPath, 10000)`) — a MobX
+   `reaction` on `fileList` that resolves when the output appears.  Because tags
+   were already copied, a tag-filtered view now accepts it; the wait should
+   succeed in the common case.
+
+4. **Select and open** — `selectFile(newFile, true)` + `enableSlideMode()`.
+
+5. **Graceful fallback** when the output is still not visible (e.g. a display
+   filter other than tags excludes it, or ingestion is delayed): clear the active
+   search (`clearSearchCriteriaList()`, which switches to all-content), then
+   retry the wait with a 3-second timeout.  If the output appears, select and
+   open; otherwise show an honest toast that states the observable fact and
+   offers causes as possibilities (docs/TOOLS.md rule 4).  Because tags are
+   copied in step 1 before the wait, the toast can also confirm that tagging
+   succeeded:
+   - *Tags copied:* "Re-encoded to &lt;path&gt; and copied your tags, but it is not
+     visible in the current view. It may be excluded by the active filter, or
+     outside a watched folder."
+   - *Row not found:* "Re-encoded to &lt;path&gt;, but it is not visible in the
+     current view. It may be excluded by the active filter, outside a watched
+     folder, or ingestion may still be in progress."
+   The toast never asserts "outside a watched folder" as the sole cause — that
+   is unverified (rule 4).
 
 ---
 
 ## Delete-Original Prompt
 
-`ReEncodeDeleteOriginal` (in `src/frontend/components/RemovalAlert.tsx`) is
-a modal driven by `uiStore.reEncodeDeleteOriginalFile`.  It reuses the same
-trash flow as `MoveFilesToTrashBin`:
+`DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is
+a modal driven by `uiStore.deleteOriginalAfterJobFile`.  It reuses the same
+trash flow as `MoveFilesToTrashBin` and is shared by all tools that produce a
+derived output (Re-encode, Normalize Audio, etc.) — INV-020 / TASK-086:
 
 1. `mediaReleaseCoordinator.releasePaths([source.absolutePath])` — release any
    open `<video>` element handles (INV-008).
@@ -232,8 +285,8 @@ The component is mounted in `ContentView/index.tsx` alongside
 | ffmpeg exits non-zero | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
 | User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast |
 | App quits mid-encode | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
-| Output not ingested (timeout) | Toast: "Encoded to \<path\> but it is outside a watched folder; tags not attached"; lock released; source untouched |
-| Source already deleted | `handleConfirm` no-ops if `source === null`; defensive guard in `ReEncodeDeleteOriginal` |
+| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; fallback clears filter and retries; if still absent: honest toast stating the observable fact and offering causes as possibilities — never asserts "outside a watched folder" as the sole cause (docs/TOOLS.md rule 4); lock released; source untouched |
+| Source already deleted | `handleConfirm` no-ops if `source === null`; defensive guard in `DeleteOriginalAfterJob` |
 | ffprobe duration probe fails | Encode proceeds; spinner runs in indeterminate mode |
 
 ---
@@ -263,4 +316,4 @@ distribution.  This mirrors the `brave.exe` rename caveat in
 - TASK-076 — IPC channels (`START_REENCODE`, `REENCODE_PROGRESS`, `CANCEL_REENCODE`)
 - TASK-077 — UI lock, `waitForIngestedFile`, `copyTagsToFile`
 - TASK-078 — `ImageTools.tsx` orchestration
-- TASK-079 — `ReEncodeDeleteOriginal` modal
+- TASK-079 — `DeleteOriginalAfterJob` modal (originally `ReEncodeDeleteOriginal`; generalized by TASK-086)

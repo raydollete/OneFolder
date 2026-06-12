@@ -257,15 +257,15 @@ export const MoveFilesToTrashBin = observer(() => {
 });
 
 /**
- * Modal that appears after a successful re-encode, asking whether to delete
- * the original source file. Mirrors MoveFilesToTrashBin's handle-release ->
- * recyclable-check -> trashFile/deleteFilePermanently -> fileStore.deleteFiles
- * flow (INV-008, INV-014) so the deletion behaviour is exactly consistent with
- * the regular trash flow. (TASK-079 / INV-018)
+ * Modal that appears after a successful media job (re-encode, normalize audio, etc.),
+ * asking whether to delete the original source file. Mirrors MoveFilesToTrashBin's
+ * handle-release -> recyclable-check -> trashFile/deleteFilePermanently ->
+ * fileStore.deleteFiles flow (INV-008, INV-014) so the deletion behaviour is exactly
+ * consistent with the regular trash flow. (TASK-079 / INV-018 / INV-020)
  */
-export const ReEncodeDeleteOriginal = observer(() => {
+export const DeleteOriginalAfterJob = observer(() => {
   const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
-  const source = uiStore.reEncodeDeleteOriginalFile;
+  const source = uiStore.deleteOriginalAfterJobFile;
   const isOpen = source !== null;
 
   // Determine recyclability as soon as the modal opens.
@@ -297,10 +297,10 @@ export const ReEncodeDeleteOriginal = observer(() => {
 
   const handleConfirm = action(async () => {
     if (source === null) {
-      uiStore.closeReEncodeDeleteOriginal();
+      uiStore.closeDeleteOriginalPrompt();
       return;
     }
-    uiStore.closeReEncodeDeleteOriginal();
+    uiStore.closeDeleteOriginalPrompt();
 
     // Release any open <video> handles before touching the file (INV-008).
     await mediaReleaseCoordinator.releasePaths([source.absolutePath]);
@@ -314,7 +314,7 @@ export const ReEncodeDeleteOriginal = observer(() => {
       fileStore.deleteFiles([source]);
       if (isPermanent) {
         AppToaster.show({
-          message: `Original permanently deleted (no Recycle Bin on that drive).`,
+          message: 'Original permanently deleted (no Recycle Bin on that drive).',
           timeout: 5000,
         });
       }
@@ -336,10 +336,10 @@ export const ReEncodeDeleteOriginal = observer(() => {
   });
 
   const bodyText = isPermanent
-    ? `The re-encoded copy was saved. Permanently delete the original "${
+    ? `A new copy was saved. Permanently delete the original "${
         source?.name ?? ''
       }"? (This drive has no Recycle Bin — this cannot be undone.)`
-    : `The re-encoded copy was saved. Delete the original "${
+    : `A new copy was saved. Delete the original "${
         source?.name ?? ''
       }"? It will be moved to the Recycle Bin.`;
 
@@ -356,7 +356,7 @@ export const ReEncodeDeleteOriginal = observer(() => {
         if (button === DialogButton.PrimaryButton) {
           handleConfirm();
         } else {
-          uiStore.closeReEncodeDeleteOriginal();
+          uiStore.closeDeleteOriginalPrompt();
         }
       }}
     >

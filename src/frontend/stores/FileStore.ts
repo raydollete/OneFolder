@@ -1074,7 +1074,9 @@ class FileStore {
       // freshly-ingested untagged file while a search/filter is active. A stale badge is
       // recoverable (next all-content refetch rewrites it); throwing here aborts the
       // caller's whole operation, so clamp instead.
-      console.warn('numUntaggedFiles would go below 0; leaving at 0 (stale counter in filtered view)');
+      console.warn(
+        'numUntaggedFiles would go below 0; leaving at 0 (stale counter in filtered view)',
+      );
       return;
     }
     this.numUntaggedFiles--;
@@ -1246,8 +1248,8 @@ class FileStore {
         disposer();
         reject(
           new Error(
-            `waitForIngestedFile: timed out after ${timeoutMs} ms waiting for "${absolutePath}". ` +
-              'The file may be outside a watched location.',
+            `waitForIngestedFile: "${absolutePath}" was not detected in the current view within ` +
+              `${timeoutMs} ms. It may not match the active filter, or it may be outside a watched location.`,
           ),
         );
       }, timeoutMs);
@@ -1288,6 +1290,210 @@ class FileStore {
 
     // Re-enable sync and flush: writes the full tag set to the target file's EXIF/XMP exactly once.
     await reenable();
+  }
+
+  /**
+   * DB-level tag copy used by the corrected post-encode flow (INV-019).
+   *
+   * Copies the source ClientFile's tags onto the freshly-encoded output identified
+   * by absolute path, WITHOUT requiring the output to be present in the
+   * view-dependent `fileList`. It resolves the output's FileDTO directly from the
+   * backend by absolute path, sets the source's tag ids on the DTO, persists it,
+   * and writes EXIF/XMP exactly once.
+   *
+   * IMPORTANT: This method writes EXIF/XMP metadata for the output file. Do NOT
+   * pair it with any other metadata write for the same file — that would
+   * double-write. The corrected post-encode flow calls only this method for tag
+   * copy (never also calling copyTagsToFile for the same output).
+   *
+   * @param source      The ClientFile whose tags should be copied.
+   * @param outputPath  Absolute path of the freshly-encoded output (win32
+   *                    backslash form from the main process is acceptable — path
+   *                    normalization is handled internally).
+   * @returns `true` if the DB row was found and tagged; `false` if the row never
+   *          appeared after the bounded poll (output is likely outside any watched
+   *          location). Never throws on a missing row.
+   */
+  async copyTagsToOutputPath(source: ClientFile, outputPath: string): Promise<boolean> {
+    // --- Path normalization for DB lookup ---
+    // The DB stores absolutePath in forward-slash form (the folder watcher normalizes
+    // its watch root to '/'; chokidar emits forward-slash paths on all platforms).
+    // The main-process-computed outputPath uses win32 backslashes (path.join in
+    // common/fs.ts getUniqueSiblingPath). We must query with the form the DB stored.
+    //
+    // Strategy: primary query uses forward-slash form; if that returns nothing, fall
+    // back to the raw outputPath (covers edge cases where the OS watcher stored it
+    // differently). If multiple candidates are returned, compare case-insensitively
+    // in JS (Windows paths are case-insensitive).
+    const forwardSlashPath = outputPath.replace(/\\/g, '/');
+    const normalizedForSearch = forwardSlashPath.toLowerCase();
+
+    const findDtoInResults = (results: FileDTO[]): FileDTO | undefined =>
+      results.find((f) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === normalizedForSearch);
+
+    // --- Bounded poll for the DB row ---
+    // The DB row is created by chokidar add -> LocationStore.addFile -> backend.createFilesFromPath
+    // via the watcher worker round-trip, which can lag behind ffmpeg completion slightly.
+    // Poll up to ~3 s (15 × 200 ms) before giving up.
+    const MAX_POLLS = 15;
+    const POLL_INTERVAL_MS = 200;
+
+    let dto: FileDTO | undefined;
+
+    for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+      // Primary: query with the forward-slash form (matches DB storage).
+      const primaryResults = await this.backend.fetchFilesByKey('absolutePath', forwardSlashPath);
+      dto = findDtoInResults(primaryResults);
+
+      if (!dto && primaryResults.length === 0) {
+        // Fallback: try the raw outputPath as stored (handles any edge case where
+        // the watcher stored a non-normalized form).
+        const fallbackResults = await this.backend.fetchFilesByKey('absolutePath', outputPath);
+        dto = findDtoInResults(fallbackResults);
+      }
+
+      if (dto) {
+        break;
+      }
+
+      // Row not yet present — wait and retry.
+      await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+
+    if (!dto) {
+      // Row never appeared after the full poll budget. The output may be genuinely
+      // outside any watched location, or ingestion failed. Return false — do NOT throw.
+      return false;
+    }
+
+    // --- Set the source's tags on the DTO and persist ---
+    // Write raw tag ids (ID[]) onto the DTO, matching the FileDTO.tags field shape.
+    // Do NOT mutate numUntaggedFiles or any derived counter here — the subsequent
+    // refetch reconciles the view (docs/TOOLS.md rule 2).
+    const tagIds = Array.from(source.tags, (t) => t.id);
+    dto.tags = tagIds;
+    await this.backend.saveFiles([dto]);
+
+    // --- Write EXIF/XMP exactly once ---
+    // Build the tag path hierarchy from the source's ClientTag objects (each t.path
+    // is string[], so the result is string[][], matching exifTool.writeTags signature).
+    // Skip entirely for zero-tag sources: writing an empty array would clear metadata
+    // on a brand-new file, and there is nothing to copy anyway.
+    const hierarchy = Array.from(source.tags, (t) => t.path);
+    if (hierarchy.length > 0) {
+      // Use the original outputPath (win32 backslashes) for the filesystem write —
+      // ExifTool operates on the real OS path, not the DB-normalized form.
+      await this.rootStore.exifTool.writeTags(outputPath, hierarchy);
+    }
+
+    return true;
+  }
+
+  /**
+   * Reusable post-encode finalization helper (INV-019).
+   *
+   * Runs the corrected post-encode order so that tag copy is never gated on the
+   * file being present in the view-dependent `fileList`:
+   *
+   *   A. Copy tags at the DB level (no `fileList` required).
+   *   B. Refetch the active view so the now-tagged output can enter `fileList`.
+   *   C. Wait (bounded, 10 s) for the output to appear in `fileList`.
+   *   D. On success: select the output and enable SlideMode.
+   *   E. On still-not-visible: clear the active search/filter, refetch as
+   *      all-content, and retry once with a short timeout (~3 s). If the output
+   *      appears, select + slide mode. If it still does not appear, show an
+   *      honest toast (never "outside a watched folder" — that was unverified).
+   *
+   * Tags are always copied (step A runs regardless of the active view), so no
+   * tagging work is lost even when the fallback path fires.
+   *
+   * The caller (ImageTools.tsx handleReencode) retains the `try/finally` that
+   * releases the media-processing lock — this method does NOT call
+   * `endMediaProcessing`. The delete-original prompt is also the caller's
+   * responsibility, placed AFTER this method returns.
+   *
+   * This helper is the single reusable entry point that INV-020 (Normalize
+   * Audio) also uses — do not inline a duplicate in each tool.
+   *
+   * @param source      The source ClientFile whose tags should be copied.
+   * @param outputPath  Absolute path of the freshly-encoded output (win32
+   *                    backslash form from the main process is acceptable).
+   */
+  @action.bound async finalizeEncodedOutput(source: ClientFile, outputPath: string): Promise<void> {
+    // --- Step A: copy tags at the DB level ---
+    // Runs regardless of the active filter: the output row exists in the DB
+    // (ingested by chokidar add at encode start) and is tagged via the backend,
+    // so no ClientFile from fileList is required. Returns true when the row was
+    // found and tagged; false when the row was absent after the bounded poll
+    // (output outside a watched location or ingestion genuinely failed).
+    const tagged = await this.copyTagsToOutputPath(source, outputPath);
+
+    // --- Step B: refetch the active view ---
+    // The now-tagged output matches a tag filter; an immediate refetch (not
+    // debouncedRefetch) lets the subsequent wait start with a fresh fileList
+    // rather than racing the 200 ms debounce.
+    await this.refetch();
+
+    // --- Step C: wait for the output ClientFile ---
+    // Because tags were copied in step A, a tag-filtered view can now return
+    // this file. The wait should succeed in the common case.
+    let newFile: ClientFile | null = null;
+    try {
+      newFile = await this.waitForIngestedFile(outputPath, 10000);
+    } catch {
+      newFile = null;
+    }
+
+    // --- Step D: on success, select and open ---
+    if (newFile !== null) {
+      this.rootStore.uiStore.selectFile(newFile, true);
+      this.rootStore.uiStore.enableSlideMode();
+      return;
+    }
+
+    // --- Step E: graceful fallback ---
+    // The output is still not visible. This can happen when a display filter
+    // other than tags excludes it (e.g. the "videos only" preference is off
+    // after encoding an audio-only file) or when ingestion genuinely failed.
+    // Strategy: clear the active search criteria (switches to all-content) so
+    // any filter-based exclusion is lifted, then retry with a shorter timeout.
+    // We do NOT assert "outside a watched folder" — that is unverified.
+    // Note: clearSearchCriteriaList() calls viewAllContent() -> fetchAllFiles()
+    // internally, so no separate refetch() is needed here.
+    this.rootStore.uiStore.clearSearchCriteriaList();
+
+    let retryFile: ClientFile | null = null;
+    try {
+      retryFile = await this.waitForIngestedFile(outputPath, 3000);
+    } catch {
+      retryFile = null;
+    }
+
+    if (retryFile !== null) {
+      this.rootStore.uiStore.selectFile(retryFile, true);
+      this.rootStore.uiStore.enableSlideMode();
+      return;
+    }
+
+    // Still not visible after clearing all filters. Show an honest toast.
+    // `tagged` tells us whether the DB row was found and written, which lets
+    // us give a more accurate description to the user.
+    if (tagged) {
+      AppToaster.show({
+        message:
+          `Re-encoded to ${outputPath} and copied your tags, ` +
+          'but it is not visible in the current view. ' +
+          'It may be excluded by the active filter, or outside a watched folder.',
+        timeout: 8000,
+      });
+    } else {
+      AppToaster.show({
+        message:
+          `Re-encoded to ${outputPath}, but it is not visible in the current view. ` +
+          'It may be excluded by the active filter, outside a watched folder, or ingestion may still be in progress.',
+        timeout: 8000,
+      });
+    }
   }
 
   getPersistentPreferences(): Partial<Record<keyof FileStore, unknown>> {

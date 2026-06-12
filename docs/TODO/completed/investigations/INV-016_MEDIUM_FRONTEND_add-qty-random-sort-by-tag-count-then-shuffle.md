@@ -3,7 +3,7 @@ id: INV-016
 title: "Add a 'Qty Random' sort that orders files by ascending tag count, then randomizes files that share the same tag count"
 reported_bug: "Feature request: add an additional sort method called 'Qty Random' which first sorts by quantity of tags in ascending order, and then randomizes anything that has the same number of tags."
 date: 2026-06-08
-status: active # active | tasks-created | superseded
+status: resolved # active | tasks-created | superseded | resolved
 superseded_by:
 tasks_spawned: [TASK-066, TASK-067, TASK-068]
 root_cause_category: architectural-shortcoming

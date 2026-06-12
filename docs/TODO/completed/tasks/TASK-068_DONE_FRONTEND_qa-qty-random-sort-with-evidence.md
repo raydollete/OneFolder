@@ -2,11 +2,11 @@
 id: TASK-068
 title: "QA the 'Qty Random' sort end-to-end with captured evidence"
 investigation: INV-016
-status: in-progress # planned | in-progress | blocked | done
+status: done # planned | in-progress | blocked | done
 priority: medium # critical | high | medium | low
 blocked_by: [TASK-066, TASK-067]
 date_created: 2026-06-08
-date_completed:
+date_completed: 2026-06-12
 files:
   - src/frontend/containers/AppToolbar/Menus.tsx
   - src/backend/sqlite-backend.ts
@@ -39,6 +39,14 @@ Performed by the implementation agent prior to handing off to human QA:
 - **onClick logic review:** `orderBy === prop && !hideDirection` correctly routes re-clicks:
   - `hideDirection` items (Random, Qty Random): `!hideDirection` is false → `orderFilesBy(prop)` called → re-fetch/re-roll.
   - Column sort items (`hideDirection` is `undefined`/falsy): `!hideDirection` is true → `switchOrderDirection()` called → same as before.
+
+## QA Result (2026-06-12)
+
+The human QA executor (Ray) confirmed on 2026-06-12 that INV-016 was manually
+tested in the running app and works as specified. The individual checkboxes
+below are left unticked because no captured artifacts (screenshots/clips) were
+attached to this file; the user's direct attestation in-session is the
+recorded evidence of completion, consistent with how TASK-064 was closed.
 
 ## Implementation Steps
 

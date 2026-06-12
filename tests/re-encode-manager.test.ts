@@ -170,7 +170,7 @@ describe('ReEncodeManager functional encode', () => {
 
     const result = await new Promise<import('../src/ReEncodeManager').ReencodeResult>(
       (resolve, reject) => {
-        manager.start(inputPath, {
+        manager.start(inputPath, ['-c:a', 'copy', '-c:v', 'libx264'], 'mp4', {
           onProgress: (p) => progressEvents.push(p),
           onDone: resolve,
           onError: reject,
@@ -206,7 +206,7 @@ describe('ReEncodeManager functional encode', () => {
     const inputPath = path.join(tmpDir, 'ghost.mp4');
 
     const err = await new Promise<Error>((resolve, reject) => {
-      manager.start(inputPath, {
+      manager.start(inputPath, ['-c:a', 'copy', '-c:v', 'libx264'], 'mp4', {
         onProgress: () => {/* ignore */},
         onDone: () => reject(new Error('Expected onError, got onDone')),
         onError: resolve,
@@ -235,7 +235,7 @@ describe('ReEncodeManager functional encode', () => {
     let cancelFired = false;
 
     const outcome = await new Promise<'cancelled' | 'done' | 'error'>((resolve) => {
-      const { jobId } = manager.start(inputPath, {
+      const { jobId } = manager.start(inputPath, ['-c:a', 'copy', '-c:v', 'libx264'], 'mp4', {
         onProgress: () => {
           // Cancel on the first progress event (mid-encode).
           if (jobIdRef !== undefined && !cancelFired) {

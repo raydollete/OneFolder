@@ -3,7 +3,7 @@ id: INV-017
 title: 'Add a persistent "Video Only" filter toggle to the right of the tag search input'
 reported_bug: 'To the right of the tag input element, add a checkbox labeled "Video Only" whose state persists on restart. When checked, the results are filtered to only show videos.'
 date: 2026-06-11
-status: active # active | tasks-created | superseded
+status: resolved # active | tasks-created | superseded | resolved
 superseded_by:
 tasks_spawned: [TASK-069, TASK-070, TASK-071, TASK-072, TASK-073]
 root_cause_category: missing-edge-case # feature request — no pre-existing affordance for media-type filtering

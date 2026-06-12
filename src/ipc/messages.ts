@@ -143,15 +143,24 @@ export type DeleteLibraryAndFilesResult = {
   failedPaths: { path: string; error: string }[];
 };
 
-//////////////// Re-encode (x264) job ////////////////
-export const START_REENCODE = 'START_REENCODE';
-export const REENCODE_PROGRESS = 'REENCODE_PROGRESS';
-export const CANCEL_REENCODE = 'CANCEL_REENCODE';
+//////////////// Media job (re-encode, normalize audio, …) ////////////////
+export const START_MEDIA_JOB = 'START_MEDIA_JOB';
+export const MEDIA_JOB_PROGRESS = 'MEDIA_JOB_PROGRESS';
+export const CANCEL_MEDIA_JOB = 'CANCEL_MEDIA_JOB';
 
-/** Live progress event pushed from main to renderer during an ffmpeg encode. */
-export type ReencodeProgressMessage = {
+/** Discriminator for all supported ffmpeg job types. */
+export type MediaJobType = 'reencode-x264' | 'normalize-audio';
+
+/** Payload for a START_MEDIA_JOB invoke. */
+export type StartMediaJobMessage = {
+  inputPath: string;
+  jobType: MediaJobType;
+};
+
+/** Live progress event pushed from main to renderer during an ffmpeg job. */
+export type MediaJobProgressMessage = {
   jobId: string;
-  /** Encode progress 0–100, or undefined when total duration is unknown. */
+  /** Job progress 0–100, or undefined when total duration is unknown. */
   percent?: number;
   /** Encoded seconds so far (from ffmpeg out_time_ms). */
   outTimeSec?: number;
@@ -159,7 +168,7 @@ export type ReencodeProgressMessage = {
   totalSec?: number;
 };
 
-/** Returned by the START_REENCODE invoke when the encode completes successfully. */
-export type ReencodeResult = {
+/** Returned by the START_MEDIA_JOB invoke when the job completes successfully. */
+export type MediaJobResult = {
   outputPath: string;
 };
