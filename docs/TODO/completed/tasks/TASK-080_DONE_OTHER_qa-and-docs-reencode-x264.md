@@ -2,11 +2,11 @@
 id: TASK-080
 title: 'QA the re-encode (x264) tool end-to-end on the Windows portable build and document the feature'
 investigation: INV-018
-status: in-progress
+status: done
 priority: medium
 blocked_by: [TASK-074, TASK-075, TASK-076, TASK-077, TASK-078, TASK-079]
 date_created: 2026-06-11
-date_completed:
+date_completed: 2026-06-12
 files:
   - 'docs/reencode-x264.md (new)'
   - 'docs/index.md (link the new doc)'
@@ -85,6 +85,33 @@ See [INV-018](../investigations/INV-018_MEDIUM_FRONTEND_reencode-x264-video-tool
       cross-reference in `docs/personal-fork-notes.md` (second bundled binary +
       licensing deviation). Also added a full "ffmpeg / libx264 licensing caveat"
       section to personal-fork-notes.md, parallel to the antivirus/naming caveat.
+
+## QA Resolution (2026-06-12)
+
+Closed by user sign-off rather than by a formal screenshot-per-step matrix. The
+individual `REQUIRES MANUAL EXECUTION ON WINDOWS` boxes (steps 2–10) were NOT
+ticked with discrete captured evidence and are intentionally left `[ ]` to avoid
+recording evidence that does not exist (per QA-DISCIPLINE.md rule 1, only the
+human may tick them with evidence).
+
+Basis for resolution:
+
+- The feature was exercised in real-world use on the Windows build by the user.
+- That real use surfaced a genuine post-encode order-of-operations race
+  ([INV-019](../../completed/investigations/INV-019_HIGH_FRONTEND_post-encode-tag-copy-race-filtered-view.md):
+  the re-encode output never entered `fileList` in a tag-filtered view, so
+  `waitForIngestedFile` timed out and falsely reported "outside a watched
+  folder"). INV-019 is resolved and its fixes (TASK-081–084, all DONE) shipped.
+  A bug only reachable by running the tool end-to-end — and its fix — is direct
+  evidence the happy path, ingestion-await, tag-copy, and select/open chain were
+  actually executed against real files.
+- The user reviewed the state on 2026-06-12 and confirmed the feature is
+  resolved.
+
+This deviates from the strict evidence rule by design and with explicit user
+authorization. If any regression is later found, per QA-DISCIPLINE.md rule 4 the
+relevant steps should be re-opened and re-executed from the first unverified
+step.
 
 ## Done When
 

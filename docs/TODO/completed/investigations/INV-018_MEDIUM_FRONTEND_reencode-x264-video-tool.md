@@ -3,7 +3,7 @@ id: INV-018
 title: 'Add a "Re-encode (x264)" video tool to the inspector that shells out to ffmpeg, copies tags to the output, auto-opens the result, prompts to delete the original, and locks the UI while running'
 reported_bug: 'Feature request: When viewing a video, the right-side inspector "Tools" section should offer a "Re-encode (x264)" tool. Clicking it runs `ffmpeg -i [input] -c:a copy -c:v libx264 [output]`, writes a .mp4 next to the source with an auto-incremented name, copies the source file''s tags (DB + EXIF/XMP) onto the output, auto-opens the new file in the player, then pops a modal asking whether to delete the original. While ffmpeg runs, an animated indicator must show progress and the user must not be able to navigate away, edit, or delete the source.'
 date: 2026-06-11
-status: active
+status: resolved
 superseded_by:
 tasks_spawned: [TASK-074, TASK-075, TASK-076, TASK-077, TASK-078, TASK-079, TASK-080]
 root_cause_category: architectural-shortcoming
