@@ -23,3 +23,10 @@ target/
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
+
+# Electron userData runtime state (cache, leveldb, GPU caches, etc.)
+data/
+
+# Scratch/agent task output files
+task*-stdout.txt
+task*-stderr.txt

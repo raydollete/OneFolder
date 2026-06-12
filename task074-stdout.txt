@@ -1,6 +1,0 @@
-
-[TASK-074] getFfmpegPath()  => D:\Dev\OneFolder\resources\ffmpeg\ffmpeg.exe
-[TASK-074] getFfprobePath() => D:\Dev\OneFolder\resources\ffmpeg\ffprobe.exe
-[TASK-074] ffmpeg exists?   => true
-[TASK-074] ffprobe exists?  => true
-Another instance of OneFolder is already running
