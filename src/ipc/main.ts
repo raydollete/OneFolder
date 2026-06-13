@@ -1,7 +1,6 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import {
   ADD_TAGS_TO_FILE,
-  CHECK_FOR_UPDATES,
   CLEAR_DATABASE,
   CLOSED_PREVIEW_WINDOW,
   DRAG_EXPORT,
@@ -17,7 +16,6 @@ import {
   RunInBackgroundMessage,
   StoreFileMessage,
   StoreFileReplyMessage,
-  IS_CHECK_UPDATES_ON_STARTUP_ENABLED,
   IS_CLIP_SERVER_RUNNING,
   IS_FULL_SCREEN,
   IS_MAXIMIZED,
@@ -41,7 +39,6 @@ import {
   STORE_FILE,
   STORE_FILE_REPLY,
   SYSTEM_PATHS,
-  TOGGLE_CHECK_UPDATES_ON_STARTUP,
   TOGGLE_DEV_TOOLS,
   TRASH_FILE,
   DELETE_FILE_PERMANENTLY,
@@ -200,14 +197,6 @@ export class MainMessenger {
 
   static onGetVersion = (cb: () => string) =>
     ipcMain.on(GET_VERSION, (e) => (e.returnValue = cb()));
-
-  static onCheckForUpdates = (cb: () => void) => ipcMain.handle(CHECK_FOR_UPDATES, cb);
-
-  static onToggleCheckUpdatesOnStartup = (cb: () => void) =>
-    ipcMain.on(TOGGLE_CHECK_UPDATES_ON_STARTUP, cb);
-
-  static onIsCheckUpdatesOnStartupEnabled = (cb: () => boolean) =>
-    ipcMain.on(IS_CHECK_UPDATES_ON_STARTUP_ENABLED, (e) => (e.returnValue = cb()));
 
   static onIsPortableMode = (cb: () => boolean) =>
     ipcMain.on(IS_PORTABLE_MODE, (e) => (e.returnValue = cb()));

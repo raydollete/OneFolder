@@ -1,14 +1,14 @@
 ---
 title: Personal Fork Notes
 author: @rjdollete
-last_updated: 2026-04-23
+last_updated: 2026-06-12
 scope: fork
 aliases: ["fork-notes", "brave-rename", "vsr-rename"]
 ---
 
 # Personal Fork Notes
 
-This is a personal, single-user fork of OneFolder. It is not intended for public distribution. Two intentional deviations from upstream are documented here so that future readers (including the author) can understand what looks unusual and why.
+This is a personal, single-user fork of OneFolder. It is not intended for public distribution. The intentional deviations from upstream are documented here so that future readers (including the author) can understand what looks unusual and why.
 
 ## Summary of deviations
 
@@ -19,8 +19,9 @@ This is a personal, single-user fork of OneFolder. It is not intended for public
    This enables the inspector "Re-encode (x264)" tool.  The GPL licensing
    caveat applies — see [Re-encode (x264)](reencode-x264.md) and the
    [Licensing caveat](#ffmpeg--libx264-licensing-caveat) section below.
+4. Upstream-distribution features that do not make sense for a personal single-user fork have been removed: the `electron-updater` auto-update check, the PostHog analytics init, the "File bug report" / "Create Issue" buttons that opened upstream GitHub issues, and the canny.io "vote on our roadmap" feedback links.
 
-Both changes live entirely in `package.json` under the `build` key. No source code is modified.
+Items 1–3 live entirely in `package.json` under the `build` key and require no source code changes. Item 4 touches `src/main.ts`, `src/ipc/`, `src/frontend/`, `common/config.ts`, and `package.json` dependencies.
 
 ## Why `brave.exe`?
 
@@ -56,6 +57,48 @@ The rename is narrowly targeted at the OS-level process basename — the single 
 `build.win.target` is `["portable"]`. The `build.nsis` config block has been removed. `yarn package:portable` (and `yarn package` on Windows) produces a single artifact: `dist/brave.exe`, a self-extracting portable wrapper. There is no `OneFolder Setup *.exe`.
 
 Portable mode is triggered by the presence of a `data/` directory or `portable.txt` alongside the launched binary, per `src/main.ts:40-43`. Auto-updates are gated off in portable mode at `src/main.ts:128`.
+
+## Why are `electron-updater`, PostHog, and canny.io feedback absent?
+
+See [INV-006](TODO/pending_qa/investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-report-and-telemetry-for-personal-fork.md) for the full investigation and blast-radius analysis. This section summarizes the rationale and the update workflow for day-to-day use.
+
+### Motivation
+
+This fork's binary (`brave.exe`) is not distributed through the upstream release channel. Automatic update checks against `github.com/OneFolderApp/OneFolder/releases/latest` would attempt to replace a working `brave.exe` with an upstream `OneFolder.exe`, regressing the VSR rename documented above. The "check for updates" toolbar item in a fork build would steer the user toward downloading the wrong binary.
+
+The fork user is also the sole maintainer. "File bug report" and "Create Issue" buttons that open pre-filled upstream GitHub issues are noise for upstream maintainers who cannot diagnose fork-local changes. Similarly, the canny.io "vote on our roadmap" feedback links in WIP panes point at an upstream product-management portal that has no relevance to a private fork.
+
+PostHog analytics were initialized on every non-dev launch with `posthog.init(...)` followed immediately by a `posthog.capture('my event', ...)`. This sent an event to `https://eu.posthog.com` on every startup — phone-home behavior that is unambiguously wrong for a private single-user build where there is no product to measure.
+
+### What was removed
+
+- `electron-updater` dependency; `autoUpdater` import, startup check, event handlers, and IPC handlers in `src/main.ts`; the three IPC message constants (`CHECK_FOR_UPDATES`, `TOGGLE_CHECK_UPDATES_ON_STARTUP`, `IS_CHECK_UPDATES_ON_STARTUP_ENABLED`) and their messenger methods; the "check for updates" toolbar menu item; `src/frontend/containers/Settings/StartupBehavior.tsx` (dead code, already commented out of the Settings Tabs); `dev-app-update.yml` dev config at the repo root.
+- `createBugReport` helper and `githubUrl` constant from `common/config.ts`; the "File bug report" button from the uncaughtException dialog in `src/main.ts`; the "Create Issue" button from `ErrorBoundary.tsx`; the "💡ideas + 🐞bugs" toolbar item from `SecondaryCommands.tsx`.
+- `posthog-js` dependency; the `posthog.init` / `posthog.capture` block from the `UiStore` constructor.
+- `electron-google-analytics4` dependency (was never imported in any source file; dead code from the start).
+- `package.json` top-level `publish` block (pointed at upstream GitHub releases via `OneFolderApp/OneFolder`).
+- `package.json` `scripts.release` entry (`git add . && git commit ... && git push && git push --tags` — dangerous if `origin` ever points at the upstream repo).
+- Inline canny.io "vote on our roadmap" buttons in `ImageTools.tsx`, `ImageDuplicates.tsx` (component removed entirely), `MapView.tsx`, and `FaceGallery.tsx`; replaced with neutral WIP copy or removed.
+
+### What was intentionally preserved
+
+- The `github.com/OneFolderApp/OneFolder` `ExternalLink` in `About.tsx` — provenance information ("this fork derives from upstream X"), not primary bug-report UX.
+- `package.json` `repository` and `author` fields — standard npm metadata with no runtime effect.
+- The HelpCenter "About OneFolder" section — purely informational content about what the app does.
+- `README.md` — upstream-authored boilerplate. It still references canny.io and upstream feedback links, but it is not runtime code and the fork does not curate it.
+
+### How to update this fork
+
+Since auto-updates are gone, the update workflow is entirely manual:
+
+1. In the local fork repo: `git pull` (or cherry-pick from upstream as needed).
+2. If `package.json` changed: `yarn install`.
+3. `yarn package:portable`.
+4. Copy `dist/brave.exe` to the portable directory, replacing the running binary.
+
+### Upstream-rebase guidance
+
+When merging future upstream changes, any conflict involving `autoUpdater`, `posthog`, `createBugReport`, `canny.io`, `dev-app-update.yml`, or the `publish` / `release` entries in `package.json` should be resolved in favor of the fork's removal — do not re-accept upstream's version of these features without re-reading [INV-006](TODO/pending_qa/investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-report-and-telemetry-for-personal-fork.md).
 
 ## Antivirus / naming caveat
 
@@ -96,5 +139,12 @@ Cross-references: INV-011 (random as default sort; "reshuffle on every fetch by 
 
 ## Reference
 
+### INV-005 — brave.exe rename and portable-only
+
 - Investigation: [INV-005](TODO/pending_qa/investigations/INV-005_MEDIUM_ELECTRON_brave-exe-rename-for-nvidia-vsr-and-portable-only.md)
 - Tasks: TASK-026 (package.json edits), TASK-027 (QA, verified through normal use), TASK-028 (this doc)
+
+### INV-006 — strip update-check, bug-report, and telemetry
+
+- Investigation: [INV-006](TODO/pending_qa/investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-report-and-telemetry-for-personal-fork.md)
+- Tasks: TASK-029 (remove update-check subsystem), TASK-030 (remove bug-report and canny.io UX), TASK-031 (remove PostHog telemetry), TASK-032 (remove upstream-distribution package.json surface and dependencies), TASK-033 (this doc)

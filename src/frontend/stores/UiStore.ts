@@ -1,7 +1,6 @@
 import { shell } from 'electron';
 import fse from 'fs-extra';
 import { action, computed, makeObservable, observable } from 'mobx';
-import { IS_DEV } from 'common/process';
 
 import { maxNumberOfExternalFilesBeforeWarning } from 'common/config';
 import { clamp, notEmpty } from 'common/core';
@@ -13,8 +12,6 @@ import { ClientFileSearchCriteria, ClientTagSearchCriteria } from '../entities/S
 import { ClientTag } from '../entities/Tag';
 import { comboMatches, getKeyCombo, parseKeyCombo } from '../hotkeyParser';
 import RootStore from './RootStore';
-
-import posthog from 'posthog-js';
 
 export const enum ViewMethod {
   List,
@@ -259,12 +256,6 @@ class UiStore {
   readonly storageKeyPrefix: string;
 
   constructor(rootStore: RootStore, storageKeyPrefix = '') {
-    if (!IS_DEV) {
-      posthog.init('phc_i7z5MEt8qhw2FfaTV0DH1B52Wwr9gFsFP8vsG5W8M8s', {
-        api_host: 'https://eu.posthog.com',
-      });
-      posthog.capture('my event', { property: 'value' });
-    }
     this.rootStore = rootStore;
     this.storageKeyPrefix = storageKeyPrefix;
     makeObservable(this);

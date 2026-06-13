@@ -36,7 +36,6 @@ const About = observer(() => {
         </ExternalLink>
         <ul>
           <li>🤓 View the source code</li>
-          <li>🐛 Provide feedback and report bugs</li>
           <li>👥 Learn about contributing</li>
         </ul>
         {/* TODO: Licensing info here? */}

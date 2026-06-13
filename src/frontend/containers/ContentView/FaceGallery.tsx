@@ -26,8 +26,6 @@ import IMG_37 from 'resources/images/sample-profile-pictures/profile_37.jpg';
 import IMG_38 from 'resources/images/sample-profile-pictures/profile_38.jpg';
 import IMG_39 from 'resources/images/sample-profile-pictures/profile_39.jpg';
 
-import { shell } from 'electron';
-
 type ProfilePicProps = {
   src: string;
   name: string;
@@ -47,23 +45,7 @@ const FaceGallery = ({ contentRect, select, lastSelectionIndex }: GalleryProps) 
   return (
     <div className="face-gallery">
       <div className="wip-container">
-        Face view is not done yet.
-        <br />
-        <br />
-        If you want to speed up the development you <br /> can vote on our roadmap:
-        <br />
-        <button
-          className="wip-link"
-          onClick={() => {
-            shell.openExternal('https://onefolder.canny.io/feedback/p/face-view');
-          }}
-        >
-          onefolder.canny.io/feedback/p/face-view
-        </button>
-        <br />
-        <br />
-        <br />
-        Comments and ideas are welcome 🙏
+        Face view is not yet implemented.
       </div>
       <ProfilePic src={IMG_29} name="Mason" />
       <ProfilePic src={IMG_1} name="Emma" />

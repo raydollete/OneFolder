@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { shell } from 'electron';
 import { mapStackTrace } from 'sourcemapped-stacktrace';
 
 import { RendererMessenger } from 'src/ipc/renderer';
-import { createBugReport, githubUrl } from 'common/config';
 
 import { useStore } from '../contexts/StoreContext';
 
@@ -66,11 +64,6 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
     error: '',
   };
 
-  constructor(props: IErrorBoundaryProps) {
-    super(props);
-    this.openIssueURL = this.openIssueURL.bind(this);
-  }
-
   componentDidCatch(error: Error) {
     // TODO: Send error to logging service
     console.error(error);
@@ -94,14 +87,6 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
     RendererMessenger.reload();
   }
 
-  openIssueURL() {
-    const encodedBody = encodeURIComponent(
-      createBugReport(this.state.error, RendererMessenger.getVersion()),
-    );
-    const url = `${githubUrl}/issues/new?body=${encodedBody}`;
-    shell.openExternal(url);
-  }
-
   render() {
     const { hasError, error } = this.state;
     if (hasError) {
@@ -111,7 +96,7 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
         <div className="error-boundary">
           <span className="custom-icon-64">{IconSet.DB_ERROR}</span>
           <h2>Something went wrong</h2>
-          <p>You can try one of the following options or contact the maintainers.</p>
+          <p>You can try one of the following options.</p>
           <ButtonGroup align="center">
             <Button
               onClick={this.reloadApplication}
@@ -126,12 +111,6 @@ class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBoundaryS
               text="Toggle DevTools"
             />
             <ClearDbButton />
-            <Button
-              styling="outlined"
-              onClick={this.openIssueURL}
-              icon={IconSet.GITHUB}
-              text="Create Issue"
-            />
           </ButtonGroup>
           <p className="message">{error.toString()}</p>
         </div>

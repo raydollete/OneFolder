@@ -1,9 +1,5 @@
-import os from 'os';
-
 // Randomly chosen, hopefully no conflicts with other apps/services
 export const SERVER_PORT = 5454;
-
-export const githubUrl = 'https://github.com/OneFolderApp/OneFolder';
 
 export const chromeExtensionUrl = 'https://chrome.google.com/webstore/';
 
@@ -24,33 +20,3 @@ const isRenderer = process.type === 'renderer';
 export const thumbnailMaxSize = isRenderer && globalThis.devicePixelRatio >= 1.5 ? 400 : 600;
 
 export const maxNumberOfExternalFilesBeforeWarning = 9;
-
-/**
- * Creates the body of a bug report
- * @param error The error message (error.stack if available)
- * @param version Get through getVersion in the main process or RenderMessenger.getVersion in the renderer process
- * @returns
- */
-export const createBugReport = (
-  error: string,
-  version: string,
-) => `<!--- Thanks for wanting to file a bug report! Please check if your issue is not a duplicate before posting -->
-<b>Which actions did you perform before the error occurred?</b>
-...
-
-<b>What did you expect to happen?</b>
-<!--- Feel free to leave this out if irrelevant -->
-...
-
-<b>Stacktrace</b>
-\`\`\`
-${error || 'No error message available'}
-\`\`\`
-
-<b>Runtime info</b>
-<ul>
-<li>OneFolder version: v${version}</li>
-<li>Operating system: ${os.type()} ${os.release()}, ${process.platform} ${process.arch}</li>
-<li>Node version: ${process.version}</li>
-</ul>
-`;

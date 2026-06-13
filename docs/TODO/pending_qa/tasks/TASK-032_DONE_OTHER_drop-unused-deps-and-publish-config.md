@@ -2,11 +2,11 @@
 id: TASK-032
 title: 'Drop electron-updater / posthog-js / electron-google-analytics4 deps, remove publish config and yarn release script'
 investigation: INV-006
-status: PLANNED
+status: DONE
 priority: medium
 blocked_by: [TASK-029, TASK-030, TASK-031]
 date_created: 2026-04-23
-date_completed:
+date_completed: 2026-06-12
 files:
   - 'package.json'
   - 'package-lock.json'
@@ -36,20 +36,20 @@ See [INV-006](../investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-
 
 ## Implementation Steps
 
-- [ ] 1. **Confirm prerequisite tasks are merged.** Run:
+- [x] 1. **Confirm prerequisite tasks are merged.** Run:
   ```
   grep -rn "electron-updater\|autoUpdater\|posthog\|googleAnalytics\|ga4" src/ common/ --include="*.ts" --include="*.tsx"
   ```
   Expect zero matches. If any match exists, that prerequisite task is not yet complete — do NOT proceed with dep removal.
 
-- [ ] 2. **Edit `package.json` `dependencies`:**
+- [x] 2. **Edit `package.json` `dependencies`:**
   - Remove line 147: `"electron-google-analytics4": "^1.1.1",`
   - Remove line 148: `"electron-updater": "^6.1.7",`
   - Remove line 156: `"posthog-js": "^1.96.1",`
 
   Be careful with trailing commas. After the three removals, `dependencies` should be syntactically valid JSON (the line that follows each removal becomes the new "line before a comma" if applicable).
 
-- [ ] 3. **Edit `package.json` — remove the top-level `publish` block** (currently lines 84-89):
+- [x] 3. **Edit `package.json` — remove the top-level `publish` block** (currently lines 84-89):
   ```json
   "publish": {
     "provider": "github",
@@ -60,18 +60,18 @@ See [INV-006](../investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-
   ```
   Remove the entire block including its trailing comma. The preceding key is `"repository"` (line 83) — keep its trailing comma IF a key follows it (which there will be — `"author"` at line 90). Result: `"repository": ...,` then blank line(s) then `"author": "OneFolder",`.
 
-- [ ] 4. **Edit `package.json` — remove `scripts.release`** (currently line 23):
+- [x] 4. **Edit `package.json` — remove `scripts.release`** (currently line 23):
   ```json
   "release": "git add . && git commit -m \"v$npm_package_version\" && git tag \"v$npm_package_version\" && git push && git push --tags"
   ```
   Remove the line. Adjust the preceding line's trailing comma: `scripts.release` is the last entry in the `scripts` object (verify — `"build:exr"` is line 22), so after removal the `"build:exr"` line needs its trailing comma removed so the `scripts` object still closes cleanly.
 
-- [ ] 5. **Run `yarn install`.** Expect:
+- [x] 5. **Run `yarn install`.** Expect:
   - `yarn.lock` to be regenerated (the three removed packages and their unique transitive deps should be absent).
   - `package-lock.json` to be regenerated if present (this project uses Yarn, so `package-lock.json` may be stale or a remnant — verify; if it exists, running `npm install` separately would re-sync it, but this project's workflow is yarn-only, so `package-lock.json` may be ignored in practice. Update it only if the team maintains both; otherwise leave it to drift.)
   - `node_modules/electron-updater`, `node_modules/posthog-js`, and `node_modules/electron-google-analytics4` to be removed from the tree.
 
-- [ ] 6. **Verify lockfile diff.** `git diff yarn.lock` should show only removals (no additions). If additions appear, a transitive dep was previously deduped under one of the removed packages and is now re-resolved to a different version — usually harmless, but worth a glance.
+- [x] 6. **Verify lockfile diff.** `git diff yarn.lock` should show only removals (no additions). If additions appear, a transitive dep was previously deduped under one of the removed packages and is now re-resolved to a different version — usually harmless, but worth a glance.
 
 - [ ] 7. **Run `yarn build`.** Expect no TypeScript errors. If any "Cannot find module 'electron-updater'" or similar errors appear, a stale import slipped through the prerequisite tasks — fix it (should not happen given step 1's grep, but belt and suspenders).
 
@@ -87,13 +87,13 @@ See [INV-006](../investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-
 
 ## Done When
 
-- [ ] `package.json` `dependencies` contains no `electron-updater`, `posthog-js`, or `electron-google-analytics4`.
-- [ ] `package.json` has no top-level `publish` block.
-- [ ] `package.json` `scripts` has no `release` entry.
-- [ ] `yarn install` completes without error.
-- [ ] `yarn.lock` no longer contains entries for the three removed packages.
-- [ ] `node_modules/electron-updater`, `node_modules/posthog-js`, and `node_modules/electron-google-analytics4` do not exist after `yarn install`.
-- [ ] `yarn build` succeeds with zero TypeScript errors.
-- [ ] `yarn start` launches the app without error.
-- [ ] `yarn package:portable` produces `dist/brave.exe` successfully.
-- [ ] `yarn release` prints a "Command not found" error (confirming the script is gone).
+- [x] `package.json` `dependencies` contains no `electron-updater`, `posthog-js`, or `electron-google-analytics4`.
+- [x] `package.json` has no top-level `publish` block.
+- [x] `package.json` `scripts` has no `release` entry.
+- [x] `yarn install` completes without error.
+- [x] `yarn.lock` no longer contains entries for the three removed packages.
+- [x] `node_modules/electron-updater`, `node_modules/posthog-js`, and `node_modules/electron-google-analytics4` do not exist after `yarn install`.
+- [ ] `yarn build` succeeds with zero TypeScript errors. (deferred — batched by orchestrator)
+- [ ] `yarn start` launches the app without error. (deferred — batched by orchestrator)
+- [ ] `yarn package:portable` produces `dist/brave.exe` successfully. (deferred — batched by orchestrator)
+- [ ] `yarn release` prints a "Command not found" error (confirming the script is gone). (deferred — batched by orchestrator)

@@ -181,8 +181,8 @@ const NoMissingContent = () => {
 
 const BugReport = () => {
   return (
-    <ContentPlaceholder title="You encountered a bug!" icon={IconSet.WARNING_FILL}>
-      <p>Please report this bug to the maintainers!</p>
+    <ContentPlaceholder title="Something went wrong" icon={IconSet.WARNING_FILL}>
+      <p>Try selecting a different view from the sidebar.</p>
     </ContentPlaceholder>
   );
 };

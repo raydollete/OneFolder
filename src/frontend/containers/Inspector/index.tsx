@@ -6,7 +6,6 @@ import FileTags from '../../components/FileTag';
 import ImageDescription from '../../components/ImageDescription';
 import ImageDates from '../../components/ImageDates';
 import ImageMap from '../../components/ImageMap';
-import ImageDuplicates from '../../components/ImageDuplicates';
 import ImageTools from '../../components/ImageTools';
 import ImageInfo from '../../components/ImageInfo';
 import ImageParameters from '../../components/ImageParameters';

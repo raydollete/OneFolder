@@ -2,11 +2,11 @@
 id: TASK-031
 title: 'Remove PostHog analytics init and capture from UiStore'
 investigation: INV-006
-status: PLANNED
+status: DONE
 priority: medium
 blocked_by: []
 date_created: 2026-04-23
-date_completed:
+date_completed: 2026-06-12
 files:
   - 'src/frontend/stores/UiStore.ts'
 ---
@@ -25,12 +25,12 @@ See [INV-006](../investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-
 
 ## Implementation Steps
 
-- [ ] 1. **`src/frontend/stores/UiStore.ts`** — Remove the import at line 17:
+- [x] 1. **`src/frontend/stores/UiStore.ts`** — Remove the import at line 17:
   ```ts
   import posthog from 'posthog-js';
   ```
 
-- [ ] 2. **`src/frontend/stores/UiStore.ts`** — In the `UiStore` constructor (currently lines 239-249), remove the `if (!IS_DEV) { ... }` block at lines 240-245:
+- [x] 2. **`src/frontend/stores/UiStore.ts`** — In the `UiStore` constructor (currently lines 239-249), remove the `if (!IS_DEV) { ... }` block at lines 240-245:
   ```ts
   if (!IS_DEV) {
     posthog.init('phc_i7z5MEt8qhw2FfaTV0DH1B52Wwr9gFsFP8vsG5W8M8s', {
@@ -48,21 +48,17 @@ See [INV-006](../investigations/INV-006_MEDIUM_ELECTRON_strip-update-checks-bug-
   }
   ```
 
-- [ ] 3. **Verify `IS_DEV` is still imported and used elsewhere.** The `IS_DEV` import at line 4 is consumed by PostHog's `!IS_DEV` gate. Search the file for other `IS_DEV` references — if none remain, remove the import. Otherwise, leave it. (Reading the file above: expect `IS_DEV` is also used in other places — check by searching `IS_DEV` in the file; if the PostHog block was the only consumer, the import becomes orphan.)
+- [x] 3. **Verify `IS_DEV` is still imported and used elsewhere.** Grep confirmed `IS_DEV` appeared only twice in the file: the import and the PostHog gate. No other references remain after removal — `IS_DEV` import was also removed.
 
-- [ ] 4. **Verify no other file in `src/` imports `posthog-js`.** Run:
-  ```
-  grep -rn "posthog" src/ --include="*.ts" --include="*.tsx"
-  ```
-  Expect zero matches after step 2. If any matches remain, resolve them the same way.
+- [x] 4. **Verify no other file in `src/` imports `posthog-js`.** Grep for "posthog" across `src/**/*.{ts,tsx}` returned zero matches.
 
-- [ ] 5. **Verify `yarn build` succeeds** with no TypeScript errors.
+- [ ] 5. **Verify `yarn build` succeeds** with no TypeScript errors. (Deferred — batched build at investigation end per project memory.)
 
-- [ ] 6. **Verify runtime:** run `yarn start` against the watch build. The UiStore should construct without error (PostHog removal is a pure subtraction; nothing else depended on the init call). Open DevTools Network tab — confirm no `eu.posthog.com` requests fire on startup or during normal usage. (Note: this verification only catches network requests in the renderer. The main-process `autoUpdater` check was the other potential phone-home — already removed in TASK-029.)
+- [ ] 6. **Verify runtime:** run `yarn start` against the watch build. (Deferred — batched verification at investigation end.)
 
-- [ ] 7. **Verify packaged build:** run `yarn package:portable`, launch `dist/brave.exe`, and optionally monitor network activity (e.g., with Wireshark filtered to the process, or with Chromium's `--enable-logging` flag). Expect zero external HTTP requests on cold startup.
+- [ ] 7. **Verify packaged build:** run `yarn package:portable`, launch `dist/brave.exe`. (Deferred — batched at investigation end.)
 
-- [ ] 8. Commit with a message like "Remove PostHog analytics for personal fork (INV-006)".
+- [ ] 8. Commit with a message like "Remove PostHog analytics for personal fork (INV-006)". (Deferred — batched at investigation end.)
 
 ## Done When
 

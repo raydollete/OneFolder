@@ -1,7 +1,6 @@
 import { ipcRenderer } from 'electron';
 import path from 'path';
 import {
-  CHECK_FOR_UPDATES,
   CLEAR_DATABASE,
   CLOSED_PREVIEW_WINDOW,
   DRAG_EXPORT,
@@ -17,7 +16,6 @@ import {
   RunInBackgroundMessage,
   StoreFileMessage,
   StoreFileReplyMessage,
-  IS_CHECK_UPDATES_ON_STARTUP_ENABLED,
   IS_CLIP_SERVER_RUNNING,
   IS_FULL_SCREEN,
   IS_MAXIMIZED,
@@ -41,7 +39,6 @@ import {
   STORE_FILE,
   STORE_FILE_REPLY,
   SYSTEM_PATHS,
-  TOGGLE_CHECK_UPDATES_ON_STARTUP,
   TOGGLE_DEV_TOOLS,
   TRASH_FILE,
   DELETE_FILE_PERMANENTLY,
@@ -182,14 +179,6 @@ export class RendererMessenger {
   static isMaximized = (): boolean => ipcRenderer.sendSync(IS_MAXIMIZED);
 
   static getVersion = (): string => ipcRenderer.sendSync(GET_VERSION);
-
-  static checkForUpdates = async () => ipcRenderer.invoke(CHECK_FOR_UPDATES);
-
-  static isCheckUpdatesOnStartupEnabled = (): boolean =>
-    ipcRenderer.sendSync(IS_CHECK_UPDATES_ON_STARTUP_ENABLED);
-
-  static toggleCheckUpdatesOnStartup = (): void =>
-    ipcRenderer.send(TOGGLE_CHECK_UPDATES_ON_STARTUP);
 
   static isPortableMode = (): boolean => ipcRenderer.sendSync(IS_PORTABLE_MODE);
 

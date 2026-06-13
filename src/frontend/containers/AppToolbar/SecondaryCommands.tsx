@@ -36,13 +36,6 @@ const SecondaryCommands = observer(() => {
         accelerator={<KeyCombo combo={uiStore.hotkeyMap.toggleSettings} />}
       />
       <MenuItem
-        icon={IconSet.THUMB_BG}
-        onClick={() => {
-          shell.openExternal('https://onefolder.canny.io/feedback');
-        }}
-        text="💡ideas + 🐞bugs"
-      />
-      <MenuItem
         icon={IconSet.HELPCENTER}
         onClick={() => {
           shell.openExternal(
@@ -52,11 +45,6 @@ const SecondaryCommands = observer(() => {
         text="help center"
       />
 
-      <MenuItem
-        icon={IconSet.RELOAD}
-        onClick={RendererMessenger.checkForUpdates}
-        text="check for updates"
-      />
       {/* <MenuItem icon={IconSet.LOGO} onClick={uiStore.toggleAbout} text="About" /> */}
     </MenuButton>
   );
