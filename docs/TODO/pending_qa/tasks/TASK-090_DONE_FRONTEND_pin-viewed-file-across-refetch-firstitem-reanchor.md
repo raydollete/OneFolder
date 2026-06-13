@@ -2,11 +2,11 @@
 id: TASK-090
 title: 'Add a pin-by-identity primitive so a refetch/list-replacement can keep SlideMode anchored to a specific file: reconcile uiStore.firstItem toward a caller-supplied pin file inside the same MobX transaction as the fileList replacement, closing the asymmetry where removeFilesFromListInPlace reconciles firstItem but updateFromBackend does not.'
 investigation: INV-021
-status: planned
+status: done
 priority: high
 blocked_by: []
 date_created: 2026-06-11
-date_completed:
+date_completed: 2026-06-12
 files:
   - 'src/frontend/stores/FileStore.ts'
 ---
@@ -39,39 +39,39 @@ See [INV-021](../investigations/INV-021_HIGH_FRONTEND_post-encode-slidemode-tear
 
 ## Implementation Steps
 
-- [ ] 1. Add `FileStore.pinViewedFileAcrossRefetch(pinFile: ClientFile): Promise<void>`
+- [x] 1. Add `FileStore.pinViewedFileAcrossRefetch(pinFile: ClientFile): Promise<void>`
       (or an overload of `refetch(pinFileId?)`). It must, after the fetcher's
       `updateFromBackend` settles, re-derive the pin file's NEW index via
       `this.index.get(pinFile.id)` and set `uiStore.firstItem` to it, plus
       `selectFile(pinFile, true)` — all inside one MobX `transaction` with the
       list mutation so `firstFileInView` is never transiently `undefined`.
-- [ ] 2. If the pin file is NOT in the refetched list (e.g. tagless output under
+- [x] 2. If the pin file is NOT in the refetched list (e.g. tagless output under
       a tag filter), do NOT leave `firstItem` stale: fall back to a caller-
       decidable outcome (return a boolean "pinned") so TASK-089 can choose to
       pin-insert the output instead. Do not silently point firstItem at a wrong
       file.
-- [ ] 3. Ensure the transaction boundary covers the existing
+- [x] 3. Ensure the transaction boundary covers the existing
       `updateFromBackend` mutations (clear/push, cleanFileSelection,
       updateFileListState) OR run the re-anchor immediately after the
       fetch promise resolves but before any React reaction can fire — verify
       against MobX `transaction` semantics that no intermediate render observes
       `firstItem` out of range.
-- [ ] 4. Add a `docs/TOOLS.md` note: the fetch path (`updateFromBackend`) does
+- [x] 4. Add a `docs/TOOLS.md` note: the fetch path (`updateFromBackend`) does
       not by itself reconcile `firstItem`; any refetch performed while
       `isSlideMode` is true must pin the viewed file by identity (use this
       primitive) to avoid unmounting SlideMode.
-- [ ] 5. Keep the change additive — do NOT alter the default `refetch()`/
+- [x] 5. Keep the change additive — do NOT alter the default `refetch()`/
       `updateFromBackend` behavior for non-SlideMode callers (they must remain
       unaffected to avoid regressing gallery refetch behavior).
 
 ## Done When
 
-- [ ] A new primitive exists that refetches/replaces `fileList` while keeping
+- [x] A new primitive exists that refetches/replaces `fileList` while keeping
       SlideMode anchored to a given file by id, with the re-anchor and list
       mutation in one transaction (no transient `firstFileInView === undefined`).
-- [ ] When the pin file survives the refetch, the viewer stays on it (new index
+- [x] When the pin file survives the refetch, the viewer stays on it (new index
       resolved via `this.index`); when it does not, the caller is told (boolean
       return) rather than firstItem being left stale.
-- [ ] Default `refetch()` behavior for existing non-pinned callers is unchanged.
-- [ ] `docs/TOOLS.md` documents the firstItem-non-reconciliation gap and the pin
+- [x] Default `refetch()` behavior for existing non-pinned callers is unchanged.
+- [x] `docs/TOOLS.md` documents the firstItem-non-reconciliation gap and the pin
       rule.

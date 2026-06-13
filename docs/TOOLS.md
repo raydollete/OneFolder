@@ -159,6 +159,47 @@ and exercising the full chain — including from a **filtered view**, with a
 **fully-tagged library**, and with a source whose name already collides with
 the output convention.
 
+### 6. SlideMode + refetch: pin the viewed file by identity, never by index
+
+**The fetch path (`updateFromBackend`) does NOT reconcile `uiStore.firstItem`.**
+
+`updateFromBackend` wholesale-replaces `fileList` (clear + push) and calls
+`cleanFileSelection`, but it does NOT update `firstItem`.  After the replace,
+`firstItem` points at whatever index it had before the fetch — which is now
+either a completely different file (if the list changed length/order) or out of
+range.  `firstFileInView = fileList[firstItem]` then returns `undefined`, and
+SlideMode unmounts (the mount gate in `LayoutSwitcher.tsx:193` requires
+`firstFileInView` to be defined).
+
+Contrast `removeFilesFromListInPlace` (FileStore.ts:703–809), which snapshots
+`oldFirstItemId` and re-points `firstItem` to the survivor's new index after
+every splice.  **The fetch path has no such logic** — this is the structural
+asymmetry (INV-021) that drops the viewer whenever a refetch fires in SlideMode.
+
+**Rule:** any refetch performed while `isSlideMode` is true MUST pin the
+currently-viewed file by identity (not by index) so that after the list
+settles, `firstItem` is set to the file's new position.  Use the dedicated
+primitive:
+
+```typescript
+// TASK-089 / INV-021 usage pattern:
+const pinned = await this.pinViewedFileAcrossRefetch(sourceFile);
+if (!pinned) {
+  // sourceFile is no longer in the refetched list — insert/pin it manually.
+}
+```
+
+`FileStore.pinViewedFileAcrossRefetch(pinFile)` (FileStore.ts, added by
+TASK-090) calls `refetch()`, then in a single synchronous MobX `transaction`
+sets `uiStore.firstItem` to the pin file's new index and calls
+`selectFile(pinFile, true)`.  Returns `true` when the file survived the
+refetch; `false` when it is absent (caller must decide what to show).
+
+Do NOT route a SlideMode swap through `clearSearchCriteriaList()` or any
+content-mode setter (`setContentAll`, `setContentQuery`, etc.) without first
+securing the pin — those methods call `disableSlideMode()` unconditionally and
+will tear the viewer down.
+
 ---
 
 ## Established Rules (from the INV-018 design)

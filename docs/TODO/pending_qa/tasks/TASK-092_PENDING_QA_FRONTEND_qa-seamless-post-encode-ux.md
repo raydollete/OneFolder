@@ -2,7 +2,7 @@
 id: TASK-092
 title: 'QA the seamless post-encode UX for both Re-encode and Normalize Audio: source never returns to the thumbnail grid, a "Finalizing…" indicator covers the gap, the viewer swaps to the output in place, and no INV-019 correctness regression. REQUIRES MANUAL EXECUTION ON WINDOWS.'
 investigation: INV-021
-status: planned
+status: pending_qa
 priority: high
 blocked_by: [TASK-089, TASK-090, TASK-091]
 date_created: 2026-06-11
@@ -63,9 +63,15 @@ See [INV-021](../investigations/INV-021_HIGH_FRONTEND_post-encode-slidemode-tear
       `net::ERR_REQUEST_RANGE_NOT_SATISFIABLE`.
 - [ ] 9. **Delete-original prompt:** confirm the "Delete original?" modal appears
       AFTER the swap in every successful case, and that Keep/Delete both behave.
-- [ ] 10. Update `docs/reencode-x264.md` "Post-Encode Finalization" section to
+- [x] 10. Update `docs/reencode-x264.md` "Post-Encode Finalization" section to
       describe the in-place SlideMode swap and the "Finalizing…" inspector phase,
-      replacing the current "refetch then select" description.
+      replacing the current "refetch then select" description. **DONE (non-manual
+      doc step, completed alongside TASK-089/090/091 implementation):** the
+      "Post-Encode Finalization (Ingestion, Tag Copy, and Seamless Swap)" section
+      now documents the pin-aware refetch (step 2), the in-place swap (step 4),
+      the SlideMode-safe fallback (step 5), and a new "Finalizing… Inspector
+      Phase" subsection. The Error Handling Summary row and the top-level flow
+      bullet were updated to match.
 
 ## Done When
 

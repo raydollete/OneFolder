@@ -21,6 +21,12 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
   // Only one job runs at a time (gated by uiStore.isMediaProcessing).
   const [activeJob, setActiveJob] = useState<MediaJobType | null>(null);
   const [jobPercent, setJobPercent] = useState<number | null>(null);
+  // isFinalizing covers the ffmpeg-exit -> output-open gap (awaitWriteFinish + DB
+  // poll + refetch + waitForIngestedFile). activeJob stays set during this phase so
+  // the tool label is available for the "Finalizing…" text, but jobPercent is null
+  // so the spinner is indeterminate. The Cancel button is hidden during this phase
+  // (ffmpeg is already done; there is nothing to cancel).
+  const [isFinalizing, setIsFinalizing] = useState(false);
   // jobId is delivered via the first MEDIA_JOB_PROGRESS event; needed for Cancel.
   const jobIdRef = useRef<string | null>(null);
 
@@ -65,15 +71,26 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
       try {
         const { outputPath } = await RendererMessenger.startMediaJob(jobType, file.absolutePath);
 
-        // Tear down the progress subscription — job is complete.
+        // Tear down the progress subscription — ffmpeg is done.
         unsubscribe();
         unsubscribeRef.current = null;
+
+        // Enter the finalization phase: ffmpeg has exited but the output is not yet
+        // open. The inspector spinner stays visible (TASK-089 keeps the source in
+        // SlideMode so this component remains mounted) with an indeterminate
+        // "Finalizing…" label. The media-processing lock remains held throughout
+        // (released only in finally). activeJob intentionally stays set so the
+        // tool label is available for the label string below.
+        setIsFinalizing(true);
 
         // Corrected post-encode order (INV-019): copy tags at the DB level FIRST
         // so the output can match a tag-filtered view, then wait for it to appear,
         // then select it. The graceful fallback and any toasts are handled inside
         // finalizeEncodedOutput — do not duplicate that logic here.
         await fileStore.finalizeEncodedOutput(file, outputPath);
+
+        // Finalization complete — clear the finalizing phase before finally runs.
+        setIsFinalizing(false);
 
         // Open the delete-original prompt (TASK-086 renders the actual Alert).
         // This runs AFTER finalize so the output is already selected/visible.
@@ -98,9 +115,13 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         }
       } finally {
         // Always release the UI lock and reset local state — even on cancel/error.
+        // setIsFinalizing(false) is also called immediately after finalizeEncodedOutput
+        // on the success path; this defensive call covers cancel and error paths where
+        // finalization may have been entered but not successfully exited.
         uiStore.endMediaProcessing();
         setActiveJob(null);
         setJobPercent(null);
+        setIsFinalizing(false);
         jobIdRef.current = null;
       }
     },
@@ -116,14 +137,18 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
   const isVideo = isFileExtensionVideo(file.extension);
 
   // Derive a human-readable label for the in-progress spinner.
-  const progressLabel =
-    activeJob === 'normalize-audio'
-      ? jobPercent !== null
-        ? `Normalizing audio… ${jobPercent}%`
-        : 'Normalizing audio…'
-      : jobPercent !== null
-        ? `Re-encoding… ${jobPercent}%`
-        : 'Re-encoding…';
+  // During the finalization phase (isFinalizing) both tools show "Finalizing…"
+  // (indeterminate — no percent). During the ffmpeg phase the label is tool-specific
+  // and percent-qualified once ffmpeg starts reporting progress.
+  const progressLabel = isFinalizing
+    ? 'Finalizing…'
+    : activeJob === 'normalize-audio'
+    ? jobPercent !== null
+      ? `Normalizing audio… ${jobPercent}%`
+      : 'Normalizing audio…'
+    : jobPercent !== null
+    ? `Re-encoding… ${jobPercent}%`
+    : 'Re-encoding…';
 
   const cancelTitle =
     activeJob === 'normalize-audio' ? 'Cancel audio normalization' : 'Cancel re-encode';
@@ -137,13 +162,15 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
               <div className="reencode-progress">
                 <div className="loading-spinner" />
                 <span className="reencode-progress__text">{progressLabel}</span>
-                <button
-                  className="reencode-progress__cancel"
-                  onClick={handleCancel}
-                  title={cancelTitle}
-                >
-                  Cancel
-                </button>
+                {!isFinalizing && (
+                  <button
+                    className="reencode-progress__cancel"
+                    onClick={handleCancel}
+                    title={cancelTitle}
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             ) : (
               <>

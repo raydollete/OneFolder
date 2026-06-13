@@ -28,8 +28,10 @@ offers to delete the original.
      (`video.mp4`, `video 1.mp4`, `video 2.mp4` …).
    - All source tags (DB + EXIF/XMP HierarchicalSubject / Subject / Keywords)
      are copied to the output.
-   - The output auto-opens in the viewer (it becomes the selected file in
-     SlideMode).
+   - The viewer swaps to the output **in place** (INV-021): the source stays on
+     screen in SlideMode through finalization — with a "Finalizing…" indicator
+     covering the stabilization/ingest gap — then the output becomes the selected
+     file without ever returning to the thumbnail grid.
    - A **"Delete original?"** modal appears with two choices:
      - **Delete Original** — moves the source to the Recycle Bin (or permanently
        deletes it if the volume has no Recycle Bin, per INV-014 handling).
@@ -210,11 +212,11 @@ row (bounded ~3 s), the extra stabilization delay is already within that budget.
 
 ---
 
-## Post-Encode Finalization (Ingestion, Tag Copy, and Selection)
+## Post-Encode Finalization (Ingestion, Tag Copy, and Seamless Swap)
 
 After a successful encode, the renderer calls
 `fileStore.finalizeEncodedOutput(source, outputPath)`, which runs the corrected
-post-encode order (INV-019):
+post-encode order (INV-019 correctness + INV-021 seamless SlideMode swap):
 
 1. **DB-level tag copy first** (`copyTagsToOutputPath`) — because
    `awaitWriteFinish` is active, chokidar `add` fires only after the file has
@@ -229,32 +231,74 @@ post-encode order (INV-019):
    EXIF/XMP exactly once here.  Zero-tag sources skip the EXIF/XMP write
    entirely.
 
-2. **Immediate refetch** (`refetch()`) — re-runs the active query so the
-   now-tagged output can enter `fileList` if it matches the current filter.
+2. **Pin-aware refetch** (`pinViewedFileAcrossRefetch(source)`, INV-021) —
+   re-runs the active query so the now-tagged output can enter `fileList` if it
+   matches the current filter, **while keeping the source pinned in SlideMode**.
+   The TASK-090 primitive calls `refetch()` and then, inside a synchronous MobX
+   `transaction` run after `updateFromBackend` commits, re-anchors
+   `uiStore.firstItem` to the source's *new* index (resolved by file id via
+   `this.index`) so `firstFileInView` is never `undefined` during the list
+   churn.  A bare `refetch()` would orphan `firstItem` and unmount SlideMode (the
+   pre-INV-021 "returns to the thumbnail grid" symptom).  `isSlideMode` is never
+   toggled off at any point in this method.
 
 3. **Bounded wait** (`waitForIngestedFile(outputPath, 10000)`) — a MobX
    `reaction` on `fileList` that resolves when the output appears.  Because tags
    were already copied, a tag-filtered view now accepts it; the wait should
    succeed in the common case.
 
-4. **Select and open** — `selectFile(newFile, true)` + `enableSlideMode()`.
+4. **In-place swap to the output** (INV-021) — when the output is in `fileList`,
+   re-anchor `uiStore.firstItem` to its index and `selectFile(output, true)`
+   inside a single MobX `transaction`, so `firstFileInView` transitions directly
+   from source → output without ever returning `undefined`.  The viewer swaps in
+   place; it never collapses to the grid and re-opens.  SlideMode stays mounted
+   throughout, so the inspector — and its **"Finalizing…"** indicator (see
+   below) — remains visible across the whole gap.
 
-5. **Graceful fallback** when the output is still not visible (e.g. a display
-   filter other than tags excludes it, or ingestion is delayed): clear the active
-   search (`clearSearchCriteriaList()`, which switches to all-content), then
-   retry the wait with a 3-second timeout.  If the output appears, select and
-   open; otherwise show an honest toast that states the observable fact and
-   offers causes as possibilities (docs/TOOLS.md rule 4).  Because tags are
-   copied in step 1 before the wait, the toast can also confirm that tagging
-   succeeded:
-   - *Tags copied:* "Re-encoded to &lt;path&gt; and copied your tags, but it is not
-     visible in the current view. It may be excluded by the active filter, or
-     outside a watched folder."
-   - *Row not found:* "Re-encoded to &lt;path&gt;, but it is not visible in the
-     current view. It may be excluded by the active filter, outside a watched
-     folder, or ingestion may still be in progress."
-   The toast never asserts "outside a watched folder" as the sole cause — that
-   is unverified (rule 4).
+5. **SlideMode-safe fallback** when the output is still not visible after the
+   bounded wait (e.g. a display filter other than tags excludes it). The fallback
+   must **never** route through `clearSearchCriteriaList()` or any content-mode
+   setter, because those unconditionally call `disableSlideMode()` and tear the
+   viewer down (docs/TOOLS.md). Instead:
+   - Resolve the output's `FileDTO` directly from the backend by absolute path
+     (the same forward-slash + raw-path dual probe used by
+     `copyTagsToOutputPath`), independent of the active filter.
+   - Build a `ClientFile`, initialize its thumbnail path, and inject it into
+     `fileList` at the source's current position inside a `transaction` that also
+     rebuilds the affected `index` entries and re-anchors `firstItem` to it —
+     swapping in place with SlideMode still on.
+   - Only if the DB row is genuinely absent (output outside a watched location,
+     or ingestion failed) keep the **source** on screen (do not blank the viewer
+     or change `firstItem`) and show an honest toast that states the observable
+     fact and offers causes as possibilities (docs/TOOLS.md rule 4).  Because
+     tags are copied in step 1 before the wait, the toast confirms whether
+     tagging succeeded:
+     - *Tags copied:* "Re-encoded to &lt;path&gt; and copied your tags, but it is not
+       visible in the current view. It may be excluded by the active filter, or
+       outside a watched folder."
+     - *Row not found:* "Re-encoded to &lt;path&gt;, but it is not visible in the
+       current view. It may be excluded by the active filter, outside a watched
+       folder, or ingestion may still be in progress."
+     The toast never asserts "outside a watched folder" as the sole cause — that
+     is unverified (rule 4).
+
+### "Finalizing…" Inspector Phase (INV-021)
+
+The only on-screen feedback during a media job is the inspector spinner in
+`ImageTools.tsx`, driven by `activeJob`/`jobPercent` which reflect **ffmpeg
+progress only**.  ffmpeg exit (`startMediaJob` resolving) is followed by a
+structural gap — up to ~2 s `awaitWriteFinish` + ~3 s DB poll + refetch +
+`waitForIngestedFile` — before the output opens.  To keep that gap from being
+silent, `runMediaJob` sets an `isFinalizing` flag the instant `startMediaJob`
+resolves (and the progress subscription is torn down) and clears it after
+`finalizeEncodedOutput` returns (and defensively in the `finally`).  While
+`isFinalizing` is true the existing `reencode-progress` spinner renders an
+indeterminate **"Finalizing…"** label (parameterized so Normalize Audio shows
+the same), and the **Cancel** button is hidden (ffmpeg is already done; there is
+nothing to cancel).  Because the source now stays in SlideMode (step 4 above),
+the inspector — and thus this indicator — stays mounted and visible for the
+whole window.  The media-processing lock is held throughout and released exactly
+once in the `runMediaJob` `finally`.
 
 ---
 
@@ -285,7 +329,7 @@ The component is mounted in `ContentView/index.tsx` alongside
 | ffmpeg exits non-zero | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
 | User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast |
 | App quits mid-encode | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
-| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; fallback clears filter and retries; if still absent: honest toast stating the observable fact and offering causes as possibilities — never asserts "outside a watched folder" as the sole cause (docs/TOOLS.md rule 4); lock released; source untouched |
+| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; SlideMode-safe fallback resolves the output by absolute path and swaps to it in place (never `clearSearchCriteriaList()` / `disableSlideMode()`); if the DB row is genuinely absent: source kept on screen + honest toast stating the observable fact and offering causes as possibilities — never asserts "outside a watched folder" as the sole cause (docs/TOOLS.md rule 4); lock released |
 | Source already deleted | `handleConfirm` no-ops if `source === null`; defensive guard in `DeleteOriginalAfterJob` |
 | ffprobe duration probe fails | Encode proceeds; spinner runs in indeterminate mode |
 

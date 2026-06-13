@@ -3,7 +3,7 @@ id: INV-021
 title: 'Jarring post-encode UX: the source video tears out of SlideMode back to the thumbnail grid the moment ffmpeg exits, then several seconds of blank, feedback-less finalization pass before the new video abruptly opens. Keep the source on-screen (and the media-processing UI up) through finalization, swap seamlessly to the output, and never blind-drop the viewer via refetch/clearSearchCriteriaList.'
 reported_bug: 'After a re-encode (or Normalize Audio) completes, the source video closes and the user is returned to the thumbnail index. Several seconds pass with no indication anything is happening, then the new video suddenly pops up. Jarring and unexpected. The source should stay open until the output is ready and then swap seamlessly, OR there should be clear "finalizing…" feedback during the gap.'
 date: 2026-06-11
-status: active
+status: pending_qa
 superseded_by:
 tasks_spawned: [TASK-089, TASK-090, TASK-091, TASK-092]
 root_cause_category: order-of-operations
