@@ -2,7 +2,7 @@
 id: TASK-088
 title: 'Document the Normalize Audio tool and QA it end-to-end (REQUIRES MANUAL EXECUTION ON WINDOWS), including from a filtered view to prove the corrected post-encode flow'
 investigation: INV-020
-status: in-progress
+status: pending_qa
 priority: medium
 blocked_by: [TASK-087]
 date_created: 2026-06-11
@@ -53,7 +53,10 @@ See [INV-020](../investigations/INV-020_MEDIUM_FRONTEND_normalize-audio-video-to
 ### QA (REQUIRES MANUAL EXECUTION ON WINDOWS — capture evidence per docs/TODO/QA-DISCIPLINE.md)
 
 > NOTE: Steps 4–12 require running the Electron app interactively on Windows.
-> They have NOT been executed. The task remains IN-PROGRESS pending manual QA.
+> They have NOT been executed. Steps 1–3 (docs) are complete and the
+> implementation (TASK-085..087) compiles (webpack production build) with the
+> full unit suite green (98/98). The task is promoted to PENDING_QA: only the
+> manual, on-Windows QA matrix remains.
 
 - [ ] 4. **Visibility:** Normalize Audio button shown for video files, absent for
       images; both tool buttons coexist.

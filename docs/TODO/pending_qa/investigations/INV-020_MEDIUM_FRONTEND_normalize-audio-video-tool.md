@@ -3,7 +3,7 @@ id: INV-020
 title: 'Add a "Normalize Audio" inspector tool that runs `ffmpeg -i [source] -c:v copy -filter:a "dynaudnorm=p=0.9:s=5" [output]`, mirroring the Re-encode (x264) flow (bundled ffmpeg, collision-free sibling output, DB+EXIF/XMP tag copy via the CORRECTED post-encode flow from INV-019, auto-open, delete-original prompt, UI lock, progress/cancel).'
 reported_bug: 'Feature request: add an additional inspector tool called "Normalize Audio" that is an almost-identical flow to the Re-encode (x264) tool, but instead runs `ffmpeg -i [source] -filter:a "dynaudnorm=p=0.9:s=5" [output]`. AMENDED 2026-06-11 (user resolved open question 1): only the audio is re-encoded; the video stream is pass-through — the command is `ffmpeg -i [source] -c:v copy -filter:a "dynaudnorm=p=0.9:s=5" [output]`.'
 date: 2026-06-11
-status: active
+status: pending_qa
 superseded_by:
 tasks_spawned: [TASK-085, TASK-086, TASK-087, TASK-088]
 root_cause_category: architectural-shortcoming
