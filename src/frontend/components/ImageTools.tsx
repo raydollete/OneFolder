@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { observer } from 'mobx-react-lite';
 
 import { isFileExtensionVideo } from 'common/fs';
+import { formatSecondsToHms, parseHmsToSeconds } from 'common/fmt';
 import { IconSet } from 'widgets';
 import { MediaJobType } from '../../ipc/messages';
 import { RendererMessenger } from '../../ipc/renderer';
@@ -30,6 +31,10 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
   // jobId is delivered via the first MEDIA_JOB_PROGRESS event; needed for Cancel.
   const jobIdRef = useRef<string | null>(null);
 
+  // HH:MM:SS fields for the Mark Start / Mark End / Create Clip controls.
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+
   // Clean up the progress subscription when the component unmounts while a
   // job is running (edge case: user closes the inspector mid-job).
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -42,8 +47,18 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     };
   }, []);
 
+  // Read the live playback position of the currently mounted slide <video>.
+  // The slide video is the ONLY attached <video> in the document (preload videos
+  // are orphan elements, never mounted — see SlideMode/index.tsx:157-177 and
+  // ZoomPan.tsx:165 which uses the same querySelector pattern).
+  const captureCurrentTime = useCallback((): string => {
+    const v = document.querySelector('video') as HTMLVideoElement | null;
+    const sec = v && Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    return formatSecondsToHms(sec);
+  }, []);
+
   const runMediaJob = useCallback(
-    async (jobType: MediaJobType) => {
+    async (jobType: MediaJobType, clip?: { start: string; end: string }) => {
       if (uiStore.isMediaProcessing || activeJob !== null) {
         return;
       }
@@ -69,7 +84,11 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
       uiStore.beginMediaProcessing(file.absolutePath);
 
       try {
-        const { outputPath } = await RendererMessenger.startMediaJob(jobType, file.absolutePath);
+        const { outputPath } = await RendererMessenger.startMediaJob(
+          jobType,
+          file.absolutePath,
+          clip,
+        );
 
         // Tear down the progress subscription — ffmpeg is done.
         unsubscribe();
@@ -92,6 +111,13 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         // Finalization complete — clear the finalizing phase before finally runs.
         setIsFinalizing(false);
 
+        // For Create Clip, reset the time fields so they are ready for the next clip.
+        // Do NOT reset on failure or cancel — the user may want to retry with the same values.
+        if (jobType === 'create-clip') {
+          setStartTime('');
+          setEndTime('');
+        }
+
         // Open the delete-original prompt (TASK-086 renders the actual Alert).
         // This runs AFTER finalize so the output is already selected/visible.
         uiStore.openDeleteOriginalPrompt(file);
@@ -101,14 +127,18 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         unsubscribeRef.current = null;
 
         const message = err instanceof Error ? err.message : String(err);
+        const toastLabel =
+          jobType === 'normalize-audio'
+            ? 'Normalize audio'
+            : jobType === 'create-clip'
+            ? 'Create clip'
+            : 'Re-encode';
         if (message === 'MEDIA_JOB_CANCELLED') {
           // User-initiated cancel — show a neutral toast, no error.
-          const label = jobType === 'normalize-audio' ? 'Normalize audio' : 'Re-encode';
-          AppToaster.show({ message: `${label} cancelled.`, timeout: 3000 });
+          AppToaster.show({ message: `${toastLabel} cancelled.`, timeout: 3000 });
         } else {
-          const label = jobType === 'normalize-audio' ? 'Normalize audio' : 'Re-encode';
           AppToaster.show({
-            message: `${label} failed: ${message}`,
+            message: `${toastLabel} failed: ${message}`,
             clickAction: { label: 'Dev Tools', onClick: RendererMessenger.toggleDevTools },
             timeout: 8000,
           });
@@ -136,8 +166,22 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
 
   const isVideo = isFileExtensionVideo(file.extension);
 
+  // Derive validity for the Create Clip button.
+  // Both fields must parse as valid HH:MM:SS and start must be strictly before end.
+  const startSec = parseHmsToSeconds(startTime);
+  const endSec = parseHmsToSeconds(endTime);
+  const clipValid = startSec !== null && endSec !== null && startSec < endSec;
+
+  // Show a hint when both fields are filled but the range is backwards/equal.
+  const showRangeHint =
+    startTime !== '' &&
+    endTime !== '' &&
+    startSec !== null &&
+    endSec !== null &&
+    startSec >= endSec;
+
   // Derive a human-readable label for the in-progress spinner.
-  // During the finalization phase (isFinalizing) both tools show "Finalizing…"
+  // During the finalization phase (isFinalizing) all tools show "Finalizing…"
   // (indeterminate — no percent). During the ffmpeg phase the label is tool-specific
   // and percent-qualified once ffmpeg starts reporting progress.
   const progressLabel = isFinalizing
@@ -146,12 +190,20 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     ? jobPercent !== null
       ? `Normalizing audio… ${jobPercent}%`
       : 'Normalizing audio…'
+    : activeJob === 'create-clip'
+    ? jobPercent !== null
+      ? `Creating clip… ${jobPercent}%`
+      : 'Creating clip…'
     : jobPercent !== null
     ? `Re-encoding… ${jobPercent}%`
     : 'Re-encoding…';
 
   const cancelTitle =
-    activeJob === 'normalize-audio' ? 'Cancel audio normalization' : 'Cancel re-encode';
+    activeJob === 'normalize-audio'
+      ? 'Cancel audio normalization'
+      : activeJob === 'create-clip'
+      ? 'Cancel clip'
+      : 'Cancel re-encode';
 
   return (
     <div className="inspector-section">
@@ -187,6 +239,50 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
                   title="Normalize audio levels using ffmpeg dynaudnorm"
                 >
                   {IconSet.MEDIA}Normalize Audio
+                </button>
+                <div className="tools__mark-row">
+                  <button
+                    className="tools__mark-btn"
+                    disabled={uiStore.isMediaProcessing}
+                    onClick={() => setStartTime(captureCurrentTime())}
+                    title="Set start time from current video playback position"
+                  >
+                    Mark Start
+                  </button>
+                  <input
+                    className="tools__time-field"
+                    aria-label="Clip start time (HH:MM:SS)"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    placeholder="00:00:00"
+                    disabled={uiStore.isMediaProcessing}
+                  />
+                </div>
+                <div className="tools__mark-row">
+                  <button
+                    className="tools__mark-btn"
+                    disabled={uiStore.isMediaProcessing}
+                    onClick={() => setEndTime(captureCurrentTime())}
+                    title="Set end time from current video playback position"
+                  >
+                    Mark End
+                  </button>
+                  <input
+                    className="tools__time-field"
+                    aria-label="Clip end time (HH:MM:SS)"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    placeholder="00:00:00"
+                    disabled={uiStore.isMediaProcessing}
+                  />
+                </div>
+                {showRangeHint && <p className="tools__clip-hint">End must be after start.</p>}
+                <button
+                  disabled={!clipValid || uiStore.isMediaProcessing}
+                  onClick={() => runMediaJob('create-clip', { start: startTime, end: endTime })}
+                  title="Trim a lossless stream-copy clip between the marked times"
+                >
+                  {IconSet.MEDIA}Create Clip
                 </button>
               </>
             )}

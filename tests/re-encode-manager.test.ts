@@ -7,12 +7,58 @@
  * The functional encode tests spawn a real ffmpeg process against a tiny test
  * video generated with `ffmpeg -f lavfi`.  They are automatically skipped when
  * the ffmpeg binary is not present (e.g. in CI that doesn't bundle it).
+ *
+ * The argv-ordering tests use a spawn mock (EventEmitter-based fake ChildProcess)
+ * to verify preInputArgs placement without requiring a real ffmpeg binary.
+ * jest.mock('child_process') is used because Node's built-in module exports are
+ * non-configurable and cannot be patched by jest.spyOn.  The mock forwards all
+ * calls to the real spawn UNLESS the command equals '/fake/ffmpeg' or '/fake/ffprobe',
+ * which lets the functional encode tests work unmodified.
  */
 
 import path from 'path';
 import os from 'os';
 import fse from 'fs-extra';
 import { execFileSync } from 'child_process';
+
+// ---------------------------------------------------------------------------
+// child_process mock — forwards real calls for all commands except the fake
+// sentinel paths used by the argv-ordering tests below.
+// ---------------------------------------------------------------------------
+
+// spawnCalls is populated by the mock for fake-path invocations.
+const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+jest.mock('child_process', () => {
+  // Keep a reference to the real module so functional tests still work.
+  const real = jest.requireActual<typeof import('child_process')>('child_process');
+
+  return {
+    ...real,
+    spawn: (cmd: string, args: string[], opts?: object) => {
+      // Fake sentinel paths used by the argv-ordering tests — return a minimal
+      // ChildProcess mock instead of spawning a real process.
+      if (cmd === '/fake/ffmpeg' || cmd === '/fake/ffprobe') {
+        spawnCalls.push({ cmd, args: args ?? [] });
+
+        const { EventEmitter: EE } = require('events') as typeof import('events');
+        const proc = new EE() as NodeJS.EventEmitter & {
+          stdout: InstanceType<typeof EE>;
+          stderr: InstanceType<typeof EE>;
+          pid: number;
+        };
+        proc.stdout = new EE();
+        proc.stderr = new EE();
+        proc.pid = 99999;
+        // Resolve the process on the next tick so listeners are attached first.
+        setImmediate(() => proc.emit('close', 0));
+        return proc;
+      }
+      // Real command — delegate to the real spawn (functional encode tests).
+      return real.spawn(cmd, args, opts as Parameters<typeof real.spawn>[2]);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Path resolution for the bundled binaries (mirrors common/fs.ts getExtraResourcePath)
@@ -265,4 +311,115 @@ describe('ReEncodeManager functional encode', () => {
       expect(fse.existsSync(inputPath)).toBe(true);
     }
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// preInputArgs argv-ordering tests — spawn mock (no real ffmpeg required)
+// ---------------------------------------------------------------------------
+//
+// These tests verify that ReEncodeManager places preInputArgs BEFORE -i in the
+// ffmpeg argv, and that omitting preInputArgs produces the legacy argv unchanged.
+//
+// The jest.mock('child_process') above intercepts calls to '/fake/ffmpeg' and
+// '/fake/ffprobe' (sentinel paths used only here) and records them in spawnCalls,
+// while forwarding all other commands to the real spawn so the functional encode
+// tests above continue to work unmodified.
+// ---------------------------------------------------------------------------
+
+describe('ReEncodeManager preInputArgs argv ordering', () => {
+  beforeEach(() => {
+    // Clear the shared spawnCalls array before each test.
+    spawnCalls.length = 0;
+  });
+
+  it('places preInputArgs BEFORE -i and jobArgs AFTER -i', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { ReEncodeManager } = require('../src/ReEncodeManager') as typeof import('../src/ReEncodeManager');
+    const manager = new ReEncodeManager({ ffmpegPath: '/fake/ffmpeg', ffprobePath: '/fake/ffprobe' });
+
+    const inputPath = '/videos/source.mp4';
+    const preInputArgs = ['-ss', '00:00:01', '-to', '00:00:02'];
+    const jobArgs = ['-c', 'copy'];
+
+    await new Promise<void>((resolve, reject) => {
+      manager.start(inputPath, jobArgs, 'mp4', {
+        onProgress: () => { /* ignore */ },
+        onDone: () => resolve(),
+        onError: reject,
+        onCancelled: () => reject(new Error('Unexpected cancellation')),
+      }, preInputArgs);
+    });
+
+    // spawn is called twice: once for ffprobe (duration probe), once for ffmpeg.
+    const ffmpegCall = spawnCalls.find((c) => c.cmd === '/fake/ffmpeg');
+    expect(ffmpegCall).toBeDefined();
+
+    const argv = ffmpegCall!.args;
+
+    // Expected shape:
+    //   [-hide_banner, -ss, 00:00:01, -to, 00:00:02, -i, <inputPath>, -c, copy,
+    //    -progress, pipe:1, -nostats, -y, <outputPath>]
+    expect(argv[0]).toBe('-hide_banner');
+
+    const ssIdx = argv.indexOf('-ss');
+    const toIdx = argv.indexOf('-to');
+    const iIdx = argv.indexOf('-i');
+    const cIdx = argv.indexOf('-c');
+
+    // -ss and -to must appear before -i
+    expect(ssIdx).toBeGreaterThan(-1);
+    expect(toIdx).toBeGreaterThan(-1);
+    expect(ssIdx).toBeLessThan(iIdx);
+    expect(toIdx).toBeLessThan(iIdx);
+
+    // Values must follow their flags
+    expect(argv[ssIdx + 1]).toBe('00:00:01');
+    expect(argv[toIdx + 1]).toBe('00:00:02');
+
+    // -i must be followed by the input path
+    expect(argv[iIdx + 1]).toBe(inputPath);
+
+    // -c copy must appear after -i
+    expect(cIdx).toBeGreaterThan(iIdx);
+    expect(argv[cIdx + 1]).toBe('copy');
+  });
+
+  it('produces the legacy argv (no preInputArgs) when called without the 5th argument', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { ReEncodeManager } = require('../src/ReEncodeManager') as typeof import('../src/ReEncodeManager');
+    const manager = new ReEncodeManager({ ffmpegPath: '/fake/ffmpeg', ffprobePath: '/fake/ffprobe' });
+
+    const inputPath = '/videos/source.mp4';
+    const jobArgs = ['-c:a', 'copy', '-c:v', 'libx264'];
+
+    await new Promise<void>((resolve, reject) => {
+      manager.start(inputPath, jobArgs, 'mp4', {
+        onProgress: () => { /* ignore */ },
+        onDone: () => resolve(),
+        onError: reject,
+        onCancelled: () => reject(new Error('Unexpected cancellation')),
+      });
+      // No preInputArgs — 5th argument omitted entirely (tests the default `= []`).
+    });
+
+    const ffmpegCall = spawnCalls.find((c) => c.cmd === '/fake/ffmpeg');
+    expect(ffmpegCall).toBeDefined();
+
+    const argv = ffmpegCall!.args;
+
+    // Legacy shape: [-hide_banner, -i, <inputPath>, ...jobArgs, -progress, pipe:1, -nostats, -y, <outputPath>]
+    expect(argv[0]).toBe('-hide_banner');
+    expect(argv[1]).toBe('-i');
+    expect(argv[2]).toBe(inputPath);
+
+    // No -ss or -to anywhere in the argv
+    expect(argv.includes('-ss')).toBe(false);
+    expect(argv.includes('-to')).toBe(false);
+
+    // jobArgs must follow -i immediately
+    expect(argv[3]).toBe('-c:a');
+    expect(argv[4]).toBe('copy');
+    expect(argv[5]).toBe('-c:v');
+    expect(argv[6]).toBe('libx264');
+  });
 });

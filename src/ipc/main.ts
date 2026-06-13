@@ -237,8 +237,7 @@ export class MainMessenger {
    */
   static onStartMediaJob = (
     cb: (wc: WebContents, msg: StartMediaJobMessage) => Promise<MediaJobResult>,
-  ) =>
-    ipcMain.handle(START_MEDIA_JOB, (e, msg: StartMediaJobMessage) => cb(e.sender, msg));
+  ) => ipcMain.handle(START_MEDIA_JOB, (e, msg: StartMediaJobMessage) => cb(e.sender, msg));
 
   /** Push a progress event to the renderer that started the media job. */
   static sendMediaJobProgress = (wc: WebContents, msg: MediaJobProgressMessage): void =>

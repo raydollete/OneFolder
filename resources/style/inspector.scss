@@ -233,6 +233,47 @@ table#file-info {
       font-size: 0.85rem;
       margin: 0.25rem 0;
     }
+
+    // Mark Start / Mark End row: button sits inline to the left of the HH:MM:SS field.
+    &__mark-row {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 0.4rem;
+      width: 100%;
+    }
+
+    // "Mark Start" / "Mark End" button — compact, same height as the adjacent input.
+    &__mark-btn {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    // HH:MM:SS text input — grows to fill remaining row width; fixed-width font for
+    // easy digit scanning.
+    &__time-field {
+      flex: 1;
+      min-width: 0;
+      font-family: monospace;
+      font-size: 0.85rem;
+      padding: 0.2rem 0.3rem;
+      border: 1px solid var(--border-color);
+      border-radius: 0.25rem;
+      background-color: var(--input-color);
+      color: var(--text-color);
+
+      &::placeholder {
+        color: var(--text-color-muted);
+        opacity: 0.6;
+      }
+    }
+
+    // Hint shown when both fields are filled but start >= end.
+    &__clip-hint {
+      font-size: 0.8rem;
+      color: var(--text-color-muted);
+      margin: 0.1rem 0 0.1rem;
+    }
   }
 
   // Progress indicator shown while a re-encode job is running (TASK-078).

@@ -44,9 +44,7 @@ const ProfilePic = ({ src, name }: ProfilePicProps) => {
 const FaceGallery = ({ contentRect, select, lastSelectionIndex }: GalleryProps) => {
   return (
     <div className="face-gallery">
-      <div className="wip-container">
-        Face view is not yet implemented.
-      </div>
+      <div className="wip-container">Face view is not yet implemented.</div>
       <ProfilePic src={IMG_29} name="Mason" />
       <ProfilePic src={IMG_1} name="Emma" />
       <ProfilePic src={IMG_3} name="Ava" />

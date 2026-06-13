@@ -11,11 +11,14 @@
  *   - On app quit: kill all live jobs and remove their partial outputs (best-effort).
  *
  * API shape:
- *   - `start(inputPath, jobArgs, outputExt, callbacks)` returns `{ jobId, outputPath }`
+ *   - `start(inputPath, jobArgs, outputExt, callbacks, preInputArgs?)` returns `{ jobId, outputPath }`
  *     synchronously (after path computation) and calls `onProgress` / `onDone` / `onError` /
  *     `onCancelled` asynchronously.
- *   - The caller (main.ts IPC handler) provides the ffmpeg codec/filter args and the output
- *     extension; this manager only adds transport flags around them.
+ *   - The caller (main.ts IPC handler) provides the ffmpeg codec/filter args, the output
+ *     extension, and (optionally) pre-input args (inserted before `-i`); this manager only adds
+ *     transport flags around them.
+ *   - `preInputArgs` defaults to `[]` so the two existing call sites (reencode-x264,
+ *     normalize-audio) are completely unaffected.
  *
  * Codec/filter args are passed in by the caller (defined in the job-spec map in src/main.ts)
  * and are preserved verbatim per INV-018/INV-020. Only transport/progress flags are added
@@ -98,16 +101,25 @@ export class ReEncodeManager {
   }
 
   /**
-   * Start a media job (re-encode, normalize audio, etc.).
+   * Start a media job (re-encode, normalize audio, clip, etc.).
    *
-   * `jobArgs`   — ffmpeg codec/filter args (provided verbatim by the caller; only transport
-   *               flags are added around them by this manager).
-   * `outputExt` — file extension for the output (without leading dot, e.g. `'mp4'`).
+   * `jobArgs`      — ffmpeg codec/filter args (provided verbatim by the caller; only transport
+   *                  flags are added around them by this manager).
+   * `outputExt`    — file extension for the output (without leading dot, e.g. `'mp4'`).
+   * `preInputArgs` — optional ffmpeg args inserted BEFORE `-i inputPath` in the argv (e.g.
+   *                  `['-ss', '00:01:00', '-to', '00:02:00']` for stream-copy clip jobs).
+   *                  Defaults to `[]`; omitting it produces the identical argv as before.
    *
    * Returns `{ jobId, outputPath }` immediately after computing the output path.
    * Progress and completion are delivered asynchronously via `callbacks`.
    */
-  start(inputPath: string, jobArgs: string[], outputExt: string, callbacks: ReencodeCallbacks): StartResult {
+  start(
+    inputPath: string,
+    jobArgs: string[],
+    outputExt: string,
+    callbacks: ReencodeCallbacks,
+    preInputArgs: string[] = [],
+  ): StartResult {
     const dir = path.dirname(inputPath);
     const baseName = path.basename(inputPath, path.extname(inputPath));
     const outputPath = getUniqueSiblingPath(dir, baseName, outputExt);
@@ -115,7 +127,7 @@ export class ReEncodeManager {
 
     // Fire-and-forget: probe duration then spawn. We don't await here so that
     // `start()` returns the jobId/outputPath synchronously to the caller.
-    this._runJob(jobId, inputPath, outputPath, jobArgs, callbacks).catch((err) => {
+    this._runJob(jobId, inputPath, outputPath, jobArgs, callbacks, preInputArgs).catch((err) => {
       // If _runJob itself throws before registering the child (unlikely), forward to onError.
       callbacks.onError(err instanceof Error ? err : new Error(String(err)));
     });
@@ -159,22 +171,32 @@ export class ReEncodeManager {
   // Private helpers
   // -------------------------------------------------------------------------
 
+  /**
+   * Internal job runner.
+   *
+   * `preInputArgs` — args inserted BEFORE `-i` in the ffmpeg argv (e.g. `-ss`/`-to` for clip
+   *                  jobs). Empty array (the default) produces the identical argv as before
+   *                  this parameter was added.
+   */
   private async _runJob(
     jobId: string,
     inputPath: string,
     outputPath: string,
     jobArgs: string[],
     callbacks: ReencodeCallbacks,
+    preInputArgs: string[] = [],
   ): Promise<void> {
     // Step 1: probe source duration (best-effort; indeterminate on failure).
     const totalSec = await this._probeDuration(inputPath);
 
     // Step 2: spawn ffmpeg.
+    // preInputArgs (e.g. -ss/-to) must come BEFORE -i for correct stream-copy seeking.
     // jobArgs (codec/filter args) are provided verbatim by the caller (job-spec map in main.ts).
     // Only transport/progress flags are added around them here.
     // -y is safe because outputPath was freshly computed to be collision-free.
     const ffmpegArgs = [
       '-hide_banner',
+      ...preInputArgs,
       '-i',
       inputPath,
       ...jobArgs,

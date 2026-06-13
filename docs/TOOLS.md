@@ -299,12 +299,49 @@ See [normalize-audio.md](normalize-audio.md) and INV-020 for the full feature
 doc and the `-c:v copy` container-compatibility caveat (VP8/Theora sources
 fail with an honest error when stream-copying into the forced `.mp4` container).
 
+### Example 3 — Create Clip / Mark Start / Mark End (INV-022)
+
+The third tool introduces the **one** dimension the parameterized stack had not
+yet generalized: **pre-input ffmpeg arguments** (`-ss`/`-to` must precede `-i`
+for correct stream-copy seeking).  Everything else is reused unchanged.
+
+Specifically, Create Clip added:
+
+- **One targeted widening to `ReEncodeManager.start()`** — an optional
+  `preInputArgs: string[] = []` parameter, inserted before `-i` in the ffmpeg
+  argv.  The two existing call sites pass nothing and are completely unaffected.
+- **One entry in `MEDIA_JOB_SPECS`** — `{ args: ['-c', 'copy'], outputExt: 'mp4' }`.
+  The per-invocation `-ss`/`-to` values are not in the static spec; they come
+  from the `StartMediaJobMessage.clip` payload and are forwarded as `preInputArgs`
+  by the IPC handler in `src/main.ts`.
+- **Two HH:MM:SS helpers in `common/fmt.ts`** — `parseHmsToSeconds` and
+  `formatSecondsToHms`, shared by the renderer's field validation and the
+  main-process defense-in-depth re-validation.
+- **Mark Start / Mark End / Create Clip UI in `ImageTools.tsx`** — two
+  button-and-field rows and a gated Create Clip button.  Mark buttons read
+  `document.querySelector('video')?.currentTime ?? 0` (the established
+  `ZoomPan.tsx` pattern) and write `formatSecondsToHms(...)` into the field.
+  Create Clip calls `runMediaJob('create-clip', { start, end })`.  The spinner,
+  cancel, lock, finalize, and delete-original flows are all shared.
+- **No new binary, no new IPC channels, no new manager class.**
+
+Key caveats documented in [create-clip.md](create-clip.md): stream-copy start
+snaps to the preceding keyframe (inherent to lossless copy); progress percent is
+computed against the source duration (the clip appears to finish "early");
+webm/VP8 and ogg/Theora sources fail with an honest error toast when
+stream-copied into the forced `.mp4` container — the source is always left
+intact.
+
+See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
+
 ---
 
 ## Related
 
 - [Re-encode (x264)](reencode-x264.md) — the primary worked example for every layer
 - [Normalize Audio](normalize-audio.md) — the second worked example confirming layers 3–6 are reusable
+- [Create Clip](create-clip.md) — the third worked example, introducing pre-input args and per-invocation parameters
 - [Personal Fork Notes](personal-fork-notes.md) — bundled binaries and licensing
 - INV-018 — original investigation, behavioral spec, and design rejections
 - INV-020 — Normalize Audio investigation and the parameterized media-job stack
+- INV-022 — Create Clip investigation, `-ss`/`-to` pre-input ordering, stream-copy caveats

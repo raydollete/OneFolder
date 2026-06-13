@@ -30,9 +30,7 @@ export default function App() {
 
   return (
     <div className="mapbox-container">
-      <div className="wip-container">
-        The map view is not yet implemented.
-      </div>
+      <div className="wip-container">The map view is not yet implemented.</div>
       <div ref={mapContainer} className="map" />
     </div>
   );

@@ -244,9 +244,15 @@ export class RendererMessenger {
    * (see `onMediaJobProgress`) so that `cancelMediaJob(jobId)` can be called during
    * the job.  Callers must subscribe to `onMediaJobProgress` before calling
    * `startMediaJob` and stash the first `msg.jobId` they receive.
+   *
+   * `clip` is required when `jobType === 'create-clip'`; omit for all other job types.
    */
-  static startMediaJob = (jobType: MediaJobType, inputPath: string): Promise<MediaJobResult> =>
-    ipcRenderer.invoke(START_MEDIA_JOB, { inputPath, jobType } as StartMediaJobMessage);
+  static startMediaJob = (
+    jobType: MediaJobType,
+    inputPath: string,
+    clip?: { start: string; end: string },
+  ): Promise<MediaJobResult> =>
+    ipcRenderer.invoke(START_MEDIA_JOB, { inputPath, jobType, clip } as StartMediaJobMessage);
 
   /**
    * Subscribe to live progress events from the running media job.

@@ -21,6 +21,7 @@ import {
   getDefaultThumbnailDir,
   getSqliteDbPath,
 } from '../common/library-registry';
+import { parseHmsToSeconds } from '../common/fmt';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress, MediaJobType } from './ipc/messages';
 import { reEncodeManager } from './ReEncodeManager';
@@ -40,6 +41,13 @@ const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string 
     // -filter:a dynaudnorm=p=0.9:s=5: re-encode only the audio with dynamic normalization.
     // The filter string is a single argument — spawn() runs without a shell, no quoting needed.
     args: ['-c:v', 'copy', '-filter:a', 'dynaudnorm=p=0.9:s=5'],
+    outputExt: 'mp4',
+  },
+  'create-clip': {
+    // Stream-copy: no re-encode, instant lossless trim.
+    // The -ss/-to pre-input args are NOT here — they are per-invocation and come from the
+    // clip payload in the IPC message; see the onStartMediaJob handler below.
+    args: ['-c', 'copy'],
     outputExt: 'mp4',
   },
 };
@@ -737,27 +745,61 @@ MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 // with { outputPath } when the job finishes, or rejects on failure/cancel.
 // The first MEDIA_JOB_PROGRESS event carries the jobId so the renderer can call
 // CANCEL_MEDIA_JOB if the user clicks cancel.
-MainMessenger.onStartMediaJob((wc, { inputPath, jobType }) => {
+MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
   const spec = MEDIA_JOB_SPECS[jobType];
+
+  // Build preInputArgs for create-clip: -ss <start> -to <end> must come before -i.
+  // For all other job types preInputArgs stays empty, preserving existing behavior.
+  let preInputArgs: string[] = [];
+  if (jobType === 'create-clip') {
+    if (clip === undefined) {
+      return Promise.reject(new Error('create-clip job requires clip start/end times'));
+    }
+    const startSec = parseHmsToSeconds(clip.start);
+    const endSec = parseHmsToSeconds(clip.end);
+    if (startSec === null) {
+      return Promise.reject(
+        new Error(`create-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
+      );
+    }
+    if (endSec === null) {
+      return Promise.reject(
+        new Error(`create-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
+      );
+    }
+    if (startSec >= endSec) {
+      return Promise.reject(
+        new Error(`create-clip: start time (${clip.start}) must be before end time (${clip.end})`),
+      );
+    }
+    preInputArgs = ['-ss', clip.start, '-to', clip.end];
+  }
+
   return new Promise<{ outputPath: string }>((resolve, reject) => {
-    const { jobId, outputPath } = reEncodeManager.start(inputPath, spec.args, spec.outputExt, {
-      onProgress: (progress) => {
-        // Guard against a destroyed WebContents (e.g. window closed mid-job).
-        if (!wc.isDestroyed()) {
-          MainMessenger.sendMediaJobProgress(wc, {
-            jobId: progress.jobId,
-            percent: progress.percent,
-            outTimeSec: progress.outTimeSec,
-            totalSec: progress.totalSec,
-          });
-        }
+    const { jobId, outputPath } = reEncodeManager.start(
+      inputPath,
+      spec.args,
+      spec.outputExt,
+      {
+        onProgress: (progress) => {
+          // Guard against a destroyed WebContents (e.g. window closed mid-job).
+          if (!wc.isDestroyed()) {
+            MainMessenger.sendMediaJobProgress(wc, {
+              jobId: progress.jobId,
+              percent: progress.percent,
+              outTimeSec: progress.outTimeSec,
+              totalSec: progress.totalSec,
+            });
+          }
+        },
+        onDone: (result) => resolve({ outputPath: result.outputPath }),
+        onError: (err) => reject(err),
+        // Rejection with a distinguishable message lets the renderer treat cancel
+        // differently from a hard failure (no toast, just unlock the UI).
+        onCancelled: () => reject(new Error('MEDIA_JOB_CANCELLED')),
       },
-      onDone: (result) => resolve({ outputPath: result.outputPath }),
-      onError: (err) => reject(err),
-      // Rejection with a distinguishable message lets the renderer treat cancel
-      // differently from a hard failure (no toast, just unlock the UI).
-      onCancelled: () => reject(new Error('MEDIA_JOB_CANCELLED')),
-    });
+      preInputArgs,
+    );
 
     // Emit the very first progress event immediately so the renderer receives
     // the jobId before any real encode progress arrives.  This allows the

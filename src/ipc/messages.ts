@@ -146,12 +146,20 @@ export const MEDIA_JOB_PROGRESS = 'MEDIA_JOB_PROGRESS';
 export const CANCEL_MEDIA_JOB = 'CANCEL_MEDIA_JOB';
 
 /** Discriminator for all supported ffmpeg job types. */
-export type MediaJobType = 'reencode-x264' | 'normalize-audio';
+export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip';
 
-/** Payload for a START_MEDIA_JOB invoke. */
+/**
+ * Payload for a START_MEDIA_JOB invoke.
+ *
+ * `clip` is required if and only if `jobType === 'create-clip'`.
+ * For all other job types it is omitted (undefined). Main validates the
+ * HH:MM:SS strings and that start < end before passing them to ffmpeg.
+ */
 export type StartMediaJobMessage = {
   inputPath: string;
   jobType: MediaJobType;
+  /** Clip start/end times in HH:MM:SS format. Required when jobType is 'create-clip'. */
+  clip?: { start: string; end: string };
 };
 
 /** Live progress event pushed from main to renderer during an ffmpeg job. */

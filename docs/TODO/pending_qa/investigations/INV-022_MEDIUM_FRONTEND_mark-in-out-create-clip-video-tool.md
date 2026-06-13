@@ -3,7 +3,7 @@ id: INV-022
 title: 'Add Mark Start / Mark End / Create Clip video tools to the inspector that capture the open video''s playback time into HH:MM:SS fields and run `ffmpeg -ss [start] -to [end] -i [src] -c copy [dst]` (stream copy, no re-encode), then replicate tags and prompt to delete the original'
 reported_bug: 'Feature request: In the inspector "Tools" section (the same place the existing video tools live — Re-encode (x264) and Normalize Audio), add a "Mark Start" button with an attached HH:MM:SS field, a "Mark End" button with an attached HH:MM:SS field, and a "Create Clip" button. Clicking Mark Start / Mark End fills its field with the CURRENT PLAYBACK TIME of the open video (00:00:00 if stopped); fields are also manually editable. Create Clip is enabled only when both fields hold valid HH:MM:SS values; clicking it spawns ffmpeg `-ss [start] -to [end] -i [source] -c copy [dest]` (stream copy, no re-encode). On completion, mirror the existing tools: auto-open/import the new clip with all source tags replicated, then prompt whether to delete the original.'
 date: 2026-06-12
-status: tasks-created
+status: pending_qa
 superseded_by:
 tasks_spawned: [TASK-093, TASK-094, TASK-095]
 root_cause_category: architectural-shortcoming

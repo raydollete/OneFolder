@@ -99,6 +99,48 @@ export function getFilenameFriendlyFormattedDateTime(date: Date) {
   return date.toISOString().replaceAll(/-|:/g, '').slice(0, -5);
 }
 
+///////////////////////////////
+//// HH:MM:SS time helpers ////
+///////////////////////////////
+
+/**
+ * Parse an `HH:MM:SS` time string to total seconds.
+ *
+ * Accepts HH with 2 or more digits (e.g. `01:30:00`, `100:00:00`).
+ * MM and SS must each be in the range 0–59.
+ * Returns `null` for any malformed, empty, or out-of-range input.
+ * Pure — no imports, usable in both main and renderer.
+ */
+export function parseHmsToSeconds(s: string): number | null {
+  if (!s) {
+    return null;
+  }
+  const match = /^(\d{2,}):([0-5]\d):([0-5]\d)$/.exec(s);
+  if (match === null) {
+    return null;
+  }
+  const hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const seconds = parseInt(match[3], 10);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+/**
+ * Format a duration in seconds to `HH:MM:SS` (zero-padded, always 2-digit MM and SS).
+ *
+ * Clamps negative values and NaN to `00:00:00`.
+ * Floors fractional seconds (e.g. 3661.9 → `01:01:01`).
+ * Pure — no imports, usable in both main and renderer.
+ */
+export function formatSecondsToHms(sec: number): string {
+  const total = isNaN(sec) || sec < 0 ? 0 : Math.floor(sec);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
 /**
  * Format bytes as human-readable text.
  * From: https://stackoverflow.com/a/14919494/2350481
