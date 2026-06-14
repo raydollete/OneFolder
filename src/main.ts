@@ -748,31 +748,43 @@ MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
   const spec = MEDIA_JOB_SPECS[jobType];
 
-  // Build preInputArgs for create-clip: -ss <start> -to <end> must come before -i.
+  // Build preInputArgs for create-clip: -ss and/or -to must come before -i.
+  // At least one marker (start or end) is required; both are optional individually.
   // For all other job types preInputArgs stays empty, preserving existing behavior.
-  let preInputArgs: string[] = [];
+  const preInputArgs: string[] = [];
   if (jobType === 'create-clip') {
-    if (clip === undefined) {
-      return Promise.reject(new Error('create-clip job requires clip start/end times'));
+    if (clip === undefined || (clip.start === undefined && clip.end === undefined)) {
+      return Promise.reject(new Error('create-clip job requires at least one of start/end'));
     }
-    const startSec = parseHmsToSeconds(clip.start);
-    const endSec = parseHmsToSeconds(clip.end);
-    if (startSec === null) {
-      return Promise.reject(
-        new Error(`create-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
-      );
+    let startSec: number | null = null;
+    let endSec: number | null = null;
+    if (clip.start !== undefined) {
+      startSec = parseHmsToSeconds(clip.start);
+      if (startSec === null) {
+        return Promise.reject(
+          new Error(`create-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
+        );
+      }
     }
-    if (endSec === null) {
-      return Promise.reject(
-        new Error(`create-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
-      );
+    if (clip.end !== undefined) {
+      endSec = parseHmsToSeconds(clip.end);
+      if (endSec === null) {
+        return Promise.reject(
+          new Error(`create-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
+        );
+      }
     }
-    if (startSec >= endSec) {
+    if (startSec !== null && endSec !== null && startSec >= endSec) {
       return Promise.reject(
         new Error(`create-clip: start time (${clip.start}) must be before end time (${clip.end})`),
       );
     }
-    preInputArgs = ['-ss', clip.start, '-to', clip.end];
+    if (clip.start !== undefined) {
+      preInputArgs.push('-ss', clip.start);
+    }
+    if (clip.end !== undefined) {
+      preInputArgs.push('-to', clip.end);
+    }
   }
 
   return new Promise<{ outputPath: string }>((resolve, reject) => {

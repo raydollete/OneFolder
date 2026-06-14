@@ -619,30 +619,42 @@ class FileStore {
     this.refetch();
   }
 
+  // A view-mode setter only exits SlideMode when the mode ACTUALLY CHANGES (a genuine, user-driven
+  // view switch). A same-mode call — which is what every background `refetch()` performs, including
+  // the folder watcher's `debouncedRefetch()` fired when a re-encode/normalize/clip output appears
+  // as a new file — must NOT disable SlideMode. Disabling it on a same-mode refetch was the primary
+  // cause of the post-encode "dropped back to the index" bug (INV-021 redo): the output's add event
+  // refetched the active view, which flipped `isSlideMode` to false and tore the viewer to the grid,
+  // and it was never re-enabled, so the output "never opened". This also fixes the general latent
+  // bug where any new file detected while browsing in SlideMode would kick the user out.
   @action.bound setContentQuery(): void {
+    const changed = this.content !== Content.Query;
     this.content = Content.Query;
-    if (this.rootStore.uiStore.isSlideMode) {
+    if (changed && this.rootStore.uiStore.isSlideMode) {
       this.rootStore.uiStore.disableSlideMode();
     }
   }
 
   @action.bound setContentAll(): void {
+    const changed = this.content !== Content.All;
     this.content = Content.All;
-    if (this.rootStore.uiStore.isSlideMode) {
+    if (changed && this.rootStore.uiStore.isSlideMode) {
       this.rootStore.uiStore.disableSlideMode();
     }
   }
 
   @action.bound setContentUntagged(): void {
+    const changed = this.content !== Content.Untagged;
     this.content = Content.Untagged;
-    if (this.rootStore.uiStore.isSlideMode) {
+    if (changed && this.rootStore.uiStore.isSlideMode) {
       this.rootStore.uiStore.disableSlideMode();
     }
   }
 
   @action.bound setContentDuplicates(): void {
+    const changed = this.content !== Content.Duplicates;
     this.content = Content.Duplicates;
-    if (this.rootStore.uiStore.isSlideMode) {
+    if (changed && this.rootStore.uiStore.isSlideMode) {
       this.rootStore.uiStore.disableSlideMode();
     }
   }
@@ -1160,6 +1172,29 @@ class FileStore {
     return fileIndex !== undefined ? this.fileList[fileIndex] : undefined;
   }
 
+  /**
+   * Ensures `file` is present in `fileList` and returns its index, injecting it at `preferredIndex`
+   * (default: end of list) and patching `index` if it is currently absent. Used when handing the
+   * media-processing pin back to the firstItem-anchored viewer (UiStore.endMediaProcessing): the
+   * output may be excluded by the active filter, so this guarantees it is locatable and the pin can
+   * be cleared without ever blanking the viewer. In the common case the file is already present and
+   * its existing index is returned unchanged (no mutation). The transient "file in list but outside
+   * the active query" state is reconciled by the next user-driven refetch (mirrors how
+   * removeFilesFromListInPlace tolerates in-place edits).
+   */
+  @action.bound ensureFileInListAt(file: ClientFile, preferredIndex?: number): number {
+    const existing = this.index.get(file.id);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const idx = Math.min(preferredIndex ?? this.fileList.length, this.fileList.length);
+    this.fileList.splice(idx, 0, file);
+    for (let i = idx; i < this.fileList.length; i++) {
+      this.index.set(this.fileList[i].id, i);
+    }
+    return idx;
+  }
+
   getIndex(id: ID): number | undefined {
     return this.index.get(id);
   }
@@ -1371,11 +1406,13 @@ class FileStore {
    * @param outputPath  Absolute path of the freshly-encoded output (win32
    *                    backslash form from the main process is acceptable — path
    *                    normalization is handled internally).
-   * @returns `true` if the DB row was found and tagged; `false` if the row never
+   * @returns The tagged `FileDTO` when the DB row was found and tagged (the caller
+   *          can build a ClientFile from it immediately, without waiting for it to
+   *          appear in the view-dependent `fileList`); `null` if the row never
    *          appeared after the bounded poll (output is likely outside any watched
-   *          location). Never throws on a missing row.
+   *          location, or ingestion genuinely failed). Never throws on a missing row.
    */
-  async copyTagsToOutputPath(source: ClientFile, outputPath: string): Promise<boolean> {
+  async copyTagsToOutputPath(source: ClientFile, outputPath: string): Promise<FileDTO | null> {
     // --- Path normalization for DB lookup ---
     // The DB stores absolutePath in forward-slash form (the folder watcher normalizes
     // its watch root to '/'; chokidar emits forward-slash paths on all platforms).
@@ -1394,9 +1431,14 @@ class FileStore {
 
     // --- Bounded poll for the DB row ---
     // The DB row is created by chokidar add -> LocationStore.addFile -> backend.createFilesFromPath
-    // via the watcher worker round-trip, which can lag behind ffmpeg completion slightly.
-    // Poll up to ~3 s (15 × 200 ms) before giving up.
-    const MAX_POLLS = 15;
+    // via the watcher worker round-trip, which lags behind ffmpeg completion by the watcher's
+    // ~2 s awaitWriteFinish plus the worker round-trip. Poll up to ~10 s (50 × 200 ms) before
+    // giving up, so the tag copy reliably completes even on slow disks — the destination MUST carry
+    // the source's tags before it is shown (INV-021 redo requirement 3). The loop breaks early the
+    // moment the row appears (normally < 1 s after the watcher fires), so the full budget is only
+    // ever spent in the genuinely-not-ingested case. The source stays on screen with a "Finalizing…"
+    // indicator throughout (the viewer is pinned), so a longer wait is honest, not jarring.
+    const MAX_POLLS = 50;
     const POLL_INTERVAL_MS = 200;
 
     let dto: FileDTO | undefined;
@@ -1423,8 +1465,8 @@ class FileStore {
 
     if (!dto) {
       // Row never appeared after the full poll budget. The output may be genuinely
-      // outside any watched location, or ingestion failed. Return false — do NOT throw.
-      return false;
+      // outside any watched location, or ingestion failed. Return null — do NOT throw.
+      return null;
     }
 
     // --- Set the source's tags on the DTO and persist ---
@@ -1447,181 +1489,108 @@ class FileStore {
       await this.rootStore.exifTool.writeTags(outputPath, hierarchy);
     }
 
-    return true;
+    return dto;
   }
 
   /**
-   * Reusable post-encode finalization helper (INV-019, INV-021).
+   * Reusable post-encode finalization helper (INV-019, INV-021, INV-021 redo).
    *
-   * Runs the corrected post-encode order so that tag copy is never gated on the
-   * file being present in the view-dependent `fileList`, and so that SlideMode
-   * is never torn down mid-finalization:
+   * Produces the freshly-encoded output as a ready-to-show ClientFile, with the source's tags
+   * already copied onto it at BOTH the DB and EXIF/XMP level, and returns it so the caller can
+   * atomically swap the pinned viewer from the source to the output (a seamless in-place switch).
    *
-   *   A. Copy tags at the DB level (no `fileList` required). — unchanged.
-   *   B. Refetch the active view while keeping the source pinned via
-   *      `pinViewedFileAcrossRefetch` (TASK-090), so `firstFileInView` is never
-   *      `undefined` during the list churn.
-   *   C. Wait (bounded, 10 s) for the output to appear in `fileList`. Because
-   *      tags were copied in step A, a tag-filtered view can now include it.
-   *   D. On success: atomically swap `firstItem` to the output's index and
-   *      select it inside a single MobX `transaction` — `isSlideMode` is never
-   *      toggled (it stays true throughout).
-   *   E. On still-not-visible: resolve the output ClientFile directly from the
-   *      backend by absolute path (independent of the active filter), inject it
-   *      into `fileList` + `index`, and do the same atomic swap. Never routes
-   *      through `clearSearchCriteriaList()` / content-mode setters (which call
-   *      `disableSlideMode()`). If the DB row cannot be found either, keep the
-   *      SOURCE on screen and show the honest INV-019 toast.
+   *   A. Copy tags at the DB level FIRST (INV-019), then write EXIF/XMP exactly once. This polls
+   *      the backend for the output's row (created by the folder watcher's chokidar `add`) for up
+   *      to ~10 s, so the destination RELIABLY carries the source's tags before it is ever shown
+   *      (requirement 3). Returns the tagged FileDTO, or null if the row never appeared.
+   *   B. Bring the output into the active `fileList` via a plain `refetch()` so the grid behind the
+   *      viewer is correct and `firstItem` can be re-anchored. This is now safe in SlideMode because
+   *      the content-mode setters no longer disable SlideMode on a same-mode refetch, and because
+   *      the caller has PINNED the viewer (`uiStore.mediaProcessingFile`) so no list/`firstItem`
+   *      churn can tear it down.
+   *   C. Resolve the output's ClientFile: prefer the instance already reconciled into `fileList`
+   *      (the shared observable the grid uses); if the active filter excludes it, build one from the
+   *      tagged DTO and inject it at the source's position. Either way `firstItem` is anchored to it.
    *
-   * Tags are always copied (step A runs regardless of the active view), so no
-   * tagging work is lost even when the fallback path fires.
+   * This method does NOT toggle the media-processing lock or the pin, and does NOT open the
+   * delete-original prompt — those remain the caller's (ImageTools.tsx runMediaJob) responsibility.
+   * On a successful return the caller swaps the pin to the returned file; on a null return the
+   * caller keeps the source on screen and does NOT prompt to delete the original (the output could
+   * not be verified openable — requirement: never close the source until the output is confirmed).
    *
-   * The caller (ImageTools.tsx runMediaJob) retains the `try/finally` that
-   * releases the media-processing lock — this method does NOT call
-   * `endMediaProcessing`. The delete-original prompt is also the caller's
-   * responsibility, placed AFTER this method returns.
-   *
-   * This helper is the single reusable entry point that INV-020 (Normalize
-   * Audio) also uses — do not inline a duplicate in each tool.
+   * Shared by every tool that produces a derived output (Re-encode, Normalize Audio, Create Clip) —
+   * do not inline a duplicate in each tool.
    *
    * @param source      The source ClientFile whose tags should be copied.
    * @param outputPath  Absolute path of the freshly-encoded output (win32
    *                    backslash form from the main process is acceptable).
+   * @returns The output ClientFile (tags copied, present in or injected into `fileList`) when it
+   *          could be verified; `null` when the output's DB row never appeared (outside a watched
+   *          location or ingestion genuinely failed).
    */
-  @action.bound async finalizeEncodedOutput(source: ClientFile, outputPath: string): Promise<void> {
+  @action.bound async finalizeEncodedOutput(
+    source: ClientFile,
+    outputPath: string,
+  ): Promise<ClientFile | null> {
     const { uiStore } = this.rootStore;
 
-    // --- Step A: copy tags at the DB level (unchanged from INV-019) ---
-    // Runs regardless of the active filter: the output row exists in the DB
-    // (ingested by chokidar add at encode start) and is tagged via the backend,
-    // so no ClientFile from fileList is required. Returns true when the row was
-    // found and tagged; false when the row was absent after the bounded poll
-    // (output outside a watched location or ingestion genuinely failed).
-    const tagged = await this.copyTagsToOutputPath(source, outputPath);
+    // --- Step A: copy tags at the DB level FIRST, then EXIF/XMP once (INV-019) ---
+    // Returns the tagged FileDTO (so we can build a ClientFile from it without waiting for the
+    // view-dependent fileList), or null if the output's row never appeared after the bounded poll.
+    const dto = await this.copyTagsToOutputPath(source, outputPath);
 
-    // --- Step B: pin-aware refetch (INV-021) ---
-    // Uses the TASK-090 primitive: calls refetch() internally, then re-anchors
-    // `uiStore.firstItem` to the source's new index inside a single synchronous
-    // transaction AFTER updateFromBackend has committed its own transaction.
-    // This guarantees `firstFileInView` is never `undefined` between the two
-    // transactions (React won't observe the intermediate state in the
-    // Electron/React scheduler). If the source is no longer in the refetched
-    // list (e.g. a tagless source under a tag filter that was just cleared), the
-    // helper returns false and firstItem is left wherever updateFromBackend put
-    // it — we proceed anyway rather than resetting to 0 or blanking the viewer.
-    await this.pinViewedFileAcrossRefetch(source);
-
-    // --- Step C: wait for the output ClientFile ---
-    // Because tags were copied in step A, a tag-filtered view can now return
-    // this file. waitForIngestedFile watches the live fileList observable and
-    // resolves as soon as the output appears, or rejects after 10 s.
-    let newFile: ClientFile | null = null;
-    try {
-      newFile = await this.waitForIngestedFile(outputPath, 10000);
-    } catch {
-      newFile = null;
+    if (dto === null) {
+      // The output could not be confirmed in the library. Keep the source on screen (the caller
+      // does NOT swap and does NOT prompt to delete the original). Honest message — never assert
+      // "outside a watched folder" as the sole cause.
+      AppToaster.show({
+        message:
+          `Encoded to ${outputPath}, but it could not be confirmed in your library yet ` +
+          '(it may be outside a watched folder, or still being ingested). Your original was kept.',
+        timeout: 8000,
+      });
+      return null;
     }
 
-    // --- Step D: in-place swap to the output (INV-021) ---
-    // The output is now in fileList. Atomically re-anchor firstItem to its
-    // index and select it so `firstFileInView` transitions directly from
-    // source → output without ever returning `undefined`. isSlideMode is
-    // intentionally NOT toggled: it was true on entry and stays true.
-    if (newFile !== null) {
-      // Capture in a const so TypeScript narrows the type inside the transaction
-      // callback without requiring a non-null assertion.
-      const resolvedFile = newFile;
-      const outputIdx = this.index.get(resolvedFile.id);
-      if (outputIdx !== undefined) {
-        transaction(() => {
-          uiStore.firstItem = outputIdx;
-          uiStore.selectFile(resolvedFile, true);
-        });
-      } else {
-        // The file appeared in fileList but index is somehow stale — fall back
-        // to a plain select (still no disableSlideMode).
-        uiStore.selectFile(resolvedFile, true);
-      }
-      return;
-    }
+    // --- Step B: bring the output into the active view (safe in SlideMode now) ---
+    // A plain same-mode refetch no longer disables SlideMode (see the content-mode setters), and the
+    // viewer is pinned by the caller, so this cannot tear the viewer down. It simply reconciles the
+    // grid behind the viewer so the output is present once we unpin.
+    await this.refetch();
 
-    // --- Step E: SlideMode-safe fallback (INV-021) ---
-    // The output is still not visible after the bounded wait. This can happen
-    // when the active filter excludes it (e.g. a tag filter that does not match
-    // the output's newly-copied tags yet, or a "videos only" preference off
-    // after audio encode). Do NOT route through clearSearchCriteriaList() or
-    // any content-mode setter — those unconditionally call disableSlideMode().
-    //
-    // Instead: resolve the output's FileDTO directly from the backend by
-    // absolute path (same path-normalized logic as copyTagsToOutputPath), build
-    // a ClientFile from it, inject it into fileList at the source's position
-    // (so the swap is visually in-place), and do the atomic firstItem + select.
-    //
-    // If the DB row cannot be found at all, keep the source on screen and
-    // surface the honest INV-019 toast — never assert "outside a watched
-    // folder" as the sole cause.
-    const forwardSlashPath = outputPath.replace(/\\/g, '/');
-    const normalizedForSearch = forwardSlashPath.toLowerCase();
-    const findDto = (results: FileDTO[]): FileDTO | undefined =>
-      results.find((f) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === normalizedForSearch);
-
-    let fallbackDto: FileDTO | undefined;
-    const primaryResults = await this.backend.fetchFilesByKey('absolutePath', forwardSlashPath);
-    fallbackDto = findDto(primaryResults);
-    if (!fallbackDto) {
-      const rawResults = await this.backend.fetchFilesByKey('absolutePath', outputPath);
-      fallbackDto = findDto(rawResults);
-    }
-
-    if (fallbackDto !== undefined) {
-      // Construct a ClientFile for the output (same pattern as updateFromBackend
-      // / makeClientFiles). Initialize its thumbnail path immediately so the
-      // viewer can load the file as soon as it mounts.
-      const outputFile = new ClientFile(this, fallbackDto, this.rootStore.exifTool);
-      outputFile.thumbnailPath = this.rootStore.imageLoader.needsThumbnail(fallbackDto)
-        ? getThumbnailPath(fallbackDto.absolutePath, uiStore.thumbnailDirectory)
-        : fallbackDto.absolutePath;
-
-      // Determine the injection index: insert at the source's current position
-      // so the viewer stays visually stable. Fall back to end-of-list.
-      const sourceIdx = this.index.get(source.id) ?? this.fileList.length;
-      const injectionIdx = Math.min(sourceIdx, this.fileList.length);
-
-      // Atomically inject the output into fileList + index, then anchor
-      // firstItem to it. The transaction ensures React never observes a state
-      // where fileList has the new file but firstItem or index are stale.
+    // --- Step C: resolve the output ClientFile and anchor firstItem to it ---
+    const existingIdx = this.index.get(dto.id);
+    if (existingIdx !== undefined) {
+      // Prefer the instance the grid already holds.
+      const outputFile = this.fileList[existingIdx];
       transaction(() => {
-        this.fileList.splice(injectionIdx, 0, outputFile);
-        // Rebuild the portion of index at and after the injection point so
-        // all downstream references stay correct.
-        for (let i = injectionIdx; i < this.fileList.length; i++) {
-          this.index.set(this.fileList[i].id, i);
-        }
-        uiStore.firstItem = injectionIdx;
+        uiStore.firstItem = existingIdx;
         uiStore.selectFile(outputFile, true);
       });
-      return;
+      return outputFile;
     }
 
-    // Last resort: the output row is genuinely absent from the DB (outside a
-    // watched location, or ingestion failed). Keep the source on screen — do
-    // not blank the viewer or change firstItem. Show the honest INV-019 toast.
-    if (tagged) {
-      AppToaster.show({
-        message:
-          `Re-encoded to ${outputPath} and copied your tags, ` +
-          'but it is not visible in the current view. ' +
-          'It may be excluded by the active filter, or outside a watched folder.',
-        timeout: 8000,
-      });
-    } else {
-      AppToaster.show({
-        message:
-          `Re-encoded to ${outputPath}, but it is not visible in the current view. ` +
-          'It may be excluded by the active filter, outside a watched folder, or ingestion may still be in progress.',
-        timeout: 8000,
-      });
-    }
+    // The active filter excludes the output (e.g. a tag filter that does not match, or a
+    // "videos only" preference after an audio-only re-encode). Build it from the tagged DTO and
+    // inject it at the source's position so the grid stays visually stable. Never route through
+    // clearSearchCriteriaList() / content-mode mode changes (those would disable SlideMode).
+    const outputFile = new ClientFile(this, dto, this.rootStore.exifTool);
+    outputFile.thumbnailPath = this.rootStore.imageLoader.needsThumbnail(dto)
+      ? getThumbnailPath(dto.absolutePath, uiStore.thumbnailDirectory)
+      : dto.absolutePath;
+
+    const sourceIdx = this.index.get(source.id) ?? this.fileList.length;
+    const injectionIdx = Math.min(sourceIdx, this.fileList.length);
+    transaction(() => {
+      this.fileList.splice(injectionIdx, 0, outputFile);
+      // Rebuild the portion of index at and after the injection point.
+      for (let i = injectionIdx; i < this.fileList.length; i++) {
+        this.index.set(this.fileList[i].id, i);
+      }
+      uiStore.firstItem = injectionIdx;
+      uiStore.selectFile(outputFile, true);
+    });
+    return outputFile;
   }
 
   getPersistentPreferences(): Partial<Record<keyof FileStore, unknown>> {
@@ -1674,9 +1643,30 @@ class FileStore {
     // or construct a new client file
     const [newClientFiles, reusedStatus] = this.filesFromBackend(backendFiles);
 
-    // Dispose of Client files that are not re-used (to get rid of MobX observers)
+    // Dispose of Client files that are not re-used (to get rid of MobX observers).
+    // Never dispose the media-processing pinned file: while a job is finalizing, the viewer shows
+    // it by identity (uiStore.mediaProcessingFile) even if the active filter would exclude it, so
+    // disposing it here would strip the observers off the file the user is currently watching.
+    const pinnedFileId = this.rootStore.uiStore.mediaProcessingFile?.id;
+
+    // Capture the file the viewer is currently anchored to — the media-processing pin if a job is
+    // pinning the viewer, otherwise the file at firstItem — BEFORE fileList is replaced, so we can
+    // re-point firstItem to it by IDENTITY after the rebuild. Without this, ANY refetch (most
+    // damagingly the folder watcher's debouncedRefetch when the re-encode output appears as a new
+    // file, or the trailing change event from the post-encode EXIF write that lands AFTER the
+    // media-processing pin is released) leaves firstItem at a now-stale index, so SlideMode jumps to
+    // an unrelated file while the delete-original prompt is up. The delete path
+    // (removeFilesFromListInPlace) already reconciles firstItem this way; the fetch path did not.
+    // This is the structural fix INV-021/INV-023 were working around with the (too-short-lived) pin.
+    const anchorFirstItem = this.rootStore.uiStore.firstItem;
+    const anchorFileId =
+      pinnedFileId ??
+      (anchorFirstItem >= 0 && anchorFirstItem < this.fileList.length
+        ? this.fileList[anchorFirstItem].id
+        : undefined);
+
     for (const file of this.fileList) {
-      if (!reusedStatus.has(file.id)) {
+      if (!reusedStatus.has(file.id) && file.id !== pinnedFileId) {
         file.dispose();
       }
     }
@@ -1702,6 +1692,8 @@ class FileStore {
 
       this.cleanFileSelection();
       this.updateFileListState(); // update index & untagged image counter
+      // Re-anchor firstItem to the viewed file by identity so a refetch never jumps the viewer.
+      this.reconcileFirstItemTo(anchorFileId);
       this.fileListLastModified = new Date();
     });
     const N = 50;
@@ -1755,6 +1747,9 @@ class FileStore {
           // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
           // fileList looks like now (possibly filtered above).
           this.updateFileListState();
+          // The broken/video-only splices above can change indices (or drop the viewed file), so
+          // re-anchor firstItem by identity again here, matching the synchronous first pass.
+          this.reconcileFirstItemTo(anchorFileId);
 
           // updateFileListState derives numMissingFiles from fileList; after the splice
           // fileList has no broken entries so the count becomes 0. Override it with the
@@ -1781,6 +1776,34 @@ class FileStore {
       if (!this.index.has(file.id)) {
         fileSelection.delete(file);
       }
+    }
+  }
+
+  /**
+   * Re-point `uiStore.firstItem` at the file identified by `anchorId` (its new index in the freshly
+   * rebuilt `index`), so a `fileList` replacement never leaves the SlideMode viewer anchored to a
+   * stale index pointing at an unrelated file. Call AFTER `updateFileListState()` has rebuilt `index`.
+   *
+   * If the anchor file is gone from the new list (or there was no anchor), firstItem is only clamped
+   * back into range — never silently left pointing past the end (which would blank the viewer). This
+   * mirrors the firstItem reconciliation `removeFilesFromListInPlace` performs for the delete path.
+   * Cross-store write to `uiStore.firstItem` (same pattern as `cleanFileSelection`).
+   */
+  @action private reconcileFirstItemTo(anchorId: ID | undefined): void {
+    const { uiStore } = this.rootStore;
+    if (anchorId !== undefined) {
+      const newIndex = this.index.get(anchorId);
+      if (newIndex !== undefined) {
+        uiStore.firstItem = newIndex;
+        return;
+      }
+    }
+    // Anchor file is absent from the new list (or none was captured): clamp into range so firstItem
+    // never points past the end. Do not otherwise move it.
+    if (this.fileList.length === 0) {
+      uiStore.firstItem = 0;
+    } else if (uiStore.firstItem > this.fileList.length - 1) {
+      uiStore.firstItem = this.fileList.length - 1;
     }
   }
 

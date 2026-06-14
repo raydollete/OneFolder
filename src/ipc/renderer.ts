@@ -250,7 +250,7 @@ export class RendererMessenger {
   static startMediaJob = (
     jobType: MediaJobType,
     inputPath: string,
-    clip?: { start: string; end: string },
+    clip?: { start?: string; end?: string },
   ): Promise<MediaJobResult> =>
     ipcRenderer.invoke(START_MEDIA_JOB, { inputPath, jobType, clip } as StartMediaJobMessage);
 

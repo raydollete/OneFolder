@@ -318,11 +318,15 @@ Specifically, Create Clip added:
   `formatSecondsToHms`, shared by the renderer's field validation and the
   main-process defense-in-depth re-validation.
 - **Mark Start / Mark End / Create Clip UI in `ImageTools.tsx`** — two
-  button-and-field rows and a gated Create Clip button.  Mark buttons read
-  `document.querySelector('video')?.currentTime ?? 0` (the established
-  `ZoomPan.tsx` pattern) and write `formatSecondsToHms(...)` into the field.
-  Create Clip calls `runMediaJob('create-clip', { start, end })`.  The spinner,
-  cancel, lock, finalize, and delete-original flows are all shared.
+  button-and-field rows and a gated Create Clip button.  Mark buttons scope the
+  video query to `#zoomable-image video:not([data-file-id])` (the SlideMode
+  container; mirroring `ZoomPan.tsx:165`) to read the slide video's `currentTime`,
+  avoiding the gallery thumbnail videos that coexist in the document and would
+  otherwise resolve first.  `formatSecondsToHms(...)` converts the value to
+  `HH:MM:SS`.  Create Clip is enabled when at least one valid marker is present
+  (end-only requires end > 0; start < end enforced when both present) and calls
+  `runMediaJob('create-clip', { start?, end? })` with only the filled fields.  The
+  spinner, cancel, lock, finalize, and delete-original flows are all shared.
 - **No new binary, no new IPC channels, no new manager class.**
 
 Key caveats documented in [create-clip.md](create-clip.md): stream-copy start

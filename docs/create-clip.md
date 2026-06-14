@@ -25,22 +25,33 @@ tags to the output, auto-opens the result, and offers to delete the original.
      `00:00:00`).
    - **Mark End** — button next to an editable `HH:MM:SS` field (placeholder
      `00:00:00`).
-   Below those rows: **Create Clip** (disabled until both fields are valid and
-   start < end), and an inline hint "End must be after start." that appears when
-   both fields are filled but the range is backwards or equal.
+   Below those rows: **Create Clip** (enabled when at least one field holds a
+   valid `HH:MM:SS` value; disabled when both are empty, the lone filled field is
+   malformed, or both are present with start ≥ end), and an inline hint "End must
+   be after start." that appears when both fields are filled but the range is
+   backwards or equal.
 
 2. **Mark Start / Mark End capture.** Clicking the button reads the current
-   playback time from the mounted slide `<video>` element
-   (`document.querySelector('video').currentTime`), formats it as `HH:MM:SS`,
-   and writes it into the corresponding field.  If the video is stopped or no
-   `<video>` is mounted, the field receives `00:00:00`.  Fields are also freely
-   editable by hand.
+   playback time from the slide `<video>` element inside the `#zoomable-image`
+   container (see `SlideMode/index.tsx`), formats it as `HH:MM:SS`, and writes it
+   into the corresponding field.  The gallery grid stays mounted behind the slide
+   overlay and its thumbnail `<video data-file-id=…>` elements would resolve first
+   in document order if queried globally — the scoped selector
+   `#zoomable-image video:not([data-file-id])` avoids them and reaches the correct
+   element, mirroring the `ZoomPan.tsx` wheel-seek pattern.  If no slide `<video>`
+   is mounted, the field receives `00:00:00`.  Fields are also freely editable by
+   hand.
 
 3. **Validation.** A field is valid when it matches `HH:MM:SS` with HH ≥ 0
-   (two or more digits), and MM and SS each in 0–59.  Create Clip is enabled
-   only when both fields hold valid values **and** the start time is strictly
-   before the end time.  Common invalid inputs — `1:2:3`, `99:99:99`, `aa:bb:cc`,
-   or an empty field — keep the button disabled.
+   (two or more digits), and MM and SS each in 0–59.  Create Clip is enabled when
+   **at least one** field holds a valid value.  The precise rules:
+   - Start-only (end empty): Create Clip **enabled** (clip runs to end of video).
+   - End-only (start empty): Create Clip **enabled** when end > `00:00:00` (a
+     zero-second end would be a zero-length clip — kept disabled).
+   - Both filled, start < end: **enabled** (existing behavior).
+   - Both filled, start ≥ end: **disabled**; hint "End must be after start."
+   - Either present field malformed (`1:2:3`, `99:99:99`, `aa:bb:cc`): **disabled**.
+   - Both empty: **disabled**.
 
 4. **Create Clip clicked.** The UI lock engages (`beginMediaProcessing`) — arrow
    keys, Space, Delete, and all view-method shortcuts are inert for the duration.
@@ -76,23 +87,35 @@ All video tools are disabled while `uiStore.isMediaProcessing` is true.
 
 ## ffmpeg Command
 
-The exact command the main process runs is:
+The command the main process runs depends on which markers are provided:
 
 ```
+# start-only
+ffmpeg -hide_banner -ss <start> -i "<input>" -c copy -progress pipe:1 -nostats -y "<output>"
+
+# end-only
+ffmpeg -hide_banner -to <end> -i "<input>" -c copy -progress pipe:1 -nostats -y "<output>"
+
+# both
 ffmpeg -hide_banner -ss <start> -to <end> -i "<input>" -c copy -progress pipe:1 -nostats -y "<output>"
 ```
 
 | Argument | Purpose |
 |---|---|
 | `-hide_banner` | Suppress the ffmpeg version/config banner on stderr |
-| `-ss <start>` | Seek to the start time — placed **before** `-i` for fast, accurate input seeking |
-| `-to <end>` | Stop at the end time — also before `-i` for the same reason |
+| `-ss <start>` | *(start-only or both)* Seek to the start time — placed **before** `-i` for fast, accurate input seeking |
+| `-to <end>` | *(end-only or both)* Stop at the end time — also before `-i` for the same reason |
 | `-i <input>` | Source file |
 | `-c copy` | **Stream-copy all streams without re-encoding** (instant, lossless trim) |
 | `-progress pipe:1` | Emit machine-readable `key=value` progress lines to stdout |
 | `-nostats` | Suppress the human-readable stat line (avoids duplicating progress) |
 | `-y` | Overwrite output without prompting — safe because the output path is freshly computed to be collision-free |
 | `<output>` | Always has a `.mp4` extension; computed by `getUniqueSiblingPath` |
+
+When only `-ss` is supplied, ffmpeg runs to the end of the video.  When only
+`-to` is supplied, ffmpeg starts from the beginning.  Omitting a flag is
+correct — never pass a placeholder like `-ss 00:00:00` or `-to <huge>` for a
+missing marker.
 
 The `-ss`/`-to` arguments are user-supplied `HH:MM:SS` strings, validated in
 both the renderer (gates the button) and the main process (defense in depth)
@@ -233,14 +256,14 @@ The three generalized channels from `src/ipc/messages.ts` are shared:
 
 | Channel | Direction | Shape |
 |---|---|---|
-| `START_MEDIA_JOB` (invoke) | renderer → main | `{ inputPath, jobType: 'create-clip', clip: { start, end } }` → `{ outputPath }` on success; rejects on failure or cancel |
+| `START_MEDIA_JOB` (invoke) | renderer → main | `{ inputPath, jobType: 'create-clip', clip: { start?, end? } }` (at least one of start/end required) → `{ outputPath }` on success; rejects on failure or cancel |
 | `MEDIA_JOB_PROGRESS` (send) | main → renderer | `{ jobId, percent?, outTimeSec?, totalSec? }` — first event carries `jobId` for cancel |
 | `CANCEL_MEDIA_JOB` (send) | renderer → main | `jobId: string` |
 
 `RendererMessenger` surface (renderer side):
 
 ```typescript
-RendererMessenger.startMediaJob('create-clip', inputPath, { start, end }): Promise<{ outputPath: string }>
+RendererMessenger.startMediaJob('create-clip', inputPath, { start?, end? }): Promise<{ outputPath: string }>
 RendererMessenger.onMediaJobProgress(cb): () => void  // returns unsubscribe fn
 RendererMessenger.cancelMediaJob(jobId): void
 ```
@@ -275,12 +298,12 @@ release media handles → `checkRecyclable` → `trashFile` /
 
 `ImageTools.tsx` renders all video-gated controls.  While a job is active, the
 spinner block (shared across all three tools) replaces all buttons.  The shared
-`runMediaJob` helper accepts an optional `clip: { start, end }` argument and runs
-the full orchestrated flow:
+`runMediaJob` helper accepts an optional `clip: { start?, end? }` argument and
+runs the full orchestrated flow:
 
 ```
 beginMediaProcessing →
-startMediaJob('create-clip', path, { start, end }) →
+startMediaJob('create-clip', path, { start?, end? }) →
 finalizeEncodedOutput →
 openDeleteOriginalPrompt →
 finally: endMediaProcessing

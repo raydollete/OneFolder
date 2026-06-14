@@ -14,17 +14,20 @@ import { IconSet } from 'widgets';
 import { IS_PREVIEW_WINDOW } from 'common/window';
 
 const Inspector = observer(() => {
-  const { uiStore, fileStore } = useStore();
+  const { uiStore } = useStore();
 
-  if (uiStore.firstItem >= fileStore.fileList.length || !uiStore.isInspectorOpen) {
+  // During a media job, pin to the in-flight file (slideFile) so the watcher refetching `fileList`
+  // (when the output appears) cannot orphan `firstItem`, fall through to the Placeholder, and
+  // unmount ImageTools mid-job — which would destroy its progress subscription and "Finalizing…"
+  // state. Outside a job, slideFile === firstFileInView, so normal behaviour is unchanged.
+  const first = uiStore.slideFile;
+  if (first === undefined || !uiStore.isInspectorOpen) {
     return (
       <aside id="inspector">
         <Placeholder />
       </aside>
     );
   }
-
-  const first = fileStore.fileList[uiStore.firstItem];
   return (
     <aside id="inspector">
       <br />

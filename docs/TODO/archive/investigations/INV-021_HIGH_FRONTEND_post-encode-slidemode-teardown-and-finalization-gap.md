@@ -3,8 +3,8 @@ id: INV-021
 title: 'Jarring post-encode UX: the source video tears out of SlideMode back to the thumbnail grid the moment ffmpeg exits, then several seconds of blank, feedback-less finalization pass before the new video abruptly opens. Keep the source on-screen (and the media-processing UI up) through finalization, swap seamlessly to the output, and never blind-drop the viewer via refetch/clearSearchCriteriaList.'
 reported_bug: 'After a re-encode (or Normalize Audio) completes, the source video closes and the user is returned to the thumbnail index. Several seconds pass with no indication anything is happening, then the new video suddenly pops up. Jarring and unexpected. The source should stay open until the output is ready and then swap seamlessly, OR there should be clear "finalizing…" feedback during the gap.'
 date: 2026-06-11
-status: pending_qa
-superseded_by:
+status: superseded
+superseded_by: INV-023
 tasks_spawned: [TASK-089, TASK-090, TASK-091, TASK-092]
 root_cause_category: order-of-operations
 affects:
@@ -16,6 +16,20 @@ affects:
   - 'Media-processing lock teardown ordering (ImageTools.tsx:99-105 finally) — endMediaProcessing() + setActiveJob(null) run AFTER finalizeEncodedOutput resolves, which is correct for the lock, but the inspector spinner is the only on-screen feedback and it shows encode percent only — there is no finalization phase, so the visible UI is "done" while work continues.'
   - 'INV-020 Normalize Audio (src/frontend/components/ImageTools.tsx, finalizeEncodedOutput) — reuses the exact same finalize helper and runMediaJob orchestration, so it inherits the identical jarring teardown. The fix MUST live in the shared helper + shared inspector UI so both tools benefit.'
 ---
+
+> **SUPERSEDED BY INV-023 — this fix FAILED production QA.** When tested in
+> production the implemented approach made the experience *worse*: finalization ran
+> but the viewer was still dropped to the thumbnail index, the output never opened in
+> SlideMode, and the "Delete original?" prompt appeared 20–30 s later. Root cause this
+> investigation missed: every background `refetch()` (including the folder watcher's
+> `debouncedRefetch()` when the new output file appears, AND this fix's own
+> `pinViewedFileAcrossRefetch` → `refetch()`) routes through a content-mode setter that
+> **unconditionally called `disableSlideMode()`**, tearing the viewer out of SlideMode —
+> which this fix never re-enabled. INV-023 implements the corrected fix (identity pin
+> of the viewer for the whole sub-process + content setters that exit SlideMode only on
+> a genuine mode change + verify-then-swap + a failure modal). TASK-089/090/091/092 are
+> archived; TASK-090's `pinViewedFileAcrossRefetch` is no longer used by the finalize
+> path. See `INV-023`.
 
 ## Bug Report
 

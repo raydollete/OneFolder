@@ -51,7 +51,9 @@ interface SlideViewProps {
 
 const SlideView = observer(({ width, height }: SlideViewProps) => {
   const { uiStore, fileStore, imageLoader, mediaReleaseCoordinator } = useStore();
-  const file = uiStore.firstFileInView;
+  // While a media job is in flight/finalizing this is the pinned source/output (identity-anchored,
+  // immune to fileList/firstItem churn from the folder watcher); otherwise the normal first-in-view.
+  const file = uiStore.slideFile;
   const eventManager = useMemo(() => (file ? new CommandDispatcher(file) : undefined), [file]);
   const isFirst = useComputed(() => uiStore.firstItem === 0);
   const isLast = useComputed(() => uiStore.firstItem === fileStore.fileList.length - 1);
@@ -88,6 +90,12 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
   }, [uiStore]);
 
   const decrImgIndex = useAction(() => {
+    // Navigation is disabled while a media job is in flight/finalizing — the viewer is pinned to the
+    // source/output by identity and must not move off it (requirement 1). Covers the on-screen
+    // NavigationButtons (keyboard arrows are already blocked in the keydown handler below).
+    if (uiStore.isMediaProcessing) {
+      return;
+    }
     const index = Math.max(0, uiStore.firstItem - 1);
     uiStore.setFirstItem(index);
 
@@ -95,6 +103,9 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
     uiStore.selectFile(fileStore.fileList[index], true);
   });
   const incrImgIndex = useAction(() => {
+    if (uiStore.isMediaProcessing) {
+      return;
+    }
     const index = Math.min(uiStore.firstItem + 1, fileStore.fileList.length - 1);
     uiStore.setFirstItem();
     uiStore.selectFile(fileStore.fileList[index], true);

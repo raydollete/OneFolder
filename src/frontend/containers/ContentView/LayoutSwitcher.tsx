@@ -190,7 +190,7 @@ const Layout = ({ contentRect }: LayoutProps) => {
   return (
     <>
       {overviewElem}
-      {delayedSlideMode && uiStore.firstFileInView && <SlideMode contentRect={contentRect} />}
+      {delayedSlideMode && uiStore.slideFile && <SlideMode contentRect={contentRect} />}
     </>
   );
 };

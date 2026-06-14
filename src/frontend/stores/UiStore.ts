@@ -239,6 +239,29 @@ class UiStore {
     path: null,
   };
 
+  /**
+   * The file the viewer (SlideMode + Inspector) must display while a media job is in flight or
+   * being finalized, pinned by IDENTITY rather than by `firstItem`/`fileList` index (INV-021 redo).
+   *
+   * The folder watcher fires `debouncedRefetch()` for every new file in a watched folder — and a
+   * re-encode/normalize/clip output IS a new file, and the post-encode EXIF write re-touches it —
+   * so `fileList` is rebuilt (and `firstItem` orphaned) several times during finalization. Anchoring
+   * the viewer to this pin makes it immune to that churn: the source stays on screen until the output
+   * is verified openable, then this pin is atomically swapped to the output for a seamless transition.
+   *
+   * null means "no media job is pinning the viewer" — the viewer falls back to `firstFileInView`.
+   * See {@link slideFile}, beginMediaProcessing, setMediaProcessingFile, endMediaProcessing.
+   */
+  @observable mediaProcessingFile: ClientFile | null = null;
+
+  /**
+   * Set when a media job (re-encode, normalize audio, create clip) fails, to drive a blocking modal
+   * (MediaJobErrorAlert) that surfaces the ffmpeg error and — crucially — does NOT close the source
+   * video. null means no error modal is shown. `tool` is a human-readable job label; `message` is the
+   * ffmpeg error tail (see ReEncodeManager: "ffmpeg exited with code N.\n<stderr tail>").
+   */
+  @observable mediaJobError: { tool: string; message: string } | null = null;
+
   // Selections
   // Observable arrays recommended like this here https://github.com/mobxjs/mobx/issues/669#issuecomment-269119270.
   // However, sets are more suitable because they have quicker lookup performance.
@@ -402,6 +425,13 @@ class UiStore {
   }
 
   @action.bound disableSlideMode(): void {
+    // While a media job is in flight/finalizing, the user must not be able to leave the current
+    // video (requirement 1). Every exit path funnels through here — the "Back" toolbar button, the
+    // mouse back-button popstate handler, and the Escape/Backspace keys — so a single guard blocks
+    // them all. The viewer is released normally once endMediaProcessing() clears the lock.
+    if (this.mediaProcessing.active) {
+      return;
+    }
     this.isSlideMode = false;
   }
 
@@ -623,21 +653,58 @@ class UiStore {
   }
 
   /**
-   * Acquires the media-processing lock for the given file path.
-   * Navigation and destructive actions are blocked until endMediaProcessing() is called.
+   * Acquires the media-processing lock for the given source file and PINS the viewer to it.
+   * Navigation and destructive actions are blocked until endMediaProcessing() is called, and the
+   * SlideMode viewer + Inspector display this exact file regardless of any `fileList`/`firstItem`
+   * churn caused by the folder watcher refetching when the output appears (INV-021 redo).
    * Always pair with endMediaProcessing() in a finally block.
    */
-  @action.bound beginMediaProcessing(path: string): void {
-    this.mediaProcessing = { active: true, path };
+  @action.bound beginMediaProcessing(file: ClientFile): void {
+    this.mediaProcessing = { active: true, path: file.absolutePath };
+    this.mediaProcessingFile = file;
   }
 
   /**
-   * Releases the media-processing lock.
-   * Safe to call multiple times — idempotent so callers can always put it in a finally block
-   * without worrying about double-release errors.
+   * Atomically swaps the pinned media file (e.g. from the source to the freshly-encoded output once
+   * it is verified openable). Because the viewer reads {@link slideFile}, this produces a seamless
+   * in-place swap with no trip back to the grid and no intermediate `undefined` frame.
+   */
+  @action.bound setMediaProcessingFile(file: ClientFile): void {
+    this.mediaProcessingFile = file;
+  }
+
+  /**
+   * Releases the media-processing lock and unpins the viewer. Before unpinning, `firstItem` is
+   * reconciled to the pinned file's current index in `fileList` (by identity) so the handoff from
+   * the pin back to `firstFileInView` is seamless — the user never sees the grid even for one frame.
+   * If the pinned file is not in the current (possibly filtered) `fileList`, the pin is kept so the
+   * viewer keeps showing it rather than blanking; a subsequent user navigation reconciles it.
+   *
+   * Safe to call multiple times — idempotent so callers can always put it in a finally block.
    */
   @action.bound endMediaProcessing(): void {
     this.mediaProcessing = { active: false, path: null };
+    const pinned = this.mediaProcessingFile;
+    if (pinned !== null) {
+      // Re-anchor firstItem to the pinned file (injecting it into fileList if the active filter
+      // excludes it, so the handoff never blanks the viewer), select it, then drop the pin — all in
+      // this one @action so MobX never renders an intermediate state where firstItem and the pin
+      // disagree, and so the viewer transitions seamlessly from the pinned file to firstFileInView.
+      const idx = this.rootStore.fileStore.ensureFileInListAt(pinned);
+      this.firstItem = idx;
+      this.selectFile(pinned, true);
+      this.mediaProcessingFile = null;
+    }
+  }
+
+  /** Opens the media-job failure modal (does NOT close the source video). */
+  @action.bound showMediaJobError(tool: string, message: string): void {
+    this.mediaJobError = { tool, message };
+  }
+
+  /** Dismisses the media-job failure modal. */
+  @action.bound closeMediaJobError(): void {
+    this.mediaJobError = null;
   }
 
   @action.bound toggleToolbarTagPopover(): void {
@@ -1267,6 +1334,16 @@ class UiStore {
     return this.firstItem < this.rootStore.fileStore.fileList.length
       ? this.rootStore.fileStore.fileList[this.firstItem]
       : undefined;
+  }
+
+  /**
+   * The file SlideMode and the Inspector should actually display: the media-processing pin when a
+   * job is in flight/finalizing (so watcher-driven `fileList`/`firstItem` churn can never tear the
+   * viewer down), otherwise the normal `firstFileInView`. This is the single source of truth for the
+   * mount gate (LayoutSwitcher), the slide image (SlideView), and the inspector body (Inspector).
+   */
+  @computed get slideFile(): ClientFile | undefined {
+    return this.mediaProcessingFile ?? this.firstFileInView;
   }
 
   @action private viewAllContent(): void {

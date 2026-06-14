@@ -151,15 +151,16 @@ export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip';
 /**
  * Payload for a START_MEDIA_JOB invoke.
  *
- * `clip` is required if and only if `jobType === 'create-clip'`.
- * For all other job types it is omitted (undefined). Main validates the
- * HH:MM:SS strings and that start < end before passing them to ffmpeg.
+ * `clip` is present when `jobType === 'create-clip'`; at least one of
+ * `start`/`end` (HH:MM:SS) must be set. Main validates each present value
+ * and, when both are present, that start < end.
+ * For all other job types `clip` is omitted (undefined).
  */
 export type StartMediaJobMessage = {
   inputPath: string;
   jobType: MediaJobType;
-  /** Clip start/end times in HH:MM:SS format. Required when jobType is 'create-clip'. */
-  clip?: { start: string; end: string };
+  /** Clip start/end times in HH:MM:SS format. At least one must be set when jobType is 'create-clip'. */
+  clip?: { start?: string; end?: string };
 };
 
 /** Live progress event pushed from main to renderer during an ffmpeg job. */

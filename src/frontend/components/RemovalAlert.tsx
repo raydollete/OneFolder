@@ -365,6 +365,39 @@ export const DeleteOriginalAfterJob = observer(() => {
   );
 });
 
+/**
+ * Blocking modal shown when a media job (re-encode, normalize audio, create clip) fails. It surfaces
+ * the ffmpeg error (the stderr tail from ReEncodeManager) and — per the INV-021 redo requirement —
+ * does NOT close the source video: the viewer is still pinned to the source behind this dialog, and
+ * dismissing the modal leaves the source on screen. Rendered alongside DeleteOriginalAfterJob.
+ */
+export const MediaJobErrorAlert = observer(() => {
+  const { uiStore } = useStore();
+  const error = uiStore.mediaJobError;
+
+  return (
+    <Alert
+      open={error !== null}
+      title={error !== null ? `${error.tool} failed` : 'Conversion failed'}
+      icon={IconSet.WARNING}
+      type="danger"
+      closeButtonText="Close"
+      defaultButton={DialogButton.CloseButton}
+      onClick={() => uiStore.closeMediaJobError()}
+    >
+      <p>The video was not converted. Your original file is unchanged and still open.</p>
+      {error !== null && (
+        <pre
+          className="media-job-error__detail"
+          style={{ whiteSpace: 'pre-wrap', maxHeight: '12rem', overflow: 'auto' }}
+        >
+          {error.message}
+        </pre>
+      )}
+    </Alert>
+  );
+});
+
 export const SavedSearchRemoval = observer((props: IRemovalProps<ClientFileSearchItem>) => {
   const { searchStore } = useStore();
   return (
