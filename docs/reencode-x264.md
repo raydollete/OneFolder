@@ -293,8 +293,8 @@ silent, `runMediaJob` sets an `isFinalizing` flag the instant `startMediaJob`
 resolves (and the progress subscription is torn down) and clears it after
 `finalizeEncodedOutput` returns (and defensively in the `finally`).  While
 `isFinalizing` is true the existing `reencode-progress` spinner renders an
-indeterminate **"Finalizing…"** label (parameterized so Normalize Audio shows
-the same), and the **Cancel** button is hidden (ffmpeg is already done; there is
+indeterminate **"Finalizing…"** label (parameterized so Compress & Normalize
+Audio shows the same), and the **Cancel** button is hidden (ffmpeg is already done; there is
 nothing to cancel).  Because the source now stays in SlideMode (step 4 above),
 the inspector — and thus this indicator — stays mounted and visible for the
 whole window.  The media-processing lock is held throughout and released exactly
@@ -307,7 +307,7 @@ once in the `runMediaJob` `finally`.
 `DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is
 a modal driven by `uiStore.deleteOriginalAfterJobFile`.  It reuses the same
 trash flow as `MoveFilesToTrashBin` and is shared by all tools that produce a
-derived output (Re-encode, Normalize Audio, etc.) — INV-020 / TASK-086:
+derived output (Re-encode, Compress & Normalize Audio, etc.) — INV-020 / TASK-086:
 
 1. `mediaReleaseCoordinator.releasePaths([source.absolutePath])` — release any
    open `<video>` element handles (INV-008).

@@ -1,5 +1,5 @@
 /**
- * ReEncodeManager — main-process ffmpeg job runner for media tools (Re-encode x264, Normalize Audio, …).
+ * ReEncodeManager — main-process ffmpeg job runner for media tools (Re-encode x264, Compress & Normalize Audio, …).
  *
  * Responsibilities:
  *   - Compute a collision-free output path beside the source (via getUniqueSiblingPath).

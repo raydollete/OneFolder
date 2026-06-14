@@ -223,7 +223,7 @@ class UiStore {
   /**
    * The source file for the delete-original prompt shown after a successful media job (TASK-079 / INV-020).
    * null means the prompt is closed; a ClientFile value opens the prompt for that file.
-   * Shared by all tools that produce a derived output (Re-encode, Normalize Audio, etc.).
+   * Shared by all tools that produce a derived output (Re-encode, Compress & Normalize Audio, etc.).
    */
   @observable deleteOriginalAfterJobFile: ClientFile | null = null;
 
@@ -636,7 +636,7 @@ class UiStore {
 
   /**
    * Opens the delete-original prompt for the given source file after a successful media job.
-   * Shared by all tools that produce a derived output (Re-encode, Normalize Audio, etc.).
+   * Shared by all tools that produce a derived output (Re-encode, Compress & Normalize Audio, etc.).
    * The actual Alert is rendered by DeleteOriginalAfterJob in RemovalAlert.tsx.
    */
   @action.bound openDeleteOriginalPrompt(file: ClientFile): void {

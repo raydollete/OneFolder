@@ -1,29 +1,31 @@
 ---
-title: Normalize Audio Feature
+title: Compress & Normalize Audio Feature
 author: @rjdollete
-last_updated: 2026-06-11
+last_updated: 2026-06-13
 scope: feature
 ---
 
-# Normalize Audio Feature
+# Compress & Normalize Audio Feature
 
-The "Normalize Audio" tool appears in the inspector **Tools** section whenever a
-video file is open in SlideMode.  Clicking it passes the video stream through
-untouched and re-encodes only the audio with ffmpeg's dynamic audio normalizer
-(`dynaudnorm`), producing a loudness-corrected MP4 beside the source.  Like
-Re-encode (x264), it copies all source tags to the output, auto-opens the
-result, and offers to delete the original.
+The "Compress & Normalize Audio" tool appears in the inspector **Tools** section
+whenever a video file is open in SlideMode.  Clicking it passes the video stream
+through untouched and re-encodes only the audio with an ffmpeg filtergraph that
+first dynamic-range-compresses the audio (`acompressor`) and then loudness-
+normalizes it to EBU R128 targets (`loudnorm`), producing a corrected MP4 beside
+the source.  Like Re-encode (x264), it copies all source tags to the output,
+auto-opens the result, and offers to delete the original.
 
 ---
 
 ## User-Facing Behavior
 
 1. Open a video in SlideMode. The inspector Tools section shows an enabled
-   **Normalize Audio** button (alongside the **Re-encode (x264)** button).
+   **Compress & Normalize Audio** button (alongside the **Re-encode (x264)**
+   button).
 2. Click the button. The UI lock engages — arrow keys, Space, Delete, and all
    view-method shortcuts are inert for the duration of the job. A spinner with
-   the label **"Normalizing audio… N%"** (or just "Normalizing audio…" when
-   duration probing fails) replaces the button.
+   the label **"Compressing & normalizing audio… N%"** (or just "Compressing &
+   normalizing audio…" when duration probing fails) replaces the button.
 3. The ffmpeg process starts. A **Cancel** button is shown; clicking it kills
    ffmpeg, removes any partial output, and releases the lock.
 4. On completion:
@@ -45,8 +47,8 @@ result, and offers to delete the original.
 For any other file type the Tools section shows the neutral caption "No tools
 available for this file type."
 
-Both the Normalize Audio and Re-encode (x264) buttons are disabled while
-`uiStore.isMediaProcessing` is true — they cannot run concurrently.
+Both the Compress & Normalize Audio and Re-encode (x264) buttons are disabled
+while `uiStore.isMediaProcessing` is true — they cannot run concurrently.
 
 ---
 
@@ -55,25 +57,41 @@ Both the Normalize Audio and Re-encode (x264) buttons are disabled while
 The exact command the main process runs is:
 
 ```
-ffmpeg -hide_banner -i "<input>" -c:v copy -filter:a dynaudnorm=p=0.9:s=5 -progress pipe:1 -nostats -y "<output>"
+ffmpeg -hide_banner -i "<input>" -c:v copy -af "acompressor=threshold=-18dB:ratio=2:attack=20:release=250:knee=6,loudnorm=I=-16:TP=-1.5:LRA=11" -progress pipe:1 -nostats -y "<output>"
 ```
 
 | Argument | Purpose |
 |---|---|
 | `-hide_banner` | Suppress the ffmpeg version/config banner on stderr |
 | `-i <input>` | Source file |
-| `-c:v copy` | **Pass the video stream through untouched** (user's 2026-06-11 amendment — only the audio is re-encoded) |
-| `-filter:a dynaudnorm=p=0.9:s=5` | Apply dynamic audio normalization to the audio stream (peak 0.9, smoothing 5) |
+| `-c:v copy` | **Pass the video stream through untouched** — only the audio is re-encoded |
+| `-af "acompressor=…,loudnorm=…"` | Audio filtergraph: dynamic-range compress, then loudness-normalize (see below) |
 | `-progress pipe:1` | Emit machine-readable `key=value` progress lines to stdout |
 | `-nostats` | Suppress the human-readable stat line (avoids duplicating progress) |
 | `-y` | Overwrite output without prompting — safe because the output path is freshly computed to be collision-free |
 | `<output>` | Always has a `.mp4` extension; computed by `getUniqueSiblingPath` |
 
-The codec/filter arguments (`-c:v copy -filter:a dynaudnorm=p=0.9:s=5`) are
-preserved verbatim from the user's stated requirement (INV-020).  Only
-transport and progress flags are added around them.  The filter string is
-passed as a single ffmpeg argument (`dynaudnorm=p=0.9:s=5`); because `spawn`
-runs without a shell, no shell quoting is needed.
+### Audio filtergraph (`-af`)
+
+The two filters run in series (comma-chained), so the compressor's output feeds
+the loudness normalizer:
+
+| Filter / param | Purpose |
+|---|---|
+| `acompressor=threshold=-18dB` | Start compressing once the signal exceeds −18 dB |
+| `ratio=2` | 2:1 compression above the threshold |
+| `attack=20` / `release=250` | 20 ms attack, 250 ms release envelope (ms) |
+| `knee=6` | 6 dB soft knee for a gradual onset around the threshold |
+| `loudnorm=I=-16` | Target integrated loudness −16 LUFS (EBU R128) |
+| `TP=-1.5` | Maximum true peak −1.5 dBTP |
+| `LRA=11` | Target loudness range 11 LU |
+
+The codec/filter arguments (`-c:v copy -af "acompressor=…,loudnorm=…"`) are
+preserved verbatim from the user's stated requirement (2026-06-13 amendment).
+Only transport and progress flags are added around them.  The whole filtergraph
+is passed as a single ffmpeg argument; because `spawn` runs without a shell, no
+shell quoting is needed (the surrounding quotes above are only for the shell-
+form illustration).
 
 ---
 
@@ -138,8 +156,8 @@ already named `clip.mp4` produces `clip 1.mp4` as its first candidate.
 
 ## Reused Media-Job Stack
 
-Normalize Audio is the second consumer of the generalized media-job stack built
-by INV-018 and parameterized by TASK-085.  The reused layers are:
+Compress & Normalize Audio is the second consumer of the generalized media-job
+stack built by INV-018 and parameterized by TASK-085.  The reused layers are:
 
 ### Main-Process Job Runner (ReEncodeManager)
 
@@ -155,10 +173,18 @@ The `normalize-audio` job's args and output extension are defined in the
 
 ```typescript
 'normalize-audio': {
-  args: ['-c:v', 'copy', '-filter:a', 'dynaudnorm=p=0.9:s=5'],
+  args: [
+    '-c:v',
+    'copy',
+    '-af',
+    'acompressor=threshold=-18dB:ratio=2:attack=20:release=250:knee=6,loudnorm=I=-16:TP=-1.5:LRA=11',
+  ],
   outputExt: 'mp4',
 },
 ```
+
+(The internal job-type key remains `'normalize-audio'`; only the user-facing
+tool name and the ffmpeg args changed.)
 
 The manager adds only the transport flags (`-hide_banner`, `-i`, `-progress
 pipe:1`, `-nostats`, `-y`) around these args.  The full lifecycle — duration
@@ -210,7 +236,7 @@ release media handles → `checkRecyclable` → `trashFile` /
 
 ### Button and Orchestration
 
-`ImageTools.tsx` renders both video-gated buttons and tracks which job is
+`ImageTools.tsx` renders the video-gated buttons and tracks which job is
 active via a `activeJob: MediaJobType | null` state variable.  Both buttons are
 disabled while `uiStore.isMediaProcessing` is true.  The shared `runMediaJob`
 helper accepts a `MediaJobType` and runs the full orchestrated flow for either
@@ -223,7 +249,7 @@ tool.
 | Scenario | Behavior |
 |---|---|
 | ffmpeg exits non-zero (including codec/container mismatch) | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
-| User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast ("Normalize audio cancelled.") |
+| User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast ("Compress & normalize audio cancelled.") |
 | App quits mid-job | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
 | Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; fallback clears filter and retries; honest toast if still absent — never asserts "outside a watched folder" as the sole cause |
 | Source already deleted | Defensive guard in `DeleteOriginalAfterJob`; `handleConfirm` no-ops if `source === null` |

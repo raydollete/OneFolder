@@ -1518,7 +1518,7 @@ class FileStore {
    * caller keeps the source on screen and does NOT prompt to delete the original (the output could
    * not be verified openable — requirement: never close the source until the output is confirmed).
    *
-   * Shared by every tool that produces a derived output (Re-encode, Normalize Audio, Create Clip) —
+   * Shared by every tool that produces a derived output (Re-encode, Compress & Normalize Audio, Create Clip) —
    * do not inline a duplicate in each tool.
    *
    * @param source      The source ClientFile whose tags should be copied.

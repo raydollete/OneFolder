@@ -37,10 +37,17 @@ const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string 
     outputExt: 'mp4',
   },
   'normalize-audio': {
-    // -c:v copy: pass the video stream through untouched (user's 2026-06-11 amendment).
-    // -filter:a dynaudnorm=p=0.9:s=5: re-encode only the audio with dynamic normalization.
-    // The filter string is a single argument — spawn() runs without a shell, no quoting needed.
-    args: ['-c:v', 'copy', '-filter:a', 'dynaudnorm=p=0.9:s=5'],
+    // "Compress & Normalize Audio" tool.
+    // -c:v copy: pass the video stream through untouched (only the audio is re-encoded).
+    // -af acompressor,...,loudnorm: dynamic-range compress, then EBU R128 loudness-normalize
+    //   (I=-16 LUFS, TP=-1.5 dBTP, LRA=11) the audio stream (user's 2026-06-13 amendment).
+    // The whole filtergraph is a single argument — spawn() runs without a shell, no quoting needed.
+    args: [
+      '-c:v',
+      'copy',
+      '-af',
+      'acompressor=threshold=-18dB:ratio=2:attack=20:release=250:knee=6,loudnorm=I=-16:TP=-1.5:LRA=11',
+    ],
     outputExt: 'mp4',
   },
   'create-clip': {

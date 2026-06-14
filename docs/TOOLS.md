@@ -274,23 +274,23 @@ full `ReEncodeManager` job runner, three IPC channels, the UI lock,
 `DeleteOriginalAfterJob` prompt.  See [reencode-x264.md](reencode-x264.md) for
 the complete feature doc.
 
-### Example 2 — Normalize Audio (INV-020)
+### Example 2 — Compress & Normalize Audio (INV-020)
 
 The second tool confirms the rule stated in layer 3–6's description above: **a
 new sibling-file tool needs only the button/orchestration layer (layer 7) plus
 a parameterized manager entry point — the reusable layers 3–6 are unchanged.**
 
-Specifically, Normalize Audio added:
+Specifically, Compress & Normalize Audio added:
 
 - **One entry in `MEDIA_JOB_SPECS`** (in `src/main.ts`) — the ffmpeg args
-  `['-c:v', 'copy', '-filter:a', 'dynaudnorm=p=0.9:s=5']` and output
+  `['-c:v', 'copy', '-af', 'acompressor=…,loudnorm=…']` and output
   extension `'mp4'`.  The manager (`ReEncodeManager.start(inputPath, jobArgs,
   outputExt, callbacks)`), IPC channels (`START_MEDIA_JOB` /
   `MEDIA_JOB_PROGRESS` / `CANCEL_MEDIA_JOB`), UI lock, and
   `finalizeEncodedOutput` helper were all reused without modification.
 - **A second button in `ImageTools.tsx`** — video-gated, disabled while
   `isMediaProcessing`, wired to the shared `runMediaJob('normalize-audio')`
-  helper.  The spinner label reads "Normalizing audio… N%".
+  helper.  The spinner label reads "Compressing & normalizing audio… N%".
 - **No new binary, no new IPC channels, no new manager class.**  The
   delete-original prompt (`DeleteOriginalAfterJob`) was already generalized by
   TASK-086 and is shared verbatim.
@@ -343,9 +343,9 @@ See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
 ## Related
 
 - [Re-encode (x264)](reencode-x264.md) — the primary worked example for every layer
-- [Normalize Audio](normalize-audio.md) — the second worked example confirming layers 3–6 are reusable
+- [Compress & Normalize Audio](normalize-audio.md) — the second worked example confirming layers 3–6 are reusable
 - [Create Clip](create-clip.md) — the third worked example, introducing pre-input args and per-invocation parameters
 - [Personal Fork Notes](personal-fork-notes.md) — bundled binaries and licensing
 - INV-018 — original investigation, behavioral spec, and design rejections
-- INV-020 — Normalize Audio investigation and the parameterized media-job stack
+- INV-020 — Compress & Normalize Audio investigation and the parameterized media-job stack
 - INV-022 — Create Clip investigation, `-ss`/`-to` pre-input ordering, stream-copy caveats

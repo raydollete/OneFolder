@@ -147,7 +147,7 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         const message = err instanceof Error ? err.message : String(err);
         const toastLabel =
           jobType === 'normalize-audio'
-            ? 'Normalize audio'
+            ? 'Compress & normalize audio'
             : jobType === 'create-clip'
             ? 'Create clip'
             : 'Re-encode';
@@ -214,8 +214,8 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     ? 'Finalizing…'
     : activeJob === 'normalize-audio'
     ? jobPercent !== null
-      ? `Normalizing audio… ${jobPercent}%`
-      : 'Normalizing audio…'
+      ? `Compressing & normalizing audio… ${jobPercent}%`
+      : 'Compressing & normalizing audio…'
     : activeJob === 'create-clip'
     ? jobPercent !== null
       ? `Creating clip… ${jobPercent}%`
@@ -226,7 +226,7 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
 
   const cancelTitle =
     activeJob === 'normalize-audio'
-      ? 'Cancel audio normalization'
+      ? 'Cancel audio compression & normalization'
       : activeJob === 'create-clip'
       ? 'Cancel clip'
       : 'Cancel re-encode';
@@ -262,9 +262,9 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
                 <button
                   disabled={uiStore.isMediaProcessing}
                   onClick={() => runMediaJob('normalize-audio')}
-                  title="Normalize audio levels using ffmpeg dynaudnorm"
+                  title="Compress dynamic range, then normalize loudness (ffmpeg acompressor + loudnorm)"
                 >
-                  {IconSet.MEDIA}Normalize Audio
+                  {IconSet.MEDIA}Compress &amp; Normalize Audio
                 </button>
                 <div className="tools__mark-row">
                   <button
