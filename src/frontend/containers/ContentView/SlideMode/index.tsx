@@ -483,9 +483,13 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
         if (el && isFileExtensionVideo(file.extension)) {
           slideUnregisterRef.current = mediaReleaseCoordinator.register(file.absolutePath, el);
           freezeRecoveryCleanupRef.current = attachVideoFreezeRecovery(el);
+          // Apply the persisted mute preference imperatively: React's `muted` JSX prop
+          // is not reliably reflected to the DOM, so we set it here on the freshly-
+          // remounted element before autoplay begins. (INV-027)
+          el.muted = uiStore.videoMuted;
         }
       },
-      [file.absolutePath, file.extension, mediaReleaseCoordinator],
+      [file.absolutePath, file.extension, mediaReleaseCoordinator, uiStore.videoMuted],
     );
     // Ensure unregistration + watchdog teardown on unmount regardless of React's
     // ref-callback order.
@@ -555,6 +559,8 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
                 controls
                 autoPlay
                 loop
+                muted={uiStore.videoMuted}
+                onVolumeChange={(e) => uiStore.setVideoMuted(e.currentTarget.muted)}
               />
             )}
           </ZoomPan>

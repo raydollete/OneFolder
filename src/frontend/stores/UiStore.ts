@@ -128,6 +128,7 @@ type PersistentPreferenceFields =
   | 'thumbnailShape'
   | 'upscaleMode'
   | 'galleryVideoPlaybackMode'
+  | 'videoMuted'
   | 'hotkeyMap'
   | 'isThumbnailTagOverlayEnabled'
   | 'isFaceModuleEnabled'
@@ -211,6 +212,8 @@ class UiStore {
   @observable thumbnailShape: ThumbnailShape = 'square';
   @observable upscaleMode: UpscaleMode = 'smooth';
   @observable galleryVideoPlaybackMode: GalleryVideoPlaybackMode = 'hover';
+  /** Sticky mute state for the slide/preview video player. */
+  @observable videoMuted: boolean = false;
 
   @observable isToolbarTagPopoverOpen: boolean = false;
   /** Dialog for removing unlinked files from OneFolder's database */
@@ -369,6 +372,10 @@ class UiStore {
 
   @action.bound setGalleryVideoPlaybackMode(mode: GalleryVideoPlaybackMode): void {
     this.galleryVideoPlaybackMode = mode;
+  }
+
+  @action.bound setVideoMuted(muted: boolean): void {
+    this.videoMuted = muted;
   }
 
   @action.bound setFirstItem(index: number = 0): void {
@@ -1212,6 +1219,7 @@ class UiStore {
         );
         this.hideMissingFilesInBrowsing = Boolean(prefs.hideMissingFilesInBrowsing ?? true);
         this.showVideosOnly = Boolean(prefs.showVideosOnly ?? false);
+        this.videoMuted = Boolean(prefs.videoMuted ?? false);
         this.inspectorIsDescriptionVisible = Boolean(prefs.inspectorIsDescriptionVisible ?? true);
         this.inspectorIsPromptVisible = Boolean(prefs.inspectorIsPromptVisible ?? true);
         this.inspectorIsParametersVisible = Boolean(prefs.inspectorIsParametersVisible ?? false);
@@ -1288,6 +1296,7 @@ class UiStore {
       thumbnailShape: this.thumbnailShape,
       upscaleMode: this.upscaleMode,
       galleryVideoPlaybackMode: this.galleryVideoPlaybackMode,
+      videoMuted: this.videoMuted,
       hotkeyMap: { ...this.hotkeyMap },
       isThumbnailFilenameOverlayEnabled: this.isThumbnailFilenameOverlayEnabled,
       isThumbnailTagOverlayEnabled: this.isThumbnailTagOverlayEnabled,
