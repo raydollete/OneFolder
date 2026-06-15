@@ -23,13 +23,13 @@ import {
 } from '../common/library-registry';
 import { parseHmsToSeconds } from '../common/fmt';
 import { MainMessenger } from './ipc/main';
-import { WindowSystemButtonPress, MediaJobType } from './ipc/messages';
-import { reEncodeManager } from './ReEncodeManager';
+import { WindowSystemButtonPress, MediaJobType, MediaJobStartResult } from './ipc/messages';
+import { mediaJobService } from './media/MediaJobService';
 
 // ---------------------------------------------------------------------------
 // Media job specs — map each job type to its ffmpeg codec/filter args and the
 // output file extension.  Only transport flags (-hide_banner, -progress, etc.)
-// are added by ReEncodeManager; these args are passed verbatim per INV-018/INV-020.
+// are added by FfmpegRunner; these args are passed verbatim per INV-018/INV-020.
 // ---------------------------------------------------------------------------
 const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string }> = {
   'reencode-x264': {
@@ -138,6 +138,12 @@ function initialize() {
   // which silently hangs ImageLoader.init() and leaves the app stuck on the
   // splash screen. Nothing in the codebase uses SharedArrayBuffer or
   // crossOriginIsolated, so cross-origin isolation is not needed.
+
+  // Anchor the media-job staging dir to the running APPLICATION (not the user's photo folder):
+  // ffmpeg writes its output here, outside any watched location, so the folder watcher never sees
+  // a partial/untagged file. Sweep any files left by a previous run that crashed mid-job. (INV-026)
+  mediaJobService.setTempBaseDir(path.join(app.getPath('temp'), 'onefolder-media-jobs'));
+  mediaJobService.sweepTempDir();
 
   createWindow();
   createPreviewWindow();
@@ -475,7 +481,7 @@ app.on('activate', () => {
 // interfere with `forceRelaunch` (which calls `app.exit(0)` directly and
 // therefore bypasses the `before-quit` event — no double-cleanup risk).
 app.on('before-quit', () => {
-  reEncodeManager.killAll();
+  mediaJobService.killAll();
 });
 
 // Handling uncaught exceptions:
@@ -746,7 +752,7 @@ MainMessenger.onGetVersion(getVersion);
 
 MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 
-// Media job IPC handlers — wired to ReEncodeManager (parameterized by job type, INV-020).
+// Media job IPC handlers — wired to MediaJobService (parameterized by job type, INV-020).
 //
 // START_MEDIA_JOB: the renderer invokes this and awaits a promise that resolves
 // with { outputPath } when the job finishes, or rejects on failure/cancel.
@@ -794,8 +800,8 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
     }
   }
 
-  return new Promise<{ outputPath: string }>((resolve, reject) => {
-    const { jobId, outputPath } = reEncodeManager.start(
+  return new Promise<MediaJobStartResult>((resolve, reject) => {
+    const { jobId } = mediaJobService.start(
       inputPath,
       spec.args,
       spec.outputExt,
@@ -811,7 +817,9 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
             });
           }
         },
-        onDone: (result) => resolve({ outputPath: result.outputPath }),
+        // ffmpeg finished: file is in tempPath, untagged, NOT yet in the watched folder.
+        // Resolve with both paths so the renderer can tag the temp file and then commit.
+        onDone: ({ tempPath, finalPath }) => resolve({ jobId, tempPath, finalPath }),
         onError: (err) => reject(err),
         // Rejection with a distinguishable message lets the renderer treat cancel
         // differently from a hard failure (no toast, just unlock the UI).
@@ -831,15 +839,18 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
         totalSec: undefined,
       });
     }
-    // outputPath is available synchronously; it's also returned via onDone.
-    void outputPath; // suppress unused-variable lint
   });
 });
 
 // CANCEL_MEDIA_JOB: renderer sends the jobId it received from the first progress event.
 MainMessenger.onCancelMediaJob((jobId) => {
-  reEncodeManager.cancel(jobId);
+  mediaJobService.cancel(jobId);
 });
+
+// COMMIT_MEDIA_JOB: renderer calls this after tagging the temp file with EXIF/XMP, having
+// suppressed the watcher for finalPath. Moves tempPath → finalPath (single move); the renderer
+// is the sole ingester of the result.
+MainMessenger.onCommitMediaJob((jobId) => mediaJobService.place(jobId));
 
 // Library management IPC handlers
 MainMessenger.onGetLibraries(() => registry.getLibraries());

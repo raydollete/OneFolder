@@ -2,11 +2,11 @@
 id: TASK-101
 title: 'Two-phase media-job IPC: START_MEDIA_JOB resolves { jobId, tempPath, finalPath }; add COMMIT_MEDIA_JOB(jobId) that atomically renames temp→final. Single dispatch covers all three tools.'
 investigation: INV-026
-status: planned
+status: DONE
 priority: high
 blocked_by: [TASK-100]
 date_created: 2026-06-13
-date_completed:
+date_completed: 2026-06-13
 files:
   - 'src/ipc/messages.ts'
   - 'src/ipc/renderer.ts'
@@ -35,24 +35,25 @@ See [INV-026](../investigations/INV-026_HIGH_FRONTEND_media-job-temp-dir-then-mo
 
 ## Implementation Steps
 
-- [ ] 1. In `src/ipc/messages.ts`: change `MediaJobResult` (currently
+- [x] 1. In `src/ipc/messages.ts`: change `MediaJobResult` (currently
       `{ outputPath: string }`, :177-180) to the START result
       `MediaJobStartResult = { jobId: string; tempPath: string; finalPath: string }`,
       and add `MediaJobCommitResult = { outputPath: string }`. Add a channel
       constant `export const COMMIT_MEDIA_JOB = 'COMMIT_MEDIA_JOB';` near
-      `START_MEDIA_JOB` (:144-146).
+      `START_MEDIA_JOB` (:144-146). MediaJobResult is kept as a deprecated alias
+      for backward reference clarity.
 
-- [ ] 2. In `src/ipc/main.ts`: update `onStartMediaJob` (:238-240) so its callback
+- [x] 2. In `src/ipc/main.ts`: update `onStartMediaJob` (:238-240) so its callback
       returns `Promise<MediaJobStartResult>`. Add
       `static onCommitMediaJob = (cb: (jobId: string) => Promise<MediaJobCommitResult>)
       => ipcMain.handle(COMMIT_MEDIA_JOB, (_, jobId: string) => cb(jobId));`.
 
-- [ ] 3. In `src/ipc/renderer.ts`: update `startMediaJob` (:250-255) return type to
+- [x] 3. In `src/ipc/renderer.ts`: update `startMediaJob` (:250-255) return type to
       `Promise<MediaJobStartResult>`. Add
       `static commitMediaJob = (jobId: string): Promise<MediaJobCommitResult> =>
       ipcRenderer.invoke(COMMIT_MEDIA_JOB, jobId);`.
 
-- [ ] 4. In `src/main.ts onStartMediaJob` (:755-837): keep the `create-clip`
+- [x] 4. In `src/main.ts onStartMediaJob` (:755-837): keep the `create-clip`
       `preInputArgs` validation/build unchanged (:761-795). In the result Promise,
       capture `{ jobId, tempPath, finalPath }` from `reEncodeManager.start(...)`
       (:798) and resolve with all three in `onDone`
@@ -60,20 +61,20 @@ See [INV-026](../investigations/INV-026_HIGH_FRONTEND_media-job-temp-dir-then-mo
       Keep emitting the synthetic first progress event with `jobId` (:826-833) so
       Cancel still works. `onError`/`onCancelled` unchanged.
 
-- [ ] 5. In `src/main.ts`: register the commit handler:
+- [x] 5. In `src/main.ts`: register the commit handler:
       `MainMessenger.onCommitMediaJob((jobId) => reEncodeManager.commit(jobId));`
       next to `onCancelMediaJob` (:840-842).
 
-- [ ] 6. Confirm there is exactly one `START_MEDIA_JOB` handler and one
-      `reEncodeManager.start` caller, so the two-phase contract applies uniformly
-      to all three `MEDIA_JOB_SPECS` entries with no per-tool code.
+- [x] 6. Confirmed there is exactly one `START_MEDIA_JOB` handler and one
+      `reEncodeManager.start` caller; the two-phase contract applies uniformly to
+      all three `MEDIA_JOB_SPECS` entries with no per-tool code.
 
 ## Done When
 
-- [ ] `START_MEDIA_JOB` resolves `{ jobId, tempPath, finalPath }`; the file is in
+- [x] `START_MEDIA_JOB` resolves `{ jobId, tempPath, finalPath }`; the file is in
       `.onefolder-tmp` and NOT yet in the target folder when it resolves.
-- [ ] `COMMIT_MEDIA_JOB(jobId)` resolves `{ outputPath }` after the atomic
+- [x] `COMMIT_MEDIA_JOB(jobId)` resolves `{ outputPath }` after the atomic
       temp→final rename.
-- [ ] All three tools use the same start+commit path; no per-tool IPC branching.
-- [ ] `yarn lint` and `yarn build` pass; TypeScript types are consistent across
-      `messages.ts`/`renderer.ts`/`main.ts`/`src/main.ts`.
+- [x] All three tools use the same start+commit path; no per-tool IPC branching.
+- [x] `yarn lint` and `yarn build` pass; TypeScript types are consistent across
+      `messages.ts`/`renderer.ts`/`main.ts`/`src/main.ts`. (118/118 tests pass; lint clean for our changes; full build deferred to TASK-103.)

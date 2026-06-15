@@ -228,6 +228,13 @@ class UiStore {
   @observable deleteOriginalAfterJobFile: ClientFile | null = null;
 
   /**
+   * The freshly-produced OUTPUT file paired with {@link deleteOriginalAfterJobFile}. The
+   * post-job modal lets the user Keep Modified (trash the original), Keep Original (trash this
+   * output), or Keep Both — so it needs a handle on BOTH files. null when the prompt is closed.
+   */
+  @observable deleteOriginalAfterJobOutput: ClientFile | null = null;
+
+  /**
    * Media-processing lock: set while a long-running file operation (e.g. re-encode) is in
    * flight for a specific file. When active, navigation and destructive actions are blocked so
    * the user cannot move away from or delete the source while it is being processed.
@@ -258,7 +265,7 @@ class UiStore {
    * Set when a media job (re-encode, normalize audio, create clip) fails, to drive a blocking modal
    * (MediaJobErrorAlert) that surfaces the ffmpeg error and — crucially — does NOT close the source
    * video. null means no error modal is shown. `tool` is a human-readable job label; `message` is the
-   * ffmpeg error tail (see ReEncodeManager: "ffmpeg exited with code N.\n<stderr tail>").
+   * ffmpeg error tail (see FfmpegRunner: "ffmpeg exited with code N.\n<stderr tail>").
    */
   @observable mediaJobError: { tool: string; message: string } | null = null;
 
@@ -639,12 +646,14 @@ class UiStore {
    * Shared by all tools that produce a derived output (Re-encode, Compress & Normalize Audio, etc.).
    * The actual Alert is rendered by DeleteOriginalAfterJob in RemovalAlert.tsx.
    */
-  @action.bound openDeleteOriginalPrompt(file: ClientFile): void {
-    this.deleteOriginalAfterJobFile = file;
+  @action.bound openDeleteOriginalPrompt(source: ClientFile, output: ClientFile): void {
+    this.deleteOriginalAfterJobFile = source;
+    this.deleteOriginalAfterJobOutput = output;
   }
 
   @action.bound closeDeleteOriginalPrompt(): void {
     this.deleteOriginalAfterJobFile = null;
+    this.deleteOriginalAfterJobOutput = null;
   }
 
   /** True while a media-processing operation owns the current file (e.g. re-encode in flight). */

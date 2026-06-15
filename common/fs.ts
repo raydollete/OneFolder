@@ -64,6 +64,31 @@ function hashString(s: string) {
 }
 
 /**
+ * Returns a unique temp file path inside the application-owned staging directory.
+ *
+ * `baseDir` is an APPLICATION-relative temp directory (e.g. a subfolder of the OS
+ * temp dir / Electron `app.getPath('temp')`), deliberately OUTSIDE any watched
+ * photo location — ffmpeg writes here so the chokidar folder watcher never observes
+ * a partial/untagged file. The finished file is later moved into the target folder
+ * via an atomic same-directory rename (see ReEncodeManager.commit).
+ *
+ * The temp file name is a random UUID with the given extension, making collisions
+ * between concurrent jobs effectively impossible.
+ *
+ * Do NOT call `fse.ensureDir` here — the caller (ReEncodeManager._runJob) ensures
+ * `baseDir` exists immediately before spawning ffmpeg.
+ */
+export function getMediaJobTempPath(
+  baseDir: string,
+  ext: string,
+): { tempDir: string; tempPath: string } {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { randomUUID } = require('crypto') as typeof import('crypto');
+  const tempPath = path.join(baseDir, `${randomUUID()}.${ext}`);
+  return { tempDir: baseDir, tempPath };
+}
+
+/**
  * Returns a collision-free sibling path in `dir` with the given `baseName` and `ext`.
  *
  * Resolution order:

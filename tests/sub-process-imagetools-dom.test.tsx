@@ -31,9 +31,11 @@ configure({ enforceActions: 'never' });
 
 // --- Mock the IPC layer (imports electron) and the Toaster (touches window) ---
 const startMediaJobMock = jest.fn();
+const commitMediaJobMock = jest.fn();
 jest.mock('../src/ipc/renderer', () => ({
   RendererMessenger: {
     startMediaJob: (...args: any[]) => startMediaJobMock(...args),
+    commitMediaJob: (...args: any[]) => commitMediaJobMock(...args),
     onMediaJobProgress: jest.fn(() => jest.fn()), // returns an unsubscribe fn
     cancelMediaJob: jest.fn(),
     toggleDevTools: jest.fn(),
@@ -93,7 +95,13 @@ async function setup() {
     tagStore: { tagList: [], get: jest.fn(() => undefined) },
     imageLoader: { needsThumbnail: jest.fn(() => false) },
     exifTool: { writeTags: jest.fn().mockResolvedValue(undefined) },
-    locationStore: { get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })) },
+    locationStore: {
+      get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })),
+      suppressIngest: jest.fn(),
+      unsuppressIngest: jest.fn(),
+      // The single deterministic ingestion path; resolve the watcher-visible output DTO.
+      ingestFile: jest.fn().mockResolvedValue(outDto),
+    },
   };
   const fileStore = new FileStore(backend, rootStore);
   const uiStore = new UiStore(rootStore);
@@ -143,12 +151,15 @@ describe('INV-023 GUI: clicking Re-encode keeps the viewer pinned and swaps to t
     const { rootStore, uiStore, src, revealOutput } = await setup();
 
     // Hold ffmpeg open so we can observe the in-flight state.
-    let finishFfmpeg!: (v: { outputPath: string }) => void;
+    // startMediaJob (phase 1) resolves with { jobId, tempPath, finalPath } once ffmpeg is done.
+    // commitMediaJob (phase 2) performs the atomic rename and resolves with { outputPath }.
+    let finishFfmpeg!: (v: { jobId: string; tempPath: string; finalPath: string }) => void;
     startMediaJobMock.mockReturnValue(
-      new Promise<{ outputPath: string }>((resolve) => {
+      new Promise<{ jobId: string; tempPath: string; finalPath: string }>((resolve) => {
         finishFfmpeg = resolve;
       }),
     );
+    commitMediaJobMock.mockResolvedValue({ outputPath: 'C:\\photos\\out.mp4' });
 
     act(() => {
       root.render(
@@ -175,9 +186,15 @@ describe('INV-023 GUI: clicking Re-encode keeps the viewer pinned and swaps to t
     expect(uiStore.slideFile?.id).toBe('src'); // still showing the source
 
     // --- ffmpeg finishes; the watcher's output becomes visible; finalize runs ---
+    // startMediaJob resolves with the two-phase result: file is in temp, not yet renamed.
+    // commitMediaJob (mocked above) performs the atomic rename and resolves outputPath.
     revealOutput();
     await act(async () => {
-      finishFfmpeg({ outputPath: 'C:\\photos\\out.mp4' });
+      finishFfmpeg({
+        jobId: 'test-job-id',
+        tempPath: 'C:\\Temp\\onefolder-media-jobs\\uuid.mp4',
+        finalPath: 'C:\\photos\\out.mp4',
+      });
       await flushAll();
     });
 

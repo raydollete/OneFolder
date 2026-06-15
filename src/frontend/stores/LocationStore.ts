@@ -51,6 +51,16 @@ class LocationStore {
   /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
   readonly storageKeyPrefix: string;
 
+  /**
+   * Absolute paths (normalized forward-slash, lower-case) the folder watcher must NOT auto-ingest
+   * because the renderer is ingesting them deterministically itself (media-job outputs). This is
+   * the single mechanism that prevents the watcher and `ingestFile()` from both creating a row for
+   * the same derived file — the dual-write race that broke media jobs. Populated by
+   * `suppressIngest()` before a media-job output is placed, cleared by `unsuppressIngest()` after
+   * `ingestFile()` has created the row.
+   */
+  private readonly suppressedIngestPaths = new Set<string>();
+
   constructor(backend: DataStorage, rootStore: RootStore, storageKeyPrefix = '') {
     this.backend = backend;
     this.rootStore = rootStore;
@@ -501,8 +511,86 @@ class LocationStore {
     );
   }
 
+  /** Normalize an absolute path to the form used for suppression/DB lookups. */
+  private static normalizePath(absolutePath: string): string {
+    return absolutePath.replace(/\\/g, '/').toLowerCase();
+  }
+
+  /**
+   * Tell the folder watcher NOT to auto-ingest `absolutePath` — the renderer is ingesting it
+   * deterministically itself (a media-job output). Call this BEFORE the file appears at that path.
+   */
+  suppressIngest(absolutePath: string): void {
+    this.suppressedIngestPaths.add(LocationStore.normalizePath(absolutePath));
+  }
+
+  /** Release a path previously passed to {@link suppressIngest}. */
+  unsuppressIngest(absolutePath: string): void {
+    this.suppressedIngestPaths.delete(LocationStore.normalizePath(absolutePath));
+  }
+
+  /**
+   * Deterministically ingest a known file into the library and set its tags — the SINGLE
+   * row-creation path for derived media-job outputs (re-encode / normalize / clip). It does NOT
+   * depend on the folder watcher (which is suppressed for this path), so there is no race and no
+   * untagged-row window.
+   *
+   * Creates the DB row if absent (reusing an existing row if one is already present), sets `tagIds`
+   * on it, and returns the canonical FileDTO. Throws LOUD if the file is missing on disk or the row
+   * cannot be created — the caller surfaces this as a blocking modal.
+   *
+   * @param absolutePath Absolute path of the committed output (any separator form).
+   * @param locationId   The owning location (the output is a sibling of the source).
+   * @param tagIds       Tag ids to set on the row (from the source file).
+   */
+  @action async ingestFile(absolutePath: string, locationId: ID, tagIds: ID[]): Promise<FileDTO> {
+    const fwd = absolutePath.replace(/\\/g, '/');
+    const normalized = fwd.toLowerCase();
+    const findRow = (rows: FileDTO[]): FileDTO | undefined =>
+      rows.find((f) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === normalized);
+
+    let dto = findRow(await this.backend.fetchFilesByKey('absolutePath', fwd));
+
+    if (dto === undefined) {
+      const location = this.get(locationId);
+      if (location === undefined) {
+        throw new Error(`ingestFile: location ${locationId} not found for "${absolutePath}"`);
+      }
+      const stat = await fse.stat(absolutePath).catch((e: unknown) => {
+        throw new Error(`ingestFile: "${absolutePath}" is missing on disk — ${String(e)}`);
+      });
+      const newDto = await pathToIFile(
+        {
+          absolutePath: fwd,
+          dateCreated: stat.birthtime,
+          dateModified: stat.mtime,
+          size: Number(stat.size),
+          ino: stat.ino.toString(),
+        },
+        location,
+        this.rootStore.imageLoader,
+      );
+      // createFilesFromPath dedups by path in a serialized transaction; re-fetch the canonical row.
+      await this.backend.createFilesFromPath(fwd, [newDto]);
+      dto = findRow(await this.backend.fetchFilesByKey('absolutePath', fwd));
+      if (dto === undefined) {
+        throw new Error(`ingestFile: failed to create a library row for "${absolutePath}"`);
+      }
+    }
+
+    dto.tags = tagIds;
+    await this.backend.saveFiles([dto]);
+    return dto;
+  }
+
   @action async addFile(fileStats: FileStats, location: ClientLocation): Promise<void> {
     const fileStore = this.rootStore.fileStore;
+
+    // Skip files the renderer is ingesting deterministically (media-job outputs). Without this the
+    // watcher would create a SECOND, untagged row for the same path and race the renderer's ingest.
+    if (this.suppressedIngestPaths.has(LocationStore.normalizePath(fileStats.absolutePath))) {
+      return;
+    }
 
     // Gather file data
     const file = await pathToIFile(fileStats, location, this.rootStore.imageLoader);
@@ -607,6 +695,32 @@ export type FileStats = {
   ino: string;
 };
 
+/**
+ * Compute a file's path relative to its location ROBUSTLY.
+ *
+ * `ClientFile` reconstructs its `absolutePath` as `Path.join(location.path, relativePath)`
+ * (entities/File.ts), so `relativePath` MUST strip the location prefix correctly — otherwise the
+ * rejoin DOUBLES the drive (e.g. `X:/X:/live stream/clip.mp4`, the reported media-job-output bug).
+ * The naive `absolutePath.replace(loc.path, '')` silently fails when the two differ in path
+ * separator (`/` vs `\`), drive-letter case, or a trailing slash — leaving `relativePath` equal to
+ * the full path. This normalizes both sides (forward slashes, lower-case) before stripping, then
+ * slices the ORIGINAL string so the returned segment keeps its real case. If the location is
+ * genuinely not a prefix, it falls back to the basename so the rejoin can never double the drive.
+ */
+function relativePathFromLocation(absolutePath: string, locationPath: string): string {
+  const absFwd = absolutePath.replace(/\\/g, '/');
+  const locFwd = locationPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (absFwd.toLowerCase() === locFwd.toLowerCase()) {
+    return '';
+  }
+  if (absFwd.toLowerCase().startsWith(locFwd.toLowerCase() + '/')) {
+    return absFwd.slice(locFwd.length); // keeps the leading '/'
+  }
+  // Not a prefix (unreconcilable separator/case/drive mismatch): use the basename so
+  // Path.join(location.path, relativePath) stays inside the location and never doubles the drive.
+  return '/' + SysPath.basename(absFwd);
+}
+
 export async function pathToIFile(
   stats: FileStats,
   loc: ClientLocation,
@@ -615,7 +729,7 @@ export async function pathToIFile(
   const now = new Date();
   return {
     absolutePath: stats.absolutePath,
-    relativePath: stats.absolutePath.replace(loc.path, ''),
+    relativePath: relativePathFromLocation(stats.absolutePath, loc.path),
     ino: stats.ino,
     id: generateId(),
     locationId: loc.id,
@@ -678,7 +792,7 @@ export async function pathToIFileWithMetadata(
 
   return {
     absolutePath: stats.absolutePath,
-    relativePath: stats.absolutePath.replace(loc.path, ''),
+    relativePath: relativePathFromLocation(stats.absolutePath, loc.path),
     ino: stats.ino,
     id: generateId(),
     locationId: loc.id,

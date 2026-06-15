@@ -63,9 +63,11 @@ import {
   START_MEDIA_JOB,
   MEDIA_JOB_PROGRESS,
   CANCEL_MEDIA_JOB,
+  COMMIT_MEDIA_JOB,
   StartMediaJobMessage,
   MediaJobProgressMessage,
-  MediaJobResult,
+  MediaJobStartResult,
+  MediaJobCommitResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -234,9 +236,11 @@ export class MainMessenger {
    * Register a handler for START_MEDIA_JOB invoke calls.
    * The callback receives the originating WebContents so the handler can push
    * MEDIA_JOB_PROGRESS events back to exactly that window.
+   * Resolves with { jobId, tempPath, finalPath } when ffmpeg finishes; the file
+   * is in tempPath and has NOT been moved into the watched directory yet.
    */
   static onStartMediaJob = (
-    cb: (wc: WebContents, msg: StartMediaJobMessage) => Promise<MediaJobResult>,
+    cb: (wc: WebContents, msg: StartMediaJobMessage) => Promise<MediaJobStartResult>,
   ) => ipcMain.handle(START_MEDIA_JOB, (e, msg: StartMediaJobMessage) => cb(e.sender, msg));
 
   /** Push a progress event to the renderer that started the media job. */
@@ -246,4 +250,12 @@ export class MainMessenger {
   /** Register a handler for CANCEL_MEDIA_JOB fire-and-forget messages. */
   static onCancelMediaJob = (cb: (jobId: string) => void) =>
     ipcMain.on(CANCEL_MEDIA_JOB, (_, jobId: string) => cb(jobId));
+
+  /**
+   * Register a handler for COMMIT_MEDIA_JOB invoke calls.
+   * The renderer calls this after tagging the temp file; main atomically renames
+   * tempPath → finalPath and resolves with { outputPath: finalPath }.
+   */
+  static onCommitMediaJob = (cb: (jobId: string) => Promise<MediaJobCommitResult>) =>
+    ipcMain.handle(COMMIT_MEDIA_JOB, (_, jobId: string) => cb(jobId));
 }

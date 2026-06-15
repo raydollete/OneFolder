@@ -72,10 +72,13 @@ tags to the output, auto-opens the result, and offers to delete the original.
    - The output auto-opens in the viewer (it becomes the selected file in
      SlideMode).
    - The **Start** and **End** fields are cleared, ready for the next clip.
-   - A **"Delete original?"** modal appears with two choices:
-     - **Delete Original** — moves the source to the Recycle Bin (or permanently
-       deletes it if the volume has no Recycle Bin).
-     - **Keep Original** — closes the modal; the source is untouched.
+   - A post-job **"Keep which version?"** modal appears with three choices:
+     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
+       permanently deletes it if the volume has no Recycle Bin) and keeps the new
+       clip open.
+     - **Keep Original** — moves the NEW clip to the Recycle Bin and switches the
+       viewer back to the original.
+     - **Keep Both** — keeps both files; the new clip stays open.
 7. The UI lock releases when the job finishes (success, failure, or cancel).
 
 **Tool scope:** all three controls are shown only for files where
@@ -176,6 +179,23 @@ untouched.**  This is expected behavior, not a bug.
 
 ---
 
+## Output Staging (INV-026)
+
+ffmpeg does NOT write into the watched target folder. Instead, `MediaJobService`
+runs ffmpeg (via `FfmpegRunner`) into an application-owned staging directory (a
+subfolder of the OS temp dir, OUTSIDE any watched location), so the chokidar folder
+watcher never sees a partial file. After ffmpeg finishes, the renderer tags the
+staged temp file (EXIF/XMP), **suppresses** the folder watcher for the final path
+(`LocationStore.suppressIngest`), and asks main to place the file with a single
+`fse.move(temp → final)`. Because the watcher is suppressed for that path, the
+renderer is the **sole ingester**: it creates the library row deterministically with
+the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
+is no watcher race and no untagged-row window — eliminating the intermittent
+"outside a watched folder" error and untagged imports. This staging logic is shared
+uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip; the
+`-ss`/`-to` pre-input args for Create Clip are orthogonal to output placement and
+are unaffected by this change.
+
 ## Output Path Computation
 
 `getUniqueSiblingPath(dir, baseName, 'mp4')` in `common/fs.ts` — identical logic
@@ -220,13 +240,13 @@ Create Clip is the third consumer of the generalized media-job stack built by
 INV-018 and parameterized by TASK-085.  It introduces one targeted widening: the
 runner now accepts `preInputArgs` for arguments that must precede `-i`.
 
-### Main-Process Job Runner (ReEncodeManager)
+### Main-Process Job Runner (FfmpegRunner + MediaJobService)
 
-`src/ReEncodeManager.ts` is shared by all three tools via the parameterized
-signature:
+`src/media/MediaJobService.ts` (which runs ffmpeg via `src/media/FfmpegRunner.ts`)
+is shared by all three tools via the parameterized signature:
 
 ```typescript
-reEncodeManager.start(inputPath, jobArgs, outputExt, callbacks, preInputArgs?)
+mediaJobService.start(inputPath, jobArgs, outputExt, callbacks, preInputArgs?)
 ```
 
 The `create-clip` job's codec args and output extension come from the static
@@ -321,7 +341,7 @@ cancel, the fields are left unchanged so the user can retry with the same values
 |---|---|
 | ffmpeg exits non-zero (including codec/container mismatch) | Lock released; partial output deleted; error toast with stderr tail ("Create clip failed: …"); no delete prompt; Start/End fields unchanged |
 | User cancels | ffmpeg killed; partial output deleted; lock released; neutral toast ("Create clip cancelled."); Start/End fields unchanged |
-| App quits mid-job | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
+| App quits mid-job | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
 | Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; SlideMode-safe fallback resolves the output by absolute path and swaps to it in place; if DB row genuinely absent: source kept on screen + honest toast (never asserts "outside a watched folder" as the sole cause — docs/TOOLS.md rule 4); lock released |
 | Source already deleted | Defensive guard in `DeleteOriginalAfterJob`; `handleConfirm` no-ops if `source === null` |
 | ffprobe duration probe fails | Job proceeds; spinner runs in indeterminate mode ("Creating clip…", no percent shown) |

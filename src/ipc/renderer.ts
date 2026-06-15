@@ -63,10 +63,12 @@ import {
   START_MEDIA_JOB,
   MEDIA_JOB_PROGRESS,
   CANCEL_MEDIA_JOB,
+  COMMIT_MEDIA_JOB,
   MediaJobType,
   StartMediaJobMessage,
   MediaJobProgressMessage,
-  MediaJobResult,
+  MediaJobStartResult,
+  MediaJobCommitResult,
 } from './messages';
 import { LibraryDTO } from '../api/library';
 
@@ -238,9 +240,11 @@ export class RendererMessenger {
 
   /**
    * Ask main to start a media job of the given `jobType` on `inputPath`.
-   * Resolves with `{ outputPath }` on success; rejects on ffmpeg failure or cancel.
+   * Resolves with `{ jobId, tempPath, finalPath }` when ffmpeg finishes successfully;
+   * the file is in tempPath (inside .onefolder-tmp/) and has NOT been moved yet.
+   * Rejects on ffmpeg failure or cancel.
    *
-   * The `jobId` is delivered to the renderer via the FIRST MEDIA_JOB_PROGRESS event
+   * The `jobId` is also delivered to the renderer via the FIRST MEDIA_JOB_PROGRESS event
    * (see `onMediaJobProgress`) so that `cancelMediaJob(jobId)` can be called during
    * the job.  Callers must subscribe to `onMediaJobProgress` before calling
    * `startMediaJob` and stash the first `msg.jobId` they receive.
@@ -251,8 +255,17 @@ export class RendererMessenger {
     jobType: MediaJobType,
     inputPath: string,
     clip?: { start?: string; end?: string },
-  ): Promise<MediaJobResult> =>
+  ): Promise<MediaJobStartResult> =>
     ipcRenderer.invoke(START_MEDIA_JOB, { inputPath, jobType, clip } as StartMediaJobMessage);
+
+  /**
+   * Ask main to commit (atomically rename) the completed temp file to its final path.
+   * Call this after tagging the temp file (EXIF/XMP write via exiftool).
+   * Resolves with `{ outputPath }` (the final path) on success; rejects if the
+   * rename fails (the temp file is removed on failure — no partial at finalPath).
+   */
+  static commitMediaJob = (jobId: string): Promise<MediaJobCommitResult> =>
+    ipcRenderer.invoke(COMMIT_MEDIA_JOB, jobId);
 
   /**
    * Subscribe to live progress events from the running media job.

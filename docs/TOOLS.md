@@ -32,10 +32,11 @@ takes more than ~1 second, or mutates the watched filesystem needs the full
 |---|---|---|
 | 1. Binary bundling | `package.json` `build.win.extraResources`, `resources/<binary>/` | Ship the executable with the portable build |
 | 2. Path resolution | `common/fs.ts` (`getExtraResourcePath` delegate) | Same path logic in dev and packaged modes |
-| 3. Main-process job runner | `src/<Name>Manager.ts` (see `ReEncodeManager.ts`) | Spawn, progress parsing, job registry, cancel, cleanup |
-| 4. IPC channels | `src/ipc/{messages,renderer,main}.ts` | invoke (start) + push stream (progress) + send (cancel) |
+| 3a. ffmpeg runner | `src/media/FfmpegRunner.ts` | The ONLY ffmpeg/ffprobe spawn site: run + progress + cancel (`AbortSignal`) |
+| 3b. Job service | `src/media/MediaJobService.ts` | Path planning, temp staging, single-`move` place, job registry, killAll |
+| 4. IPC channels | `src/ipc/{messages,renderer,main}.ts` | invoke (start) + push stream (progress) + send (cancel) + invoke (commit/place) |
 | 5. UI lock | `UiStore.beginMediaProcessing` / `endMediaProcessing` | Freeze nav/edit/delete while the job owns the file |
-| 6. Post-encode finalization | `FileStore.finalizeEncodedOutput` | DB-level tag copy → refetch → wait → select/slide → graceful fallback |
+| 6. Post-job finalization | `FileStore.finalizeEncodedOutput` | tag temp → suppress watcher + place → deterministic ingest → refetch → select/slide |
 | 7. Button + orchestration | `ImageTools.tsx` | Gating, spinner, cancel, the ordered happy path |
 | 8. Follow-up prompt | `RemovalAlert.tsx` pattern | e.g. delete-original via the existing trash flow |
 
@@ -47,32 +48,38 @@ rule 6 below and INV-019).
 
 ### The correct order of operations
 
-Getting this order wrong is the main implementation hazard (INV-019):
+Getting this order wrong is the main implementation hazard (INV-019/INV-026; rebuilt into the
+3-layer subsystem below). The guiding principle: the renderer is the **sole ingester** of derived
+output — the folder watcher is suppressed for the output path, so there is exactly one code path
+that creates the row, and no race.
 
 1. Acquire the UI lock (`beginMediaProcessing`).
-2. Compute a collision-free output path **in the main process**
-   (`getUniqueSiblingPath` — never clobber an existing file).
-3. Spawn the subprocess with progress streaming; show the spinner.
-4. On success, call `FileStore.finalizeEncodedOutput(source, outputPath)`:
-   - **a.** Copy DB tags onto the output at the backend level
-     (`copyTagsToOutputPath`) — **before** waiting for `fileList`.
-     This is mandatory: in a tag-filtered view the tag-less output never
-     matches the filter and never enters `fileList`, so tagging MUST come first.
-     `fileList` is a view model (the result of the active search query),
-     NOT a complete index of known files.
-   - **b.** Immediately refetch the active view so the now-tagged output can
-     match the active filter and enter `fileList`.
-   - **c.** Wait (bounded) for the output to appear in `fileList`
-     (`waitForIngestedFile`). Now that it carries the source's tags, a
-     tag-filtered view will accept it.
-   - **d.** Select and open the output (`selectFile` + `enableSlideMode`).
-   - **e.** Graceful fallback when the output is still not visible after the
-     wait: clear the active search/filter (all-content) and retry once. Show
-     an honest toast if still absent — never assert "outside a watched folder"
-     (that is unverified; docs/TOOLS.md rule 4).
-5. Show any follow-up prompt (e.g. delete original) — AFTER finalize returns.
-6. Release the lock (`endMediaProcessing`) — in a `finally`, so it also
-   releases on failure and cancel.
+2. `mediaJobService.start()` computes a collision-free **final** path beside the source
+   (`getUniqueSiblingPath`) AND a **temp** path in the application staging dir (a subfolder of
+   the OS temp dir, OUTSIDE any watched location — `MediaJobService.setTempBaseDir`), then runs
+   ffmpeg (via `FfmpegRunner`) into the temp path. The watched folder never sees a partial file.
+3. Show the spinner from streamed progress. `startMediaJob` resolves with
+   `{ jobId, tempPath, finalPath }` when ffmpeg finishes (file complete, in staging, untagged).
+4. Call `FileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath })`. Every step is
+   awaited; every failure THROWS a loud error the caller shows as a blocking modal — no silent
+   fallbacks:
+   - **a.** Tag the **temp** file (EXIF/XMP) via `tagTempFile`, exactly once. Zero-tag sources
+     skip the write.
+   - **b.** `LocationStore.suppressIngest(finalPath)` so the watcher ignores the output path,
+     then `commitMediaJob` (→ `MediaJobService.place`) moves the file with a single
+     `fse.move(temp → final)`.
+   - **c.** Deterministically ingest via `LocationStore.ingestFile(finalPath, locationId, tagIds)`
+     — the renderer creates the row itself and sets the source's tags. It is the SOLE ingester
+     (the watcher is suppressed), so there is no race and no untagged-row window.
+   - **d.** Refetch the active view, then resolve the output `ClientFile` and anchor `firstItem`
+     to it by identity (preferring the grid instance, or injecting it if the active filter
+     excludes it — SlideMode-safe; never `clearSearchCriteriaList()` / content-mode setters).
+   - **e.** Release the suppression in a `finally`; by now the row exists, so a late watcher
+     `add()` dedups by inode in `addFile`.
+5. Show any follow-up prompt (e.g. the Keep Modified / Keep Original / Keep Both modal) — AFTER
+   finalize returns.
+6. Release the lock (`endMediaProcessing`) — in a `finally`, so it also releases on failure and
+   cancel.
 
 ---
 
@@ -159,46 +166,29 @@ and exercising the full chain — including from a **filtered view**, with a
 **fully-tagged library**, and with a source whose name already collides with
 the output convention.
 
-### 6. SlideMode + refetch: pin the viewed file by identity, never by index
+### 6. SlideMode + refetch: keep the viewed file anchored by identity, never by index
 
-**The fetch path (`updateFromBackend`) does NOT reconcile `uiStore.firstItem`.**
+`updateFromBackend` wholesale-replaces `fileList` (clear + push). If it left
+`firstItem` at its old numeric index, `firstFileInView = fileList[firstItem]` would
+point at a different file (or out of range → `undefined`, unmounting SlideMode via
+the `LayoutSwitcher` mount gate) whenever a refetch reorders/shrinks the list — the
+original INV-021/INV-023 "drops to the grid / jumps to an unrelated video" bug.
 
-`updateFromBackend` wholesale-replaces `fileList` (clear + push) and calls
-`cleanFileSelection`, but it does NOT update `firstItem`.  After the replace,
-`firstItem` points at whatever index it had before the fetch — which is now
-either a completely different file (if the list changed length/order) or out of
-range.  `firstFileInView = fileList[firstItem]` then returns `undefined`, and
-SlideMode unmounts (the mount gate in `LayoutSwitcher.tsx:193` requires
-`firstFileInView` to be defined).
+**This is now handled inside `updateFromBackend` (INV-023):** before replacing the
+list it captures the anchor file id (the media-processing pin if a job is pinning the
+viewer, otherwise the file currently at `firstItem`) and, after the rebuild, calls
+`reconcileFirstItemTo(anchorId)` to re-point `firstItem` at that file's NEW index by
+identity (clamping into range if it's gone). So a plain `await refetch()` already
+preserves the viewed file across list churn — `finalizeEncodedOutput` relies on this.
 
-Contrast `removeFilesFromListInPlace` (FileStore.ts:703–809), which snapshots
-`oldFirstItemId` and re-points `firstItem` to the survivor's new index after
-every splice.  **The fetch path has no such logic** — this is the structural
-asymmetry (INV-021) that drops the viewer whenever a refetch fires in SlideMode.
-
-**Rule:** any refetch performed while `isSlideMode` is true MUST pin the
-currently-viewed file by identity (not by index) so that after the list
-settles, `firstItem` is set to the file's new position.  Use the dedicated
-primitive:
-
-```typescript
-// TASK-089 / INV-021 usage pattern:
-const pinned = await this.pinViewedFileAcrossRefetch(sourceFile);
-if (!pinned) {
-  // sourceFile is no longer in the refetched list — insert/pin it manually.
-}
-```
-
-`FileStore.pinViewedFileAcrossRefetch(pinFile)` (FileStore.ts, added by
-TASK-090) calls `refetch()`, then in a single synchronous MobX `transaction`
-sets `uiStore.firstItem` to the pin file's new index and calls
-`selectFile(pinFile, true)`.  Returns `true` when the file survived the
-refetch; `false` when it is absent (caller must decide what to show).
-
-Do NOT route a SlideMode swap through `clearSearchCriteriaList()` or any
-content-mode setter (`setContentAll`, `setContentQuery`, etc.) without first
-securing the pin — those methods call `disableSlideMode()` unconditionally and
-will tear the viewer down.
+**Rules that remain binding:**
+- Anchor by **identity (file id), never by raw index** when reconciling `firstItem`.
+- Do NOT route a SlideMode swap through `clearSearchCriteriaList()` or any
+  content-mode setter (`setContentAll`, `setContentQuery`, …) — they call
+  `disableSlideMode()` unconditionally and tear the viewer down. Inject/anchor the
+  file directly instead (see `resolveOutputClientFile`).
+- `FileStore.pinViewedFileAcrossRefetch(pinFile)` still exists for callers that want
+  an explicit pinned refetch and a survived/absent boolean.
 
 ---
 
@@ -217,10 +207,10 @@ These were decided up front and remain binding for new tools:
   (release media handles → `checkRecyclable` → `trashFile`/
   `deleteFilePermanently` → `fileStore.deleteFiles`).
 - **Don't rely on the external binary to preserve metadata.** Re-encoders drop
-  EXIF/XMP; copy tags explicitly via `FileStore.finalizeEncodedOutput`, which
-  uses `copyTagsToOutputPath` to perform exactly one ExifTool write at the DB
-  level — no `ClientFile` from `fileList` required.
-  Never also write tags from the main process for the same file — that
+  EXIF/XMP; copy tags explicitly via `FileStore.finalizeEncodedOutput`, which does
+  exactly one ExifTool write — `tagTempFile` writes the source's tags to the staged
+  temp file before it is placed, and `LocationStore.ingestFile` sets the tags at the
+  DB level. Never also write tags from the main process for the same file — that
   double-writes and can race the encoder's file handle.
 - **Preserve user-specified command arguments verbatim.** Only add transport
   flags (progress, banner suppression, overwrite behavior) around them.
@@ -251,9 +241,12 @@ These were decided up front and remain binding for new tools:
        `isMediaProcessing`, spinner + whole-percent progress + Cancel.
 5. [ ] Orchestration wrapped in `try/finally` around `endMediaProcessing()`;
        distinct handling for cancel vs failure vs ingestion timeout.
-6. [ ] Post-encode finalization via `fileStore.finalizeEncodedOutput(source,
-       outputPath)` — this handles DB-level tag copy, refetch, bounded wait,
-       select/slide, and graceful fallback in the correct order.
+6. [ ] Post-job finalization via `fileStore.finalizeEncodedOutput(source,
+       { jobId, tempPath, finalPath })` — tags the temp file, suppresses the watcher
+       for the output path + places it (single `fse.move`), deterministically ingests
+       it (sole ingester), refetches, and resolves the output ClientFile. Every step
+       throws loud on failure (no silent fallback). (INV-026, rebuilt as the 3-layer
+       subsystem.)
 7. [ ] Any destructive follow-up reuses the `RemovalAlert` trash-flow pattern.
 8. [ ] Manual QA in the running app: happy path, filtered view + fully-tagged
        library, name collision, zero-tag source, failure, cancel,
@@ -268,8 +261,8 @@ These were decided up front and remain binding for new tools:
 
 ### Example 1 — Re-encode (x264) (INV-018)
 
-The first tool.  It uses all eight layers: binary bundling, path resolution, the
-full `ReEncodeManager` job runner, three IPC channels, the UI lock,
+The first tool.  It uses all the layers: binary bundling, path resolution, the
+`FfmpegRunner` + `MediaJobService` job runner, the IPC channels, the UI lock,
 `finalizeEncodedOutput`, the `ImageTools.tsx` button + orchestration, and the
 `DeleteOriginalAfterJob` prompt.  See [reencode-x264.md](reencode-x264.md) for
 the complete feature doc.
@@ -284,7 +277,7 @@ Specifically, Compress & Normalize Audio added:
 
 - **One entry in `MEDIA_JOB_SPECS`** (in `src/main.ts`) — the ffmpeg args
   `['-c:v', 'copy', '-af', 'acompressor=…,loudnorm=…']` and output
-  extension `'mp4'`.  The manager (`ReEncodeManager.start(inputPath, jobArgs,
+  extension `'mp4'`.  The service (`mediaJobService.start(inputPath, jobArgs,
   outputExt, callbacks)`), IPC channels (`START_MEDIA_JOB` /
   `MEDIA_JOB_PROGRESS` / `CANCEL_MEDIA_JOB`), UI lock, and
   `finalizeEncodedOutput` helper were all reused without modification.
@@ -307,9 +300,9 @@ for correct stream-copy seeking).  Everything else is reused unchanged.
 
 Specifically, Create Clip added:
 
-- **One targeted widening to `ReEncodeManager.start()`** — an optional
-  `preInputArgs: string[] = []` parameter, inserted before `-i` in the ffmpeg
-  argv.  The two existing call sites pass nothing and are completely unaffected.
+- **An optional `preInputArgs: string[] = []` parameter on the runner/service** —
+  inserted before `-i` in the ffmpeg argv (now `FfmpegRunner.run` + threaded through
+  `MediaJobService.start`).  Call sites that pass nothing are unaffected.
 - **One entry in `MEDIA_JOB_SPECS`** — `{ args: ['-c', 'copy'], outputExt: 'mp4' }`.
   The per-invocation `-ss`/`-to` values are not in the static spec; they come
   from the `StartMediaJobMessage.clip` payload and are forwarded as `preInputArgs`

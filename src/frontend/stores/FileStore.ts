@@ -18,6 +18,7 @@ import { ConditionDTO, OrderBy, OrderDirection } from '../../api/data-storage-se
 import { FileDTO, IMG_EXTENSIONS_TYPE } from '../../api/file';
 import { ID } from '../../api/id';
 import { AppToaster } from '../components/Toaster';
+import { RendererMessenger } from '../../ipc/renderer';
 import { ClientFile, mergeMovedFile } from '../entities/File';
 import { ClientLocation } from '../entities/Location';
 import { ClientStringSearchCriteria, ClientTagSearchCriteria } from '../entities/SearchCriteria';
@@ -1389,191 +1390,52 @@ class FileStore {
   }
 
   /**
-   * DB-level tag copy used by the corrected post-encode flow (INV-019).
+   * Write the source's tags (EXIF/XMP) to the temp file while it is still in the
+   * staging directory (outside any watched location, before the atomic rename).
    *
-   * Copies the source ClientFile's tags onto the freshly-encoded output identified
-   * by absolute path, WITHOUT requiring the output to be present in the
-   * view-dependent `fileList`. It resolves the output's FileDTO directly from the
-   * backend by absolute path, sets the source's tag ids on the DTO, persists it,
-   * and writes EXIF/XMP exactly once.
+   * Called by the corrected post-encode flow (INV-026) immediately after ffmpeg
+   * finishes, before `commitMediaJob` moves the file into the watched folder.
+   * Because the file is in the temp dir and not yet watched, there is no race with
+   * the folder watcher — tagging is deterministic and cannot race ingestion.
    *
-   * IMPORTANT: This method writes EXIF/XMP metadata for the output file. Do NOT
-   * pair it with any other metadata write for the same file — that would
-   * double-write. The corrected post-encode flow calls only this method for tag
-   * copy (never also calling copyTagsToFile for the same output).
+   * Skips the write entirely for zero-tag sources (writing an empty hierarchy would
+   * clear metadata on a brand-new file and there is nothing to copy anyway).
    *
-   * @param source      The ClientFile whose tags should be copied.
-   * @param outputPath  Absolute path of the freshly-encoded output (win32
-   *                    backslash form from the main process is acceptable — path
-   *                    normalization is handled internally).
-   * @returns The tagged `FileDTO` when the DB row was found and tagged (the caller
-   *          can build a ClientFile from it immediately, without waiting for it to
-   *          appear in the view-dependent `fileList`); `null` if the row never
-   *          appeared after the bounded poll (output is likely outside any watched
-   *          location, or ingestion genuinely failed). Never throws on a missing row.
+   * @param source   The ClientFile whose tags should be written.
+   * @param tempPath Absolute path of the staged temp file (not yet in the watched dir).
    */
-  async copyTagsToOutputPath(source: ClientFile, outputPath: string): Promise<FileDTO | null> {
-    // --- Path normalization for DB lookup ---
-    // The DB stores absolutePath in forward-slash form (the folder watcher normalizes
-    // its watch root to '/'; chokidar emits forward-slash paths on all platforms).
-    // The main-process-computed outputPath uses win32 backslashes (path.join in
-    // common/fs.ts getUniqueSiblingPath). We must query with the form the DB stored.
-    //
-    // Strategy: primary query uses forward-slash form; if that returns nothing, fall
-    // back to the raw outputPath (covers edge cases where the OS watcher stored it
-    // differently). If multiple candidates are returned, compare case-insensitively
-    // in JS (Windows paths are case-insensitive).
-    const forwardSlashPath = outputPath.replace(/\\/g, '/');
-    const normalizedForSearch = forwardSlashPath.toLowerCase();
-
-    const findDtoInResults = (results: FileDTO[]): FileDTO | undefined =>
-      results.find((f) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === normalizedForSearch);
-
-    // --- Bounded poll for the DB row ---
-    // The DB row is created by chokidar add -> LocationStore.addFile -> backend.createFilesFromPath
-    // via the watcher worker round-trip, which lags behind ffmpeg completion by the watcher's
-    // ~2 s awaitWriteFinish plus the worker round-trip. Poll up to ~10 s (50 × 200 ms) before
-    // giving up, so the tag copy reliably completes even on slow disks — the destination MUST carry
-    // the source's tags before it is shown (INV-021 redo requirement 3). The loop breaks early the
-    // moment the row appears (normally < 1 s after the watcher fires), so the full budget is only
-    // ever spent in the genuinely-not-ingested case. The source stays on screen with a "Finalizing…"
-    // indicator throughout (the viewer is pinned), so a longer wait is honest, not jarring.
-    const MAX_POLLS = 50;
-    const POLL_INTERVAL_MS = 200;
-
-    let dto: FileDTO | undefined;
-
-    for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-      // Primary: query with the forward-slash form (matches DB storage).
-      const primaryResults = await this.backend.fetchFilesByKey('absolutePath', forwardSlashPath);
-      dto = findDtoInResults(primaryResults);
-
-      if (!dto && primaryResults.length === 0) {
-        // Fallback: try the raw outputPath as stored (handles any edge case where
-        // the watcher stored a non-normalized form).
-        const fallbackResults = await this.backend.fetchFilesByKey('absolutePath', outputPath);
-        dto = findDtoInResults(fallbackResults);
-      }
-
-      if (dto) {
-        break;
-      }
-
-      // Row not yet present — wait and retry.
-      await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    }
-
-    if (!dto) {
-      // Row never appeared after the full poll budget. The output may be genuinely
-      // outside any watched location, or ingestion failed. Return null — do NOT throw.
-      return null;
-    }
-
-    // --- Set the source's tags on the DTO and persist ---
-    // Write raw tag ids (ID[]) onto the DTO, matching the FileDTO.tags field shape.
-    // Do NOT mutate numUntaggedFiles or any derived counter here — the subsequent
-    // refetch reconciles the view (docs/TOOLS.md rule 2).
-    const tagIds = Array.from(source.tags, (t) => t.id);
-    dto.tags = tagIds;
-    await this.backend.saveFiles([dto]);
-
-    // --- Write EXIF/XMP exactly once ---
-    // Build the tag path hierarchy from the source's ClientTag objects (each t.path
-    // is string[], so the result is string[][], matching exifTool.writeTags signature).
-    // Skip entirely for zero-tag sources: writing an empty array would clear metadata
-    // on a brand-new file, and there is nothing to copy anyway.
+  async tagTempFile(source: ClientFile, tempPath: string): Promise<void> {
     const hierarchy = Array.from(source.tags, (t) => t.path);
-    if (hierarchy.length > 0) {
-      // Use the original outputPath (win32 backslashes) for the filesystem write —
-      // ExifTool operates on the real OS path, not the DB-normalized form.
-      await this.rootStore.exifTool.writeTags(outputPath, hierarchy);
+    if (hierarchy.length === 0) {
+      return; // Nothing to write — skip for zero-tag sources.
     }
-
-    return dto;
+    await this.rootStore.exifTool.writeTags(tempPath, hierarchy);
   }
 
   /**
-   * Reusable post-encode finalization helper (INV-019, INV-021, INV-021 redo).
-   *
-   * Produces the freshly-encoded output as a ready-to-show ClientFile, with the source's tags
-   * already copied onto it at BOTH the DB and EXIF/XMP level, and returns it so the caller can
-   * atomically swap the pinned viewer from the source to the output (a seamless in-place switch).
-   *
-   *   A. Copy tags at the DB level FIRST (INV-019), then write EXIF/XMP exactly once. This polls
-   *      the backend for the output's row (created by the folder watcher's chokidar `add`) for up
-   *      to ~10 s, so the destination RELIABLY carries the source's tags before it is ever shown
-   *      (requirement 3). Returns the tagged FileDTO, or null if the row never appeared.
-   *   B. Bring the output into the active `fileList` via a plain `refetch()` so the grid behind the
-   *      viewer is correct and `firstItem` can be re-anchored. This is now safe in SlideMode because
-   *      the content-mode setters no longer disable SlideMode on a same-mode refetch, and because
-   *      the caller has PINNED the viewer (`uiStore.mediaProcessingFile`) so no list/`firstItem`
-   *      churn can tear it down.
-   *   C. Resolve the output's ClientFile: prefer the instance already reconciled into `fileList`
-   *      (the shared observable the grid uses); if the active filter excludes it, build one from the
-   *      tagged DTO and inject it at the source's position. Either way `firstItem` is anchored to it.
-   *
-   * This method does NOT toggle the media-processing lock or the pin, and does NOT open the
-   * delete-original prompt — those remain the caller's (ImageTools.tsx runMediaJob) responsibility.
-   * On a successful return the caller swaps the pin to the returned file; on a null return the
-   * caller keeps the source on screen and does NOT prompt to delete the original (the output could
-   * not be verified openable — requirement: never close the source until the output is confirmed).
-   *
-   * Shared by every tool that produces a derived output (Re-encode, Compress & Normalize Audio, Create Clip) —
-   * do not inline a duplicate in each tool.
-   *
-   * @param source      The source ClientFile whose tags should be copied.
-   * @param outputPath  Absolute path of the freshly-encoded output (win32
-   *                    backslash form from the main process is acceptable).
-   * @returns The output ClientFile (tags copied, present in or injected into `fileList`) when it
-   *          could be verified; `null` when the output's DB row never appeared (outside a watched
-   *          location or ingestion genuinely failed).
+   * Resolve a freshly-ingested output DTO to a ClientFile in the active view and anchor
+   * `firstItem`/selection to it. Prefers the instance the grid already holds after refetch; if the
+   * active filter excludes it, builds one from the DTO and injects it at the source's position so
+   * the grid stays visually stable. Never routes through content-mode setters (which would disable
+   * SlideMode — docs/TOOLS.md rule 6).
    */
-  @action.bound async finalizeEncodedOutput(
-    source: ClientFile,
-    outputPath: string,
-  ): Promise<ClientFile | null> {
+  @action private resolveOutputClientFile(source: ClientFile, dto: FileDTO): ClientFile {
     const { uiStore } = this.rootStore;
 
-    // --- Step A: copy tags at the DB level FIRST, then EXIF/XMP once (INV-019) ---
-    // Returns the tagged FileDTO (so we can build a ClientFile from it without waiting for the
-    // view-dependent fileList), or null if the output's row never appeared after the bounded poll.
-    const dto = await this.copyTagsToOutputPath(source, outputPath);
-
-    if (dto === null) {
-      // The output could not be confirmed in the library. Keep the source on screen (the caller
-      // does NOT swap and does NOT prompt to delete the original). Honest message — never assert
-      // "outside a watched folder" as the sole cause.
-      AppToaster.show({
-        message:
-          `Encoded to ${outputPath}, but it could not be confirmed in your library yet ` +
-          '(it may be outside a watched folder, or still being ingested). Your original was kept.',
-        timeout: 8000,
-      });
-      return null;
-    }
-
-    // --- Step B: bring the output into the active view (safe in SlideMode now) ---
-    // A plain same-mode refetch no longer disables SlideMode (see the content-mode setters), and the
-    // viewer is pinned by the caller, so this cannot tear the viewer down. It simply reconciles the
-    // grid behind the viewer so the output is present once we unpin.
-    await this.refetch();
-
-    // --- Step C: resolve the output ClientFile and anchor firstItem to it ---
     const existingIdx = this.index.get(dto.id);
     if (existingIdx !== undefined) {
-      // Prefer the instance the grid already holds.
       const outputFile = this.fileList[existingIdx];
       transaction(() => {
         uiStore.firstItem = existingIdx;
         uiStore.selectFile(outputFile, true);
       });
+      console.info('[media-job] finalize resolved (in list)', {
+        id: outputFile.id,
+        index: existingIdx,
+      });
       return outputFile;
     }
 
-    // The active filter excludes the output (e.g. a tag filter that does not match, or a
-    // "videos only" preference after an audio-only re-encode). Build it from the tagged DTO and
-    // inject it at the source's position so the grid stays visually stable. Never route through
-    // clearSearchCriteriaList() / content-mode mode changes (those would disable SlideMode).
     const outputFile = new ClientFile(this, dto, this.rootStore.exifTool);
     outputFile.thumbnailPath = this.rootStore.imageLoader.needsThumbnail(dto)
       ? getThumbnailPath(dto.absolutePath, uiStore.thumbnailDirectory)
@@ -1583,14 +1445,82 @@ class FileStore {
     const injectionIdx = Math.min(sourceIdx, this.fileList.length);
     transaction(() => {
       this.fileList.splice(injectionIdx, 0, outputFile);
-      // Rebuild the portion of index at and after the injection point.
       for (let i = injectionIdx; i < this.fileList.length; i++) {
         this.index.set(this.fileList[i].id, i);
       }
       uiStore.firstItem = injectionIdx;
       uiStore.selectFile(outputFile, true);
     });
+    console.info('[media-job] finalize resolved (injected)', {
+      id: outputFile.id,
+      index: injectionIdx,
+    });
     return outputFile;
+  }
+
+  /**
+   * Reusable post-media-job finalization, shared by Re-encode, Normalize Audio, and Create Clip.
+   *
+   * Flow (every step awaited; every failure throws LOUD — there are no silent fallbacks):
+   *   A. Tag the staged temp file (EXIF/XMP) once via `tagTempFile`. Zero-tag sources skip it.
+   *   B. SUPPRESS the folder watcher for `finalPath` so the renderer is the SOLE ingester (this is
+   *      what eliminates the dual-write race between the watcher and our deterministic ingest), then
+   *      ask main to place temp → final (`commitMediaJob`).
+   *   C. Deterministically ingest the placed file via `locationStore.ingestFile` and set its tags.
+   *   D. `refetch()` and resolve the output ClientFile, anchoring the viewer to it.
+   *   E. Unsuppress (in `finally`) — by now our row exists, so any late watcher `add()` dedups.
+   *
+   * Does NOT toggle the media-processing lock/pin or open the delete prompt — the caller
+   * (ImageTools.tsx runMediaJob) owns those. Returns the output ClientFile, or THROWS (surfaced as
+   * a blocking modal by the caller; the source stays on screen).
+   *
+   * @param source  The source ClientFile whose tags should be copied.
+   * @param paths   The `{ jobId, tempPath, finalPath }` result from `startMediaJob`.
+   * @returns The output ClientFile (tags copied, present in or injected into `fileList`).
+   * @throws  If the EXIF write, placement, or ingest fails.
+   */
+  @action.bound async finalizeEncodedOutput(
+    source: ClientFile,
+    paths: { jobId: string; tempPath: string; finalPath: string },
+  ): Promise<ClientFile> {
+    const { locationStore } = this.rootStore;
+    const { jobId, tempPath, finalPath } = paths;
+    console.info('[media-job] finalize start', { jobId, tempPath, finalPath });
+
+    // A. Tag the temp file (EXIF/XMP) once. Throws loud on failure (caller shows a modal).
+    await this.tagTempFile(source, tempPath);
+    console.info('[media-job] tagged temp file', { tempPath, tags: source.tags.size });
+
+    // Suppress the watcher for finalPath across the whole place+ingest window so it never creates a
+    // competing (untagged) row for the same file. Released in finally once our row exists.
+    locationStore.suppressIngest(finalPath);
+    try {
+      // B. Place temp → final (single move on the main side).
+      let outputPath: string;
+      try {
+        const result = await RendererMessenger.commitMediaJob(jobId);
+        outputPath = result.outputPath;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to move the encoded file into place: ${reason}`);
+      }
+      console.info('[media-job] placed output', { jobId, outputPath });
+
+      // C. Deterministically ingest the placed file and set tags — the SOLE ingestion path.
+      const dto = await locationStore.ingestFile(
+        outputPath,
+        source.locationId,
+        Array.from(source.tags, (t) => t.id),
+      );
+      console.info('[media-job] ingested output row', { id: dto.id, tags: dto.tags.length });
+
+      // D. Bring the output into the active view and resolve its ClientFile.
+      await this.refetch();
+      return this.resolveOutputClientFile(source, dto);
+    } finally {
+      // E. Release suppression — the row now exists, so a late watcher add() dedups harmlessly.
+      locationStore.unsuppressIngest(finalPath);
+    }
   }
 
   getPersistentPreferences(): Partial<Record<keyof FileStore, unknown>> {

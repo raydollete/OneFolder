@@ -35,10 +35,13 @@ auto-opens the result, and offers to delete the original.
      are copied to the output before it is shown.
    - The output auto-opens in the viewer (it becomes the selected file in
      SlideMode).
-   - A **"Delete original?"** modal appears with two choices:
-     - **Delete Original** — moves the source to the Recycle Bin (or
-       permanently deletes it if the volume has no Recycle Bin).
-     - **Keep Original** — closes the modal; the source is untouched.
+   - A post-job **"Keep which version?"** modal appears with three choices:
+     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
+       permanently deletes it if the volume has no Recycle Bin) and keeps the new
+       file open.
+     - **Keep Original** — moves the NEW file to the Recycle Bin and switches the
+       viewer back to the original.
+     - **Keep Both** — keeps both files; the new file stays open.
 5. The UI lock releases when the job finishes (success, failure, or cancel).
 
 **Tool scope:** the button is shown only for files where
@@ -137,6 +140,21 @@ favor of preserving the source extension (INV-020 option b).
 
 ---
 
+## Output Staging (INV-026)
+
+ffmpeg does NOT write into the watched target folder. Instead, `MediaJobService`
+runs ffmpeg (via `FfmpegRunner`) into an application-owned staging directory (a
+subfolder of the OS temp dir, OUTSIDE any watched location), so the chokidar folder
+watcher never sees a partial file. After ffmpeg finishes, the renderer tags the
+staged temp file (EXIF/XMP), **suppresses** the folder watcher for the final path
+(`LocationStore.suppressIngest`), and asks main to place the file with a single
+`fse.move(temp → final)`. Because the watcher is suppressed for that path, the
+renderer is the **sole ingester**: it creates the library row deterministically with
+the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
+is no watcher race and no untagged-row window — eliminating the intermittent
+"outside a watched folder" error and untagged imports. This staging logic is shared
+uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip.
+
 ## Output Path Computation
 
 `getUniqueSiblingPath(dir, baseName, 'mp4')` in `common/fs.ts` — identical
@@ -159,13 +177,13 @@ already named `clip.mp4` produces `clip 1.mp4` as its first candidate.
 Compress & Normalize Audio is the second consumer of the generalized media-job
 stack built by INV-018 and parameterized by TASK-085.  The reused layers are:
 
-### Main-Process Job Runner (ReEncodeManager)
+### Main-Process Job Runner (FfmpegRunner + MediaJobService)
 
-`src/ReEncodeManager.ts` is shared by both tools via the parameterized
-signature:
+`src/media/MediaJobService.ts` (which runs ffmpeg via `src/media/FfmpegRunner.ts`)
+is shared by all three tools via the parameterized signature:
 
 ```typescript
-reEncodeManager.start(inputPath, jobArgs, outputExt, callbacks)
+mediaJobService.start(inputPath, jobArgs, outputExt, callbacks)
 ```
 
 The `normalize-audio` job's args and output extension are defined in the
@@ -250,7 +268,7 @@ tool.
 |---|---|
 | ffmpeg exits non-zero (including codec/container mismatch) | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
 | User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast ("Compress & normalize audio cancelled.") |
-| App quits mid-job | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
+| App quits mid-job | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
 | Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; fallback clears filter and retries; honest toast if still absent — never asserts "outside a watched folder" as the sole cause |
 | Source already deleted | Defensive guard in `DeleteOriginalAfterJob`; `handleConfirm` no-ops if `source === null` |
 | ffprobe duration probe fails | Job proceeds; spinner runs in indeterminate mode (no percent shown) |

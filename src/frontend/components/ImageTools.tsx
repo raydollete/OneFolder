@@ -94,7 +94,7 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
       uiStore.beginMediaProcessing(file);
 
       try {
-        const { outputPath } = await RendererMessenger.startMediaJob(
+        const { jobId, tempPath, finalPath } = await RendererMessenger.startMediaJob(
           jobType,
           file.absolutePath,
           clip,
@@ -104,41 +104,43 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         unsubscribe();
         unsubscribeRef.current = null;
 
-        // Enter the finalization phase: ffmpeg has exited but the output is not yet open. The
-        // source stays pinned on screen with an indeterminate "Finalizing…" label (the inspector
+        // Enter the finalization phase: ffmpeg has exited and the file is in the staging temp dir.
+        // The source stays pinned on screen with an indeterminate "Finalizing…" label (the inspector
         // remains mounted because it, too, is pinned). The media-processing lock remains held
         // throughout (released only in finally). activeJob intentionally stays set so the tool
         // label is available for the label string below.
         setIsFinalizing(true);
 
-        // Corrected post-encode order (INV-019): copy tags at the DB level FIRST so the destination
-        // carries the source's tags before it is shown, then resolve the output ClientFile.
-        // finalizeEncodedOutput returns the verified-openable output (tags already copied), or null
-        // if it could not be confirmed in the library.
-        const outputFile = await fileStore.finalizeEncodedOutput(file, outputPath);
+        // Corrected post-encode order (INV-026): tag the temp file (EXIF/XMP) before it is visible
+        // to the watcher, then commit (atomic rename into the watched folder), then deterministically
+        // ingest the known final path. finalizeEncodedOutput returns the verified-openable, tagged
+        // output, or THROWS with a specific message (caught below -> blocking modal). It never
+        // returns null and never fails silently.
+        const outputFile = await fileStore.finalizeEncodedOutput(file, {
+          jobId,
+          tempPath,
+          finalPath,
+        });
 
         // Finalization complete — clear the finalizing phase before finally runs.
         setIsFinalizing(false);
 
-        if (outputFile !== null) {
-          // Seamless in-place swap: move the pin from the source to the output. The viewer (still
-          // mounted, still in SlideMode) switches from the source video to the new one with no trip
-          // back to the grid and no intermediate blank frame.
-          uiStore.setMediaProcessingFile(outputFile);
+        // Seamless in-place swap: move the pin from the source to the output. The viewer (still
+        // mounted, still in SlideMode) switches from the source video to the new one with no trip
+        // back to the grid and no intermediate blank frame.
+        uiStore.setMediaProcessingFile(outputFile);
 
-          // For Create Clip, reset the time fields so they are ready for the next clip.
-          // Do NOT reset on failure or cancel — the user may want to retry with the same values.
-          if (jobType === 'create-clip') {
-            setStartTime('');
-            setEndTime('');
-          }
-
-          // Open the delete-original prompt (rendered by DeleteOriginalAfterJob). This runs AFTER
-          // the output is verified and shown — only when we actually have a confirmed output.
-          uiStore.openDeleteOriginalPrompt(file);
+        // For Create Clip, reset the time fields so they are ready for the next clip.
+        // Do NOT reset on failure or cancel — the user may want to retry with the same values.
+        if (jobType === 'create-clip') {
+          setStartTime('');
+          setEndTime('');
         }
-        // If outputFile === null, finalizeEncodedOutput already surfaced an honest toast and the
-        // source stays pinned on screen; we do NOT prompt to delete an unverifiable original.
+
+        // Open the post-job prompt (rendered by DeleteOriginalAfterJob): Keep Modified / Keep
+        // Original / Keep Both. This runs AFTER the output is verified and shown. It needs BOTH
+        // files (source + output).
+        uiStore.openDeleteOriginalPrompt(file, outputFile);
       } catch (err: unknown) {
         // Tear down subscription on failure too.
         unsubscribe();
@@ -158,7 +160,7 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
           // Hard ffmpeg failure — surface the error in a blocking MODAL (MediaJobErrorAlert), not a
           // transient toast, and keep the SOURCE video on screen (the pin is still the source; the
           // finally below reconciles firstItem back to it). The output, if any, was already removed
-          // by ReEncodeManager on non-zero exit.
+          // by MediaJobService on non-zero exit.
           uiStore.showMediaJobError(toastLabel, message);
         }
       } finally {

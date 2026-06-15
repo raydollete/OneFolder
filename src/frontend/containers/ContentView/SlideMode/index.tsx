@@ -540,6 +540,14 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
             {(props) => (
               <video
                 {...props}
+                // Key by the media resource so React REMOUNTS the element when the file changes
+                // (e.g. the source -> freshly-encoded-output swap after a media job). Without a
+                // key, React reuses the same already-playing <video> and only mutates `src`, which
+                // a buffered/looping element does not reliably reload — it keeps presenting the
+                // previous file. This is most visible for Compress & Normalize Audio, whose output
+                // has identical video frames (-c:v copy), so a stale element looks exactly like the
+                // original. Remounting guarantees a fresh load of the new file. (INV-026 follow-up)
+                key={file.absolutePath}
                 ref={setSlideVideoRef}
                 src={encodeFilePath(src)}
                 width={dimension[0]}

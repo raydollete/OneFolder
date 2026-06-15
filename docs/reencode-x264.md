@@ -32,10 +32,13 @@ offers to delete the original.
      screen in SlideMode through finalization — with a "Finalizing…" indicator
      covering the stabilization/ingest gap — then the output becomes the selected
      file without ever returning to the thumbnail grid.
-   - A **"Delete original?"** modal appears with two choices:
-     - **Delete Original** — moves the source to the Recycle Bin (or permanently
-       deletes it if the volume has no Recycle Bin, per INV-014 handling).
-     - **Keep Original** — closes the modal; the source is untouched.
+   - A post-job **"Keep which version?"** modal appears with three choices:
+     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
+       permanently deletes it if the volume has no Recycle Bin, per INV-014
+       handling) and keeps the new file open.
+     - **Keep Original** — moves the NEW file to the Recycle Bin and switches the
+       viewer back to the original.
+     - **Keep Both** — keeps both files; the new file stays open.
 5. The UI lock releases when the encode finishes (success, failure, or cancel).
 
 **Tool scope:** the button is shown only for files where
@@ -80,6 +83,21 @@ If probing fails or times out (> 10 s), the spinner runs in indeterminate mode
 
 ---
 
+## Output Staging (INV-026)
+
+ffmpeg does NOT write into the watched target folder. Instead, `MediaJobService`
+runs ffmpeg (via `FfmpegRunner`) into an application-owned staging directory (a
+subfolder of the OS temp dir, OUTSIDE any watched location), so the chokidar folder
+watcher never sees a partial file. After ffmpeg finishes, the renderer tags the
+staged temp file (EXIF/XMP), **suppresses** the folder watcher for the final path
+(`LocationStore.suppressIngest`), and asks main to place the file with a single
+`fse.move(temp → final)`. Because the watcher is suppressed for that path, the
+renderer is the **sole ingester**: it creates the library row deterministically with
+the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
+is no watcher race and no untagged-row window — eliminating the intermittent
+"outside a watched folder" error and untagged imports. This staging logic is shared
+uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip.
+
 ## Output Path Computation
 
 `getUniqueSiblingPath(dir, baseName, 'mp4')` in `common/fs.ts`:
@@ -119,23 +137,30 @@ alongside ExifTool.
 
 ---
 
-## Main-Process Job Runner (ReEncodeManager)
+## Main-Process Job Runner (FfmpegRunner + MediaJobService)
 
-`src/ReEncodeManager.ts` implements the job lifecycle:
+The runner is split into two single-responsibility layers:
 
-- `reEncodeManager.start(inputPath, callbacks)` — computes the output path,
-  spawns ffmpeg, and returns `{ jobId, outputPath }` synchronously. Progress,
-  completion, and errors are delivered asynchronously via `callbacks`.
-- `reEncodeManager.cancel(jobId)` — kills the ffmpeg process (`taskkill /F
-  /PID` on Windows; `SIGKILL` elsewhere), removes any partial output, and calls
-  `onCancelled`.
-- `reEncodeManager.killAll()` — called from `app.on('before-quit')` in
-  `src/main.ts`; kills all live jobs and removes their partial outputs
-  synchronously (best-effort).
+- **`src/media/FfmpegRunner.ts`** — the ONLY code that spawns ffmpeg/ffprobe.
+  `run({ input, output, args, preInputArgs, onProgress, signal })` runs one ffmpeg
+  invocation (resolves on exit 0; rejects with the stderr tail on failure, or
+  `FfmpegAbortError` when its `AbortSignal` aborts); `probeDuration()` reads the
+  source duration for percent progress. It knows nothing about paths, the library,
+  or the watcher.
+- **`src/media/MediaJobService.ts`** (singleton `mediaJobService`) — orchestration
+  and the job registry:
+  - `start(inputPath, jobArgs, outputExt, callbacks, preInputArgs?)` — computes the
+    collision-free final path AND a temp path in the app staging dir, runs ffmpeg
+    into the temp file, and returns `{ jobId, tempPath, finalPath }` synchronously.
+    Progress/completion/errors arrive via `callbacks`.
+  - `place(jobId)` — moves the (renderer-tagged) temp file to its final path with a
+    single `fse.move`.
+  - `cancel(jobId)` — aborts the ffmpeg child (`taskkill /F /PID` on Windows,
+    `SIGKILL` elsewhere) and removes the staged partial.
+  - `killAll()` — called from `app.on('before-quit')`; cancels every live job.
 
-A job registry (`Map<string, JobEntry>`) is maintained so IPC handlers can look
-up jobs by their UUID.  Progress events are throttled to a minimum of 200 ms
-between emissions to avoid flooding the renderer.
+A job registry (`Map<jobId, …>`) lets the IPC handlers reference jobs.  Progress
+events are throttled to a minimum of 200 ms between emissions.
 
 ---
 
@@ -187,118 +212,56 @@ lock-leak.
 
 ---
 
-## Watcher Ingestion of Encode Outputs
+## Watcher Ingestion vs. Media-Job Outputs
 
-The folder watcher (`src/frontend/workers/folderWatcher.worker.ts`) uses
-chokidar's `awaitWriteFinish` option:
+The folder watcher (`src/frontend/workers/folderWatcher.worker.ts`) uses chokidar's
+`awaitWriteFinish` (`{ stabilityThreshold: 2000, pollInterval: 100 }`) so a
+manually dropped/imported file is ingested only after it stops growing — preventing
+partial `stats.size` / `0×0` dimensions on drag-and-drop imports (INV-019).
 
-```typescript
-awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 100 },
-```
-
-This defers the `add` event until the file has not changed size for 2000 ms,
-ensuring the encode output is ingested only once ffmpeg has fully written it.
-Without this, the watcher fires `add` the moment ffmpeg creates the output
-(while still writing), capturing a partial `stats.size` and `0×0` dimensions
-that are never corrected (the `change` handler is intentionally commented out).
-Chromium would then issue a byte-range request for a range beyond the partial
-file's length, yielding `net::ERR_REQUEST_RANGE_NOT_SATISFIABLE` (INV-019).
-
-The 2000 ms threshold also applies to manually dropped/imported files, adding up
-to ~2 s latency before a new drag-and-drop file appears in the library — an
-acceptable tradeoff for correct size and dimensions on every ingested file.
-Because the `finalizeEncodedOutput` helper (below) polls the DB for the output
-row (bounded ~3 s), the extra stabilization delay is already within that budget.
+Media-job outputs do NOT rely on this. `finalizeEncodedOutput` **suppresses** the
+watcher for the output path (`LocationStore.suppressIngest`) and ingests the file
+deterministically itself, so the watcher never ingests a derived output at all —
+there is no race and no partial/untagged-row window.
 
 ---
 
-## Post-Encode Finalization (Ingestion, Tag Copy, and Seamless Swap)
+## Post-Media-Job Finalization (Placement, Ingestion, Seamless Swap)
 
-After a successful encode, the renderer calls
-`fileStore.finalizeEncodedOutput(source, outputPath)`, which runs the corrected
-post-encode order (INV-019 correctness + INV-021 seamless SlideMode swap):
+After ffmpeg finishes, the renderer calls
+`fileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath })`. Every
+step is awaited and every failure throws a LOUD error that the caller surfaces as a
+blocking modal (`showMediaJobError`) while keeping the source on screen — there are
+no silent fallbacks:
 
-1. **DB-level tag copy first** (`copyTagsToOutputPath`) — because
-   `awaitWriteFinish` is active, chokidar `add` fires only after the file has
-   stopped growing (i.e. after the encode finishes, plus up to 2 s stabilization).
-   `copyTagsToOutputPath` polls the DB for up to ~3 s — covering the
-   stabilization window — waiting for the row to be created.  Tags are then
-   written onto the DTO via the backend by path, without requiring the output to
-   be in the view-dependent `fileList`.  This is mandatory: in a tag-filtered
-   view the tag-less output never matches the filter, so it could not enter
-   `fileList` until tagged.  `fileList` is a view model (the result of the active
-   search query), **not** a complete file index.  Tags are also written to
-   EXIF/XMP exactly once here.  Zero-tag sources skip the EXIF/XMP write
-   entirely.
+1. **Tag the temp file** (`tagTempFile`) — write the source's tags to the staged
+   temp file (EXIF/XMP) exactly once. Zero-tag sources skip the write.
+2. **Suppress + place** — `LocationStore.suppressIngest(finalPath)` tells the watcher
+   to ignore the output path, then `commitMediaJob` (→ `MediaJobService.place`) moves
+   the temp file to its final path with a single `fse.move(temp → final)`.
+3. **Deterministic ingest** (`LocationStore.ingestFile`) — the renderer creates the
+   library row itself and sets the source's tag ids on it. Because the watcher is
+   suppressed for this path, the renderer is the **sole ingester**: exactly one row,
+   already tagged, no race.
+4. **Refetch + resolve** — `refetch()` then `resolveOutputClientFile` anchors
+   `uiStore.firstItem` to the output by identity (preferring the grid's instance, or
+   injecting it if the active filter excludes it), so the viewer swaps source →
+   output **in place** without ever returning to the grid. SlideMode stays mounted
+   throughout (the source is pinned by identity until the swap).
+5. **Release suppression** in a `finally` — by now the row exists, so a late watcher
+   `add()` for the path dedups by inode in `addFile`.
 
-2. **Pin-aware refetch** (`pinViewedFileAcrossRefetch(source)`, INV-021) —
-   re-runs the active query so the now-tagged output can enter `fileList` if it
-   matches the current filter, **while keeping the source pinned in SlideMode**.
-   The TASK-090 primitive calls `refetch()` and then, inside a synchronous MobX
-   `transaction` run after `updateFromBackend` commits, re-anchors
-   `uiStore.firstItem` to the source's *new* index (resolved by file id via
-   `this.index`) so `firstFileInView` is never `undefined` during the list
-   churn.  A bare `refetch()` would orphan `firstItem` and unmount SlideMode (the
-   pre-INV-021 "returns to the thumbnail grid" symptom).  `isSlideMode` is never
-   toggled off at any point in this method.
+### "Finalizing…" Inspector Phase
 
-3. **Bounded wait** (`waitForIngestedFile(outputPath, 10000)`) — a MobX
-   `reaction` on `fileList` that resolves when the output appears.  Because tags
-   were already copied, a tag-filtered view now accepts it; the wait should
-   succeed in the common case.
-
-4. **In-place swap to the output** (INV-021) — when the output is in `fileList`,
-   re-anchor `uiStore.firstItem` to its index and `selectFile(output, true)`
-   inside a single MobX `transaction`, so `firstFileInView` transitions directly
-   from source → output without ever returning `undefined`.  The viewer swaps in
-   place; it never collapses to the grid and re-opens.  SlideMode stays mounted
-   throughout, so the inspector — and its **"Finalizing…"** indicator (see
-   below) — remains visible across the whole gap.
-
-5. **SlideMode-safe fallback** when the output is still not visible after the
-   bounded wait (e.g. a display filter other than tags excludes it). The fallback
-   must **never** route through `clearSearchCriteriaList()` or any content-mode
-   setter, because those unconditionally call `disableSlideMode()` and tear the
-   viewer down (docs/TOOLS.md). Instead:
-   - Resolve the output's `FileDTO` directly from the backend by absolute path
-     (the same forward-slash + raw-path dual probe used by
-     `copyTagsToOutputPath`), independent of the active filter.
-   - Build a `ClientFile`, initialize its thumbnail path, and inject it into
-     `fileList` at the source's current position inside a `transaction` that also
-     rebuilds the affected `index` entries and re-anchors `firstItem` to it —
-     swapping in place with SlideMode still on.
-   - Only if the DB row is genuinely absent (output outside a watched location,
-     or ingestion failed) keep the **source** on screen (do not blank the viewer
-     or change `firstItem`) and show an honest toast that states the observable
-     fact and offers causes as possibilities (docs/TOOLS.md rule 4).  Because
-     tags are copied in step 1 before the wait, the toast confirms whether
-     tagging succeeded:
-     - *Tags copied:* "Re-encoded to &lt;path&gt; and copied your tags, but it is not
-       visible in the current view. It may be excluded by the active filter, or
-       outside a watched folder."
-     - *Row not found:* "Re-encoded to &lt;path&gt;, but it is not visible in the
-       current view. It may be excluded by the active filter, outside a watched
-       folder, or ingestion may still be in progress."
-     The toast never asserts "outside a watched folder" as the sole cause — that
-     is unverified (rule 4).
-
-### "Finalizing…" Inspector Phase (INV-021)
-
-The only on-screen feedback during a media job is the inspector spinner in
-`ImageTools.tsx`, driven by `activeJob`/`jobPercent` which reflect **ffmpeg
-progress only**.  ffmpeg exit (`startMediaJob` resolving) is followed by a
-structural gap — up to ~2 s `awaitWriteFinish` + ~3 s DB poll + refetch +
-`waitForIngestedFile` — before the output opens.  To keep that gap from being
-silent, `runMediaJob` sets an `isFinalizing` flag the instant `startMediaJob`
-resolves (and the progress subscription is torn down) and clears it after
-`finalizeEncodedOutput` returns (and defensively in the `finally`).  While
-`isFinalizing` is true the existing `reencode-progress` spinner renders an
-indeterminate **"Finalizing…"** label (parameterized so Compress & Normalize
-Audio shows the same), and the **Cancel** button is hidden (ffmpeg is already done; there is
-nothing to cancel).  Because the source now stays in SlideMode (step 4 above),
-the inspector — and thus this indicator — stays mounted and visible for the
-whole window.  The media-processing lock is held throughout and released exactly
-once in the `runMediaJob` `finally`.
+ffmpeg exit (`startMediaJob` resolving) is followed by a short gap — tag temp →
+place → ingest → refetch — before the output opens. `runMediaJob` sets an
+`isFinalizing` flag the instant `startMediaJob` resolves (and the progress
+subscription is torn down) and clears it after `finalizeEncodedOutput` returns (and
+defensively in the `finally`). While `isFinalizing` is true the `reencode-progress`
+spinner shows an indeterminate **"Finalizing…"** label (parameterized so every tool
+reuses it) and the **Cancel** button is hidden (ffmpeg is already done). The
+media-processing lock is held throughout and released exactly once in the
+`runMediaJob` `finally`.
 
 ---
 
@@ -326,10 +289,10 @@ The component is mounted in `ContentView/index.tsx` alongside
 
 | Scenario | Behavior |
 |---|---|
-| ffmpeg exits non-zero | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
-| User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast |
-| App quits mid-encode | `before-quit` handler calls `reEncodeManager.killAll()`; partial output deleted (best-effort); quit proceeds |
-| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; SlideMode-safe fallback resolves the output by absolute path and swaps to it in place (never `clearSearchCriteriaList()` / `disableSlideMode()`); if the DB row is genuinely absent: source kept on screen + honest toast stating the observable fact and offering causes as possibilities — never asserts "outside a watched folder" as the sole cause (docs/TOOLS.md rule 4); lock released |
+| ffmpeg exits non-zero | Lock released; staged partial deleted; blocking error modal with stderr tail; no delete prompt |
+| User cancels | ffmpeg aborted (`AbortSignal`); staged partial deleted; lock released; quiet cancel toast |
+| App quits mid-encode | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
+| Place or ingest fails | `finalizeEncodedOutput` throws; watcher suppression released in `finally`; source kept on screen behind a blocking error modal (`showMediaJobError`); no delete prompt; lock released |
 | Source already deleted | `handleConfirm` no-ops if `source === null`; defensive guard in `DeleteOriginalAfterJob` |
 | ffprobe duration probe fails | Encode proceeds; spinner runs in indeterminate mode |
 

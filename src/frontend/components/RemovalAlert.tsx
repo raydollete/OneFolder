@@ -6,6 +6,7 @@ import { IconSet, Tag } from 'widgets';
 import { Alert, DialogButton } from 'widgets/popovers';
 import { RendererMessenger } from '../../ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
+import { ClientFile } from '../entities/File';
 import { ClientLocation, ClientSubLocation } from '../entities/Location';
 import { ClientFileSearchItem } from '../entities/SearchItem';
 import { ClientTag } from '../entities/Tag';
@@ -257,18 +258,28 @@ export const MoveFilesToTrashBin = observer(() => {
 });
 
 /**
- * Modal that appears after a successful media job (re-encode, normalize audio, etc.),
- * asking whether to delete the original source file. Mirrors MoveFilesToTrashBin's
- * handle-release -> recyclable-check -> trashFile/deleteFilePermanently ->
- * fileStore.deleteFiles flow (INV-008, INV-014) so the deletion behaviour is exactly
- * consistent with the regular trash flow. (TASK-079 / INV-018 / INV-020)
+ * Modal shown after a successful media job (re-encode, normalize audio, create clip). BOTH the
+ * original source and the freshly-produced output exist on disk at this point, and the viewer is
+ * already showing the new output. The user chooses which to keep:
+ *
+ *   - Keep Modified (default) — trash the ORIGINAL; keep showing the new file.
+ *   - Keep Original           — trash the NEW file; switch the viewer back to the original.
+ *   - Keep Both               — keep both files; keep showing the new file.
+ *
+ * Deletion reuses MoveFilesToTrashBin's handle-release -> recyclable-check ->
+ * trashFile/deleteFilePermanently -> fileStore.deleteFiles flow (INV-008, INV-014) so the
+ * behaviour is exactly consistent with the regular trash flow. The source and output are siblings
+ * in the same directory, so a single recyclability check (on the source) applies to either file.
+ * (TASK-079 / INV-018 / INV-020 / INV-026 follow-up)
  */
 export const DeleteOriginalAfterJob = observer(() => {
   const { fileStore, uiStore, mediaReleaseCoordinator } = useStore();
   const source = uiStore.deleteOriginalAfterJobFile;
-  const isOpen = source !== null;
+  const output = uiStore.deleteOriginalAfterJobOutput;
+  const isOpen = source !== null && output !== null;
 
-  // Determine recyclability as soon as the modal opens.
+  // Determine recyclability as soon as the modal opens. Source and output share a directory
+  // (and therefore a drive), so the source's recyclability applies to both files.
   const [isPermanent, setIsPermanent] = React.useState(false);
 
   React.useEffect(() => {
@@ -295,68 +306,99 @@ export const DeleteOriginalAfterJob = observer(() => {
     };
   }, [isOpen, source]);
 
-  const handleConfirm = action(async () => {
+  // Trash (or permanently delete on no-Recycle-Bin drives) a single file, mirroring
+  // MoveFilesToTrashBin exactly. Returns true on success.
+  const trash = async (fileToDelete: ClientFile): Promise<boolean> => {
+    // Release any open <video> handles before touching the file on disk (INV-008).
+    await mediaReleaseCoordinator.releasePaths([fileToDelete.absolutePath]);
+    const error = isPermanent
+      ? await RendererMessenger.deleteFilePermanently(fileToDelete.absolutePath)
+      : await RendererMessenger.trashFile(fileToDelete.absolutePath);
+    if (error) {
+      console.warn(
+        isPermanent ? 'Could not permanently delete file' : 'Could not move file to trash',
+        fileToDelete.absolutePath,
+        error,
+      );
+      AppToaster.show({
+        message: 'Could not delete the file.',
+        clickAction: { onClick: () => RendererMessenger.toggleDevTools(), label: 'More info' },
+        timeout: 8000,
+      });
+      return false;
+    }
+    // In-place splice — no refetch — consistent with INV-015.
+    fileStore.deleteFiles([fileToDelete]);
+    return true;
+  };
+
+  // Keep Modified: trash the original; the new file is already shown in the viewer.
+  const handleKeepModified = action(async () => {
     if (source === null) {
       uiStore.closeDeleteOriginalPrompt();
       return;
     }
     uiStore.closeDeleteOriginalPrompt();
-
-    // Release any open <video> handles before touching the file (INV-008).
-    await mediaReleaseCoordinator.releasePaths([source.absolutePath]);
-
-    const error = isPermanent
-      ? await RendererMessenger.deleteFilePermanently(source.absolutePath)
-      : await RendererMessenger.trashFile(source.absolutePath);
-
-    if (!error) {
-      // In-place splice — no refetch — consistent with INV-015.
-      fileStore.deleteFiles([source]);
-      if (isPermanent) {
-        AppToaster.show({
-          message: 'Original permanently deleted (no Recycle Bin on that drive).',
-          timeout: 5000,
-        });
-      }
-    } else {
-      console.warn(
-        isPermanent ? 'Could not permanently delete original' : 'Could not move original to trash',
-        source.absolutePath,
-        error,
-      );
+    const ok = await trash(source);
+    if (ok && isPermanent) {
       AppToaster.show({
-        message: 'Could not delete the original file.',
-        clickAction: {
-          onClick: () => RendererMessenger.toggleDevTools(),
-          label: 'More info',
-        },
-        timeout: 8000,
+        message: 'Original permanently deleted (no Recycle Bin on that drive).',
+        timeout: 5000,
       });
     }
   });
 
-  const bodyText = isPermanent
-    ? `A new copy was saved. Permanently delete the original "${
-        source?.name ?? ''
-      }"? (This drive has no Recycle Bin — this cannot be undone.)`
-    : `A new copy was saved. Delete the original "${
-        source?.name ?? ''
-      }"? It will be moved to the Recycle Bin.`;
+  // Keep Original: trash the new file and switch the viewer back to the surviving original.
+  const handleKeepOriginal = action(async () => {
+    if (source === null || output === null) {
+      uiStore.closeDeleteOriginalPrompt();
+      return;
+    }
+    uiStore.closeDeleteOriginalPrompt();
+    const ok = await trash(output);
+    // The output was the file on screen; re-anchor the viewer to the original that survived.
+    const idx = fileStore.getIndex(source.id);
+    if (idx !== undefined) {
+      uiStore.setFirstItem(idx);
+    }
+    uiStore.selectFile(source, true);
+    if (ok && isPermanent) {
+      AppToaster.show({
+        message: 'New file permanently deleted (no Recycle Bin on that drive).',
+        timeout: 5000,
+      });
+    }
+  });
+
+  // Keep Both: nothing to delete; the new file stays shown.
+  const handleKeepBoth = action(() => {
+    uiStore.closeDeleteOriginalPrompt();
+  });
+
+  const recycleNote = isPermanent
+    ? ' This drive has no Recycle Bin, so deleting is permanent and cannot be undone.'
+    : ' The one you do not keep is moved to the Recycle Bin.';
+  const bodyText =
+    `A new file "${output?.name ?? ''}" was created from "${source?.name ?? ''}". ` +
+    `Which version do you want to keep?${recycleNote}`;
 
   return (
     <Alert
       open={isOpen}
-      title="Delete original?"
+      title="Keep which version?"
       icon={IconSet.WARNING}
       type="warning"
-      primaryButtonText={isPermanent ? 'Permanently Delete' : 'Delete Original'}
-      closeButtonText="Keep Original"
+      primaryButtonText="Keep Modified"
+      secondaryButtonText="Keep Original"
+      closeButtonText="Keep Both"
       defaultButton={DialogButton.PrimaryButton}
       onClick={(button) => {
         if (button === DialogButton.PrimaryButton) {
-          handleConfirm();
+          handleKeepModified();
+        } else if (button === DialogButton.SecondaryButton) {
+          handleKeepOriginal();
         } else {
-          uiStore.closeDeleteOriginalPrompt();
+          handleKeepBoth();
         }
       }}
     >
@@ -367,7 +409,7 @@ export const DeleteOriginalAfterJob = observer(() => {
 
 /**
  * Blocking modal shown when a media job (re-encode, normalize audio, create clip) fails. It surfaces
- * the ffmpeg error (the stderr tail from ReEncodeManager) and — per the INV-021 redo requirement —
+ * the ffmpeg error (the stderr tail from FfmpegRunner) and — per the INV-021 redo requirement —
  * does NOT close the source video: the viewer is still pinned to the source behind this dialog, and
  * dismissing the modal leaves the source on screen. Rendered alongside DeleteOriginalAfterJob.
  */

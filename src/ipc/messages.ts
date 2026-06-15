@@ -144,6 +144,7 @@ export type DeleteLibraryAndFilesResult = {
 export const START_MEDIA_JOB = 'START_MEDIA_JOB';
 export const MEDIA_JOB_PROGRESS = 'MEDIA_JOB_PROGRESS';
 export const CANCEL_MEDIA_JOB = 'CANCEL_MEDIA_JOB';
+export const COMMIT_MEDIA_JOB = 'COMMIT_MEDIA_JOB';
 
 /** Discriminator for all supported ffmpeg job types. */
 export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip';
@@ -174,7 +175,28 @@ export type MediaJobProgressMessage = {
   totalSec?: number;
 };
 
-/** Returned by the START_MEDIA_JOB invoke when the job completes successfully. */
-export type MediaJobResult = {
+/**
+ * Returned by the START_MEDIA_JOB invoke when ffmpeg finishes successfully.
+ * The file is in tempPath (inside .onefolder-tmp/) and has NOT been moved yet.
+ * The renderer must tag the temp file, then call COMMIT_MEDIA_JOB to rename it
+ * into the watched target directory.
+ */
+export type MediaJobStartResult = {
+  jobId: string;
+  tempPath: string;
+  finalPath: string;
+};
+
+/**
+ * Returned by the COMMIT_MEDIA_JOB invoke after the atomic temp→final rename.
+ * outputPath is the final path the watcher will observe.
+ */
+export type MediaJobCommitResult = {
   outputPath: string;
 };
+
+/**
+ * @deprecated Use MediaJobStartResult. Kept as a type alias so any remaining
+ * references fail at compile time with a clear name mismatch rather than silently.
+ */
+export type MediaJobResult = MediaJobStartResult;

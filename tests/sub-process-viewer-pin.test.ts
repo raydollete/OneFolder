@@ -23,6 +23,15 @@ configure({ enforceActions: 'never' });
 // AppToaster touches `window` (not present in the node test env); the finalize fallback uses it.
 jest.mock('../src/frontend/components/Toaster', () => ({ AppToaster: { show: jest.fn() } }));
 
+// RendererMessenger uses ipcRenderer (not present in the node test env). Mock the module so
+// finalizeEncodedOutput can call commitMediaJob without hitting real Electron IPC.
+const commitMediaJobMock = jest.fn();
+jest.mock('../src/ipc/renderer', () => ({
+  RendererMessenger: {
+    commitMediaJob: (...args: any[]) => commitMediaJobMock(...args),
+  },
+}));
+
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 // ---------------------------------------------------------------------------
@@ -49,7 +58,13 @@ function makeMockRootStore(): any {
     tagStore: { tagList: [], get: jest.fn(() => undefined) },
     imageLoader: { needsThumbnail: jest.fn(() => false) },
     exifTool: { writeTags: jest.fn().mockResolvedValue(undefined) },
-    locationStore: { get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })) },
+    locationStore: {
+      get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })),
+      suppressIngest: jest.fn(),
+      unsuppressIngest: jest.fn(),
+      // Default: resolve to undefined; finalize tests override this per-case.
+      ingestFile: jest.fn(),
+    },
   };
 }
 
@@ -133,98 +148,79 @@ describe('INV-023 FileStore content-mode setters: disableSlideMode only on mode 
 // Requirement 3 — the destination row carries the source's tags before it is shown.
 // ===========================================================================
 
-describe('INV-023 FileStore.copyTagsToOutputPath returns the tagged DTO', () => {
-  it('finds the output row, copies the source tags to DB + EXIF, and returns the DTO', async () => {
-    const outputDto = makeFileDTO('out', 'C:/photos/out.mp4', 'mp4');
-    const backend = baseBackend({ fetchFilesByKey: jest.fn().mockResolvedValue([outputDto]) });
-    const root = makeMockRootStore();
-    const store = await makeFileStore(backend, root);
-
-    const source: any = {
-      id: 'src',
-      absolutePath: 'C:/photos/src.mp4',
-      tags: new Set([
-        { id: 't1', path: ['Travel'] },
-        { id: 't2', path: ['Travel', 'Italy'] },
-      ]),
-    };
-
-    const result = await store.copyTagsToOutputPath(source, 'C:\\photos\\out.mp4');
-
-    expect(result).toBe(outputDto);
-    expect(result.tags).toEqual(['t1', 't2']); // DB tag ids set on the DTO
-    expect(backend.saveFiles).toHaveBeenCalledWith([outputDto]); // persisted
-    expect(root.exifTool.writeTags).toHaveBeenCalledWith('C:\\photos\\out.mp4', [
-      ['Travel'],
-      ['Travel', 'Italy'],
-    ]); // single EXIF/XMP write with the tag hierarchy
-  });
-
-  it('returns null when the output row never appears within the poll budget', async () => {
-    jest.useFakeTimers();
-    try {
-      const backend = baseBackend({ fetchFilesByKey: jest.fn().mockResolvedValue([]) });
-      const store = await makeFileStore(backend);
-      const source: any = { id: 'src', absolutePath: 'C:/photos/src.mp4', tags: new Set() };
-
-      const p = store.copyTagsToOutputPath(source, 'C:\\photos\\out.mp4');
-      // 50 polls * 200 ms = full budget.
-      await jest.advanceTimersByTimeAsync(50 * 200 + 50);
-      await expect(p).resolves.toBeNull();
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-});
-
 // ===========================================================================
-// Requirement 2 — finalize resolves the output ClientFile and never disables SlideMode.
+// Requirement 2 — finalize tags the temp file, places it, ingests via the SINGLE deterministic
+// path (locationStore.ingestFile), resolves the output ClientFile, and never disables SlideMode.
+// The deterministic ingestion + watcher-suppression logic itself lives in LocationStore.ingestFile.
 // ===========================================================================
 
-describe('INV-023 FileStore.finalizeEncodedOutput', () => {
-  it('returns the output ClientFile (tags copied) without ever disabling SlideMode', async () => {
+describe('INV-026 FileStore.finalizeEncodedOutput', () => {
+  beforeEach(() => {
+    commitMediaJobMock.mockReset();
+    commitMediaJobMock.mockResolvedValue({ outputPath: 'C:\\photos\\out.mp4' });
+  });
+
+  it('tags the temp file, suppresses+ingests via locationStore, and resolves the output', async () => {
     const outputDto = makeFileDTO('out', 'C:/photos/out.mp4', 'mp4');
     const backend = baseBackend({
-      fetchFilesByKey: jest.fn().mockResolvedValue([outputDto]),
-      // refetch() in the default All mode calls fetchFiles; return the output so it
-      // lands in fileList and finalize can resolve + return that instance.
+      // refetch() in the default All mode calls fetchFiles; return the output so it lands in
+      // fileList and finalize can resolve the grid instance.
       fetchFiles: jest.fn().mockResolvedValue([outputDto]),
     });
     const root = makeMockRootStore();
     root.uiStore.isSlideMode = true;
+    root.locationStore.ingestFile.mockResolvedValue(outputDto);
     const store = await makeFileStore(backend, root);
 
     const source: any = {
       id: 'src',
+      locationId: 'loc1',
       absolutePath: 'C:/photos/src.mp4',
       tags: new Set([{ id: 't1', path: ['Travel'] }]),
     };
 
-    const result = await store.finalizeEncodedOutput(source, 'C:\\photos\\out.mp4');
+    const result = await store.finalizeEncodedOutput(source, {
+      jobId: 'test-job-id',
+      tempPath: 'C:\\app-temp\\uuid.mp4',
+      finalPath: 'C:\\photos\\out.mp4',
+    });
 
-    expect(result).not.toBeNull();
-    expect(result.id).toBe('out'); // the verified-openable output
-    expect(store.getIndex('out')).toBe(0); // present in fileList
-    // The whole point of INV-023: finalization never tears the viewer out of SlideMode.
+    expect(result.id).toBe('out');
+    expect(store.getIndex('out')).toBe(0);
+    // The temp file was tagged once (EXIF) before placement.
+    expect(root.exifTool.writeTags).toHaveBeenCalledWith('C:\\app-temp\\uuid.mp4', [['Travel']]);
+    // The watcher was suppressed for finalPath across the place+ingest window, then released.
+    expect(root.locationStore.suppressIngest).toHaveBeenCalledWith('C:\\photos\\out.mp4');
+    expect(root.locationStore.unsuppressIngest).toHaveBeenCalledWith('C:\\photos\\out.mp4');
+    // Ingestion went through the single deterministic path with the source's tag ids.
+    expect(root.locationStore.ingestFile).toHaveBeenCalledWith('C:\\photos\\out.mp4', 'loc1', ['t1']);
+    // Finalization never tears the viewer out of SlideMode.
     expect(root.uiStore.disableSlideMode).not.toHaveBeenCalled();
   });
 
-  it('returns null and keeps the source when the output cannot be confirmed', async () => {
-    jest.useFakeTimers();
-    try {
-      const backend = baseBackend({ fetchFilesByKey: jest.fn().mockResolvedValue([]) });
-      const root = makeMockRootStore();
-      root.uiStore.isSlideMode = true;
-      const store = await makeFileStore(backend, root);
-      const source: any = { id: 'src', absolutePath: 'C:/photos/src.mp4', tags: new Set() };
+  it('throws (loud), releases suppression, and keeps SlideMode when ingest fails', async () => {
+    const backend = baseBackend();
+    const root = makeMockRootStore();
+    root.uiStore.isSlideMode = true;
+    root.locationStore.ingestFile.mockRejectedValue(new Error('ingestFile: missing on disk'));
+    const store = await makeFileStore(backend, root);
+    const source: any = {
+      id: 'src',
+      locationId: 'loc1',
+      absolutePath: 'C:/photos/src.mp4',
+      tags: new Set(),
+    };
 
-      const p = store.finalizeEncodedOutput(source, 'C:\\photos\\out.mp4');
-      await jest.advanceTimersByTimeAsync(50 * 200 + 50);
-      await expect(p).resolves.toBeNull();
-      expect(root.uiStore.disableSlideMode).not.toHaveBeenCalled();
-    } finally {
-      jest.useRealTimers();
-    }
+    await expect(
+      store.finalizeEncodedOutput(source, {
+        jobId: 'test-job-id',
+        tempPath: 'C:\\app-temp\\uuid.mp4',
+        finalPath: 'C:\\photos\\out.mp4',
+      }),
+    ).rejects.toThrow(/ingest/i);
+    // Even on failure the suppression is released (finally) and SlideMode is untouched.
+    expect(root.locationStore.unsuppressIngest).toHaveBeenCalledWith('C:\\photos\\out.mp4');
+    expect(root.uiStore.disableSlideMode).not.toHaveBeenCalled();
   });
 });
 
@@ -419,7 +415,25 @@ async function makeWiredStores(backend: any): Promise<{ fileStore: any; uiStore:
     tagStore: { tagList: [], get: jest.fn(() => undefined) },
     imageLoader: { needsThumbnail: jest.fn(() => false) },
     exifTool: { writeTags: jest.fn().mockResolvedValue(undefined) },
-    locationStore: { get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })) },
+    locationStore: {
+      get: jest.fn(() => ({ id: 'loc1', name: 'Test', path: '/photos' })),
+      suppressIngest: jest.fn(),
+      unsuppressIngest: jest.fn(),
+      // Mimic the real LocationStore.ingestFile existing-row branch using the test backend:
+      // find the row by path, set the source's tags, persist, return it.
+      ingestFile: jest.fn(async (absolutePath: string, _locationId: string, tagIds: string[]) => {
+        const fwd = absolutePath.replace(/\\/g, '/').toLowerCase();
+        const rows = await backend.fetchFilesByKey('absolutePath', absolutePath.replace(/\\/g, '/'));
+        const dto =
+          rows.find((f: any) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === fwd) ?? rows[0];
+        if (!dto) {
+          throw new Error(`ingestFile(test): no row for ${absolutePath}`);
+        }
+        dto.tags = tagIds;
+        await backend.saveFiles([dto]);
+        return dto;
+      }),
+    },
   };
   // FileStore must construct before UiStore exists (matches RootStore order); it must
   // not read rootStore.uiStore in its constructor.
@@ -474,7 +488,11 @@ describe('INV-023 integration: real FileStore + real UiStore through a live refe
     expect(uiStore.slideFile).not.toBeUndefined(); // never a blank/undefined frame
 
     // --- Finalize and swap to the output ---
-    const output = await fileStore.finalizeEncodedOutput(pinnedSrc, 'C:\\photos\\out.mp4');
+    const output = await fileStore.finalizeEncodedOutput(pinnedSrc, {
+      jobId: 'job',
+      tempPath: 'C:\\tmp\\onefolder-media-jobs\\uuid.mp4',
+      finalPath: 'C:\\photos\\out.mp4',
+    });
     expect(output).not.toBeNull();
     expect(output.id).toBe('out');
     expect(uiStore.isSlideMode).toBe(true); // still in SlideMode throughout finalize
@@ -544,9 +562,13 @@ describe('INV-023 integration: real FileStore + real UiStore through a live refe
     // Run the job to completion: pin source, finalize to output, swap, open prompt, release pin.
     uiStore.beginMediaProcessing(src);
     currentFiles = [outDto, srcDto, aDto]; // output ingested, now in the list
-    const output = await fileStore.finalizeEncodedOutput(src, 'C:\\photos\\out.mp4');
+    const output = await fileStore.finalizeEncodedOutput(src, {
+      jobId: 'job',
+      tempPath: 'C:\\tmp\\onefolder-media-jobs\\uuid.mp4',
+      finalPath: 'C:\\photos\\out.mp4',
+    });
     uiStore.setMediaProcessingFile(output);
-    uiStore.openDeleteOriginalPrompt(src);
+    uiStore.openDeleteOriginalPrompt(src, output);
     uiStore.endMediaProcessing(); // pin released; firstItem anchored to the output
 
     expect(uiStore.mediaProcessingFile).toBeNull(); // NOT pinned anymore — back on the raw anchor
