@@ -190,6 +190,20 @@ preserves the viewed file across list churn — `finalizeEncodedOutput` relies o
 - `FileStore.pinViewedFileAcrossRefetch(pinFile)` still exists for callers that want
   an explicit pinned refetch and a survived/absent boolean.
 
+**`firstItem` dual-role invariant (INV-028):** `firstItem` is BOTH a live scroll
+cursor (written on every scroll by `VirtualizedRenderer.handleScroll`, 100 ms
+throttled) AND a fetch-time anchor used by `reconcileFirstItemTo`. These roles have
+opposite lifetimes. Never reapply a pre-await snapshot of `firstItem` — it will
+overwrite the user's live scroll position.
+
+Specifically: the async existence-check phase of `updateFromBackend` re-anchors
+`firstItem` ONLY when a splice actually changed the list (`splicedList === true`), and
+re-anchors to the LIVE position read at that moment (`mediaProcessingFile?.id ??
+fileList[uiStore.firstItem]?.id`), NOT the start-of-fetch snapshot `anchorFileId`
+captured before the await. When no splice occurred, the sync first-pass already
+anchored correctly and any subsequent movement is the user's own scroll — leave it
+alone. See INV-028.
+
 ---
 
 ## Established Rules (from the INV-018 design)

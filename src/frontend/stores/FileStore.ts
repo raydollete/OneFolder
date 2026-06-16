@@ -1065,6 +1065,19 @@ class FileStore {
           this.logStaleDrop('missing-inline', gen);
           return;
         }
+
+        // Capture a live anchor BEFORE replacing fileList, mirroring the sync first-pass of
+        // updateFromBackend. The Missing view is a small filtered subset; without this,
+        // firstItem stays at its old full-list index and the layout-restore effect scrolls to
+        // an arbitrary/stale position when fileListLastModified is bumped. See INV-028, blast-radius #6.
+        const { uiStore } = this.rootStore;
+        const curFirst = uiStore.firstItem;
+        const missingAnchorId =
+          uiStore.mediaProcessingFile?.id ??
+          (curFirst >= 0 && curFirst < this.fileList.length
+            ? this.fileList[curFirst].id
+            : undefined);
+
         const missingClientFiles = newClientFiles.filter((file) => file.isBroken);
         this.fileList.replace(missingClientFiles);
         this.numMissingFiles = missingClientFiles.length;
@@ -1073,6 +1086,11 @@ class FileStore {
           const file = this.fileList[index];
           this.index.set(file.id, index);
         }
+        // Re-anchor firstItem by identity into the (much smaller) missing-files list.
+        // reconcileFirstItemTo clamps into range when the anchor file is absent from the
+        // Missing subset (the common case), which is correct: scroll to the nearest position
+        // rather than leaving firstItem stale at an arbitrary old index.
+        this.reconcileFirstItemTo(missingAnchorId);
         this.fileListLastModified = new Date();
       });
 
@@ -1646,6 +1664,13 @@ class FileStore {
           const shouldHide =
             this.rootStore.uiStore.hideMissingFilesInBrowsing && !this.showsMissingContent;
 
+          // Track whether either splice block actually changed fileList. Re-anchoring firstItem
+          // is only needed when the list structure changed; if nothing was spliced, the sync
+          // first-pass already anchored correctly and any subsequent movement is the user's
+          // own scroll (overwriting it with a stale start-of-fetch snapshot causes the snap-back
+          // reported in INV-028). See: docs/TOOLS.md §6.
+          let splicedList = false;
+
           if (shouldHide && brokenCount > 0) {
             // Replace fileList with only the visible (non-broken) files.
             const visible = newClientFiles.filter((f) => !f.isBroken);
@@ -1654,6 +1679,7 @@ class FileStore {
             // Drop any stale selection references to broken files that were just removed.
             this.cleanFileSelection();
             this.fileListLastModified = new Date();
+            splicedList = true;
           }
 
           // Post-fetch video-only display filter — mirrors the broken-file splice above.
@@ -1672,14 +1698,28 @@ class FileStore {
             // Drop any stale selection references to non-video files that were removed.
             this.cleanFileSelection();
             this.fileListLastModified = new Date();
+            splicedList = true;
           }
 
           // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
           // fileList looks like now (possibly filtered above).
           this.updateFileListState();
-          // The broken/video-only splices above can change indices (or drop the viewed file), so
-          // re-anchor firstItem by identity again here, matching the synchronous first pass.
-          this.reconcileFirstItemTo(anchorFileId);
+          // When a splice changed the list structure, re-anchor firstItem by identity.
+          // IMPORTANT: read uiStore.firstItem LIVE at this moment (not the stale start-of-fetch
+          // snapshot anchorFileId captured before the await) so the user's scroll during the
+          // existence-check window is honoured. The media-processing pin wins when a job is
+          // active (INV-021/INV-023). When no splice occurred, leave firstItem untouched —
+          // the sync first-pass already anchored correctly. See INV-028, docs/TOOLS.md §6.
+          if (splicedList) {
+            const { uiStore } = this.rootStore;
+            const curFirst = uiStore.firstItem;
+            const liveAnchorId =
+              uiStore.mediaProcessingFile?.id ??
+              (curFirst >= 0 && curFirst < this.fileList.length
+                ? this.fileList[curFirst].id
+                : undefined);
+            this.reconcileFirstItemTo(liveAnchorId);
+          }
 
           // updateFileListState derives numMissingFiles from fileList; after the splice
           // fileList has no broken entries so the count becomes 0. Override it with the

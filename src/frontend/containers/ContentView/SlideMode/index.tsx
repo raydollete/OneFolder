@@ -107,7 +107,7 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
       return;
     }
     const index = Math.min(uiStore.firstItem + 1, fileStore.fileList.length - 1);
-    uiStore.setFirstItem();
+    uiStore.setFirstItem(index);
     uiStore.selectFile(fileStore.fileList[index], true);
   });
 

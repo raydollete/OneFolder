@@ -44,6 +44,10 @@ const VirtualizedRenderer = observer(
     const [, isMountedRef] = useMountState();
     const wrapperRef = useRef<HTMLDivElement>(null);
     const scrollAnchor = useRef<HTMLDivElement>(null);
+    // Tracks the identity (file id) of the last-selected file across renders so the
+    // selection-scroll effect only fires when the SELECTION actually changed, not when
+    // only numImages changed and clamped lastSelIndex to a new value (INV-028 Defect C).
+    const prevSelKeyRef = useRef<string | undefined>(undefined);
     const [startRenderIndex, setStartRenderIndex] = useState(0);
     const [endRenderIndex, setEndRenderIndex] = useState(0);
     const numImages = images.length;
@@ -125,10 +129,18 @@ const VirtualizedRenderer = observer(
       [layout, padding],
     );
 
-    // The index currently selected image, or the "last selected" image when a range is selected,
+    // The index of the currently selected image, or the "last selected" image when a range is
+    // selected. Clamped to keep it in range — but see the selection-scroll effect below for why
+    // we do NOT key the effect on this clamped value.
     const lastSelIndex = lastSelectionIndex.current
       ? Math.min(lastSelectionIndex.current, numImages - 1)
       : undefined;
+
+    // Stable identity key for the last-selected file. Derived from the file's id rather than
+    // its index, so a refetch that only changes numImages (without changing which file is
+    // selected) produces the same key and does NOT re-fire scrollToIndex. Cursor-key navigation
+    // and click-selection produce a new id and therefore do still scroll. See INV-028 Defect C.
+    const lastSelId = lastSelIndex !== undefined ? images[lastSelIndex]?.id : undefined;
 
     // When layout updates, scroll to firstImage (e.g. resize or thumbnail size changed)
     // This also sets the initial scroll position on initial render, for when coming from another view mode
@@ -139,16 +151,21 @@ const VirtualizedRenderer = observer(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [layoutUpdateDate]);
 
-    // When selection changes, scroll to last selected image. Nice when using cursor keys for navigation
+    // When selection changes, scroll to last selected image. Nice when using cursor keys for navigation.
+    // Keyed on lastSelId (identity) rather than lastSelIndex (a clamped value that changes whenever
+    // numImages changes), so a count-only refetch where the selected file is still present does NOT
+    // re-scroll and drag the selection back into view. See INV-028 Defect C.
     const fileSelectionSize = uiStore.fileSelection.size;
     useLayoutEffect(() => {
-      // But don't scroll when there are no files selected:
-      // else you will scroll when the user deselects everything
-      if (lastSelIndex !== undefined && fileSelectionSize > 0) {
+      const selKey = lastSelId;
+      // Don't scroll when there are no files selected (deselection case),
+      // and skip when the identity is unchanged (count-only list mutation).
+      if (lastSelIndex !== undefined && fileSelectionSize > 0 && selKey !== prevSelKeyRef.current) {
         scrollToIndex(lastSelIndex);
       }
+      prevSelKeyRef.current = selKey;
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [lastSelIndex, fileSelectionSize]);
+    }, [lastSelId, fileSelectionSize]);
 
     // While in slide mode, scroll to last shown image if not in view, for transition back to gallery
     useLayoutEffect(() => {
