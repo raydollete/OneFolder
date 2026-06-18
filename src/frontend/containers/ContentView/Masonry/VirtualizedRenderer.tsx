@@ -1,6 +1,6 @@
 import { runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { thumbnailMaxSize } from 'common/config';
 import { debouncedThrottle } from 'common/timeout';
@@ -128,6 +128,37 @@ const VirtualizedRenderer = observer(
       },
       [layout, padding],
     );
+
+    // Home / End scroll the viewport to the very top / bottom (no selection change).
+    // Mirrors the hardcoded arrow-key navigation listeners (MasonryRenderer / LayoutSwitcher).
+    useEffect(() => {
+      const onKeyDown = (e: KeyboardEvent) => {
+        // Don't hijack Home/End while typing in a field (search bar, tag editor, etc.)
+        const target = e.target as HTMLElement | null;
+        if (target?.matches('input, textarea, [contenteditable="true"]')) {
+          return;
+        }
+        // Grid isn't visible in slide mode — leave Home/End to that view's own handling.
+        if (uiStore.isSlideMode) {
+          return;
+        }
+        const viewport = wrapperRef.current;
+        if (!viewport) {
+          return;
+        }
+        if (e.key === 'Home') {
+          viewport.scrollTo({ top: 0 });
+        } else if (e.key === 'End') {
+          viewport.scrollTo({ top: viewport.scrollHeight });
+        } else {
+          return;
+        }
+        e.preventDefault();
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // The index of the currently selected image, or the "last selected" image when a range is
     // selected. Clamped to keep it in range — but see the selection-scroll effect below for why
