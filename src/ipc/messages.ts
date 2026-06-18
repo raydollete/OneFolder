@@ -147,20 +147,22 @@ export const CANCEL_MEDIA_JOB = 'CANCEL_MEDIA_JOB';
 export const COMMIT_MEDIA_JOB = 'COMMIT_MEDIA_JOB';
 
 /** Discriminator for all supported ffmpeg job types. */
-export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip';
+export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip' | 'subtract-clip';
 
 /**
  * Payload for a START_MEDIA_JOB invoke.
  *
- * `clip` is present when `jobType === 'create-clip'`; at least one of
- * `start`/`end` (HH:MM:SS) must be set. Main validates each present value
- * and, when both are present, that start < end.
+ * `clip` is present for the clip job types:
+ *   - `create-clip` keeps `[start, end]` — at least one of start/end (HH:MM:SS) must be set.
+ *   - `subtract-clip` removes `[start, end]` and cross-fades the remaining pieces — BOTH
+ *     start and end are required, and start must be ≥ the cross-fade duration (1s).
+ * Main validates each present value and, when both are present, that start < end.
  * For all other job types `clip` is omitted (undefined).
  */
 export type StartMediaJobMessage = {
   inputPath: string;
   jobType: MediaJobType;
-  /** Clip start/end times in HH:MM:SS format. At least one must be set when jobType is 'create-clip'. */
+  /** Clip start/end times in HH:MM:SS format. See the union doc above for per-job requirements. */
   clip?: { start?: string; end?: string };
 };
 

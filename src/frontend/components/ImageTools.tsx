@@ -130,9 +130,9 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
         // back to the grid and no intermediate blank frame.
         uiStore.setMediaProcessingFile(outputFile);
 
-        // For Create Clip, reset the time fields so they are ready for the next clip.
+        // For the clip tools, reset the time fields so they are ready for the next clip.
         // Do NOT reset on failure or cancel — the user may want to retry with the same values.
-        if (jobType === 'create-clip') {
+        if (jobType === 'create-clip' || jobType === 'subtract-clip') {
           setStartTime('');
           setEndTime('');
         }
@@ -152,6 +152,8 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
             ? 'Compress & normalize audio'
             : jobType === 'create-clip'
             ? 'Create clip'
+            : jobType === 'subtract-clip'
+            ? 'Subtract clip'
             : 'Re-encode';
         if (message === 'MEDIA_JOB_CANCELLED') {
           // User-initiated cancel — show a neutral toast, no error. The source stays on screen.
@@ -200,6 +202,13 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     (startValid && endTime === '') ||
     (endValid && startTime === '');
 
+  // Subtract Clip removes the marked [start, end] section, so it needs BOTH marks, a forward
+  // range, and at least 1s of lead before the start so the cross-fade fits in clip A
+  // (offset = start − 1 must be ≥ 0). Clip-B-too-short (end within 1s of the true end) can't be
+  // checked here without the source duration; ffmpeg fails loudly and surfaces a blocking modal.
+  const subtractValid =
+    bothValid && (startSec as number) < (endSec as number) && (startSec as number) >= 1;
+
   // Show a hint when both fields are filled but the range is backwards/equal.
   const showRangeHint =
     startTime !== '' &&
@@ -222,6 +231,10 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     ? jobPercent !== null
       ? `Creating clip… ${jobPercent}%`
       : 'Creating clip…'
+    : activeJob === 'subtract-clip'
+    ? jobPercent !== null
+      ? `Subtracting clip… ${jobPercent}%`
+      : 'Subtracting clip…'
     : jobPercent !== null
     ? `Re-encoding… ${jobPercent}%`
     : 'Re-encoding…';
@@ -231,6 +244,8 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
       ? 'Cancel audio compression & normalization'
       : activeJob === 'create-clip'
       ? 'Cancel clip'
+      : activeJob === 'subtract-clip'
+      ? 'Cancel subtract clip'
       : 'Cancel re-encode';
 
   return (
@@ -320,6 +335,22 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
                   title="Trim a lossless stream-copy clip between the marked times"
                 >
                   {IconSet.MEDIA}Create Clip
+                </button>
+                <button
+                  disabled={!subtractValid || uiStore.isMediaProcessing}
+                  onClick={() => {
+                    const clip: { start?: string; end?: string } = {};
+                    if (startTime !== '') {
+                      clip.start = startTime;
+                    }
+                    if (endTime !== '') {
+                      clip.end = endTime;
+                    }
+                    runMediaJob('subtract-clip', clip);
+                  }}
+                  title="Remove the marked section and cross-fade the remaining video together"
+                >
+                  {IconSet.MEDIA}Subtract Clip
                 </button>
               </>
             )}

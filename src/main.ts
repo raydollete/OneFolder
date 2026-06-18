@@ -25,6 +25,7 @@ import { parseHmsToSeconds } from '../common/fmt';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress, MediaJobType, MediaJobStartResult } from './ipc/messages';
 import { mediaJobService } from './media/MediaJobService';
+import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subtractClip';
 
 // ---------------------------------------------------------------------------
 // Media job specs — map each job type to its ffmpeg codec/filter args and the
@@ -55,6 +56,14 @@ const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string 
     // The -ss/-to pre-input args are NOT here — they are per-invocation and come from the
     // clip payload in the IPC message; see the onStartMediaJob handler below.
     args: ['-c', 'copy'],
+    outputExt: 'mp4',
+  },
+  'subtract-clip': {
+    // "Subtract Clip": remove the marked [start, end] section and cross-fade the two surviving
+    // pieces. The real args are a per-invocation -filter_complex graph built from the marks
+    // (buildSubtractClipArgs); the static entry below is only a placeholder — see the
+    // onStartMediaJob handler, which replaces jobArgs for this type.
+    args: [],
     outputExt: 'mp4',
   },
 };
@@ -761,6 +770,10 @@ MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
   const spec = MEDIA_JOB_SPECS[jobType];
 
+  // Post-`-i` args. Defaults to the static spec; subtract-clip replaces it with a
+  // per-invocation -filter_complex graph built from the marks (see below).
+  let jobArgs = spec.args;
+
   // Build preInputArgs for create-clip: -ss and/or -to must come before -i.
   // At least one marker (start or end) is required; both are optional individually.
   // For all other job types preInputArgs stays empty, preserving existing behavior.
@@ -798,12 +811,48 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
     if (clip.end !== undefined) {
       preInputArgs.push('-to', clip.end);
     }
+  } else if (jobType === 'subtract-clip') {
+    // Subtract-clip removes the marked [start, end] section and cross-fades the survivors.
+    // BOTH marks are required (you can't remove a middle without both bounds). Trimming is done
+    // by the filtergraph, so there are NO preInputArgs — the dynamic args go after -i.
+    if (clip === undefined || clip.start === undefined || clip.end === undefined) {
+      return Promise.reject(new Error('subtract-clip job requires both start and end'));
+    }
+    const startSec = parseHmsToSeconds(clip.start);
+    if (startSec === null) {
+      return Promise.reject(
+        new Error(`subtract-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
+      );
+    }
+    const endSec = parseHmsToSeconds(clip.end);
+    if (endSec === null) {
+      return Promise.reject(
+        new Error(`subtract-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
+      );
+    }
+    if (startSec >= endSec) {
+      return Promise.reject(
+        new Error(
+          `subtract-clip: start time (${clip.start}) must be before end time (${clip.end})`,
+        ),
+      );
+    }
+    // offset = startSec − crossfade must be ≥ 0, so start must be at least one cross-fade in.
+    if (startSec < SUBTRACT_CLIP_CROSSFADE_SEC) {
+      return Promise.reject(
+        new Error(
+          `subtract-clip: start time (${clip.start}) must be at least ${SUBTRACT_CLIP_CROSSFADE_SEC}s ` +
+            'into the video to fit the cross-fade',
+        ),
+      );
+    }
+    jobArgs = buildSubtractClipArgs(startSec, endSec);
   }
 
   return new Promise<MediaJobStartResult>((resolve, reject) => {
     const { jobId } = mediaJobService.start(
       inputPath,
-      spec.args,
+      jobArgs,
       spec.outputExt,
       {
         onProgress: (progress) => {
