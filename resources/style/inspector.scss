@@ -115,6 +115,12 @@
     flex-direction: column;
     justify-content: center;
   }
+
+  // Assigned-tag chips in the inspector are clickable (add to filter), so show pointer cursor.
+  // Scoped here so Searchbar and AdvancedSearch tag chips are unaffected.
+  .tag-selector .tag .label {
+    cursor: pointer;
+  }
 }
 
 // File info

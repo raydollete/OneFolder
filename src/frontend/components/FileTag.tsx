@@ -7,6 +7,7 @@ import { Menu, useContextMenu } from 'widgets/menus';
 import { FileTagMenuItems } from '../containers/ContentView/menu-items';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
+import { ClientTagSearchCriteria } from '../entities/SearchCriteria';
 import { ClientTag } from '../entities/Tag';
 import { TagSelector } from './TagSelector';
 
@@ -15,7 +16,7 @@ interface IFileTagProp {
 }
 
 const FileTags = observer(({ file }: IFileTagProp) => {
-  const { tagStore } = useStore();
+  const { tagStore, uiStore } = useStore();
 
   const renderCreateOption = useCallback(
     (tagName: string, resetTextBox: () => void) => (
@@ -32,6 +33,20 @@ const FileTags = observer(({ file }: IFileTagProp) => {
       />
     ),
     [file, tagStore],
+  );
+
+  const handleTagClick = useCallback(
+    (tag: ClientTag) => {
+      // Avoid adding a duplicate criterion for the same tag (no-op if already filtered).
+      const alreadyFiltered = uiStore.searchCriteriaList.some(
+        (c) => c instanceof ClientTagSearchCriteria && c.key === 'tags' && c.value === tag.id,
+      );
+      if (alreadyFiltered) {
+        return;
+      }
+      uiStore.addSearchCriteria(new ClientTagSearchCriteria('tags', tag.id));
+    },
+    [uiStore],
   );
 
   const show = useContextMenu();
@@ -56,6 +71,7 @@ const FileTags = observer(({ file }: IFileTagProp) => {
       onClear={file.clearTags}
       onDeselect={file.removeTag}
       onSelect={file.addTag}
+      onTagClick={handleTagClick}
       renderCreateOption={renderCreateOption}
       showTagContextMenu={handleTagContextMenu}
       multiline
