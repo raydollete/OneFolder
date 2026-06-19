@@ -2,11 +2,11 @@
 id: TASK-118
 title: 'Position the non-modal Keep-which-version prompt clear of the video controls; QA and docs'
 investigation: INV-031
-status: planned
+status: DONE
 priority: medium
 blocked_by: [TASK-116, TASK-117]
 date_created: 2026-06-19
-date_completed:
+date_completed: 2026-06-19
 files:
   - resources/style/controls/popover.scss
   - docs/reencode-x264.md
@@ -34,7 +34,7 @@ See [INV-031](../investigations/INV-031_MEDIUM_FRONTEND_keep-which-version-video
 
 ## Implementation Steps
 
-- [ ] 1. In `resources/style/controls/popover.scss`, add a rule targeting the
+- [x] 1. In `resources/style/controls/popover.scss`, add a rule targeting the
       non-modal alert via the `data-nonmodal` hook from TASK-116 (e.g.
       `dialog[role='alertdialog'][data-nonmodal]`). Anchor it to the top of the
       viewport/viewer: override the inherited centered `top: 0; bottom: 0;
@@ -42,9 +42,10 @@ See [INV-031](../investigations/INV-031_MEDIUM_FRONTEND_keep-which-version-video
       margin-top: 2vh;` or top-corner placement) and does NOT overlap the
       bottom edge where the `<video>` control bar lives. Keep the default
       (modal) `dialog` styling untouched.
-- [ ] 2. Ensure the non-modal prompt still renders above the video (normal
+- [x] 2. Ensure the non-modal prompt still renders above the video (normal
       stacking; add an explicit `z-index` only if QA shows it rendering behind
-      the viewer or toolbar).
+      the viewer or toolbar). — DOM mount order in ContentView/index.tsx places
+      DeleteOriginalAfterJob after Layout; normal stacking suffices. No z-index added.
 - [ ] 3. REQUIRES MANUAL EXECUTION — In the running app (`yarn dev` + `yarn
       start`): open a video in SlideMode, run a media tool (e.g. Rotate CW), and
       when the "Keep which version?" prompt appears, verify you can: (a)
@@ -57,7 +58,7 @@ See [INV-031](../investigations/INV-031_MEDIUM_FRONTEND_keep-which-version-video
 - [ ] 5. REQUIRES MANUAL EXECUTION — Verify `MediaJobErrorAlert` still blocks
       the page (force a failure, e.g. rotate a Vorbis `.webm`, confirm the error
       modal is modal/blocking and the source remains untouched).
-- [ ] 6. Update `docs/reencode-x264.md` (and/or `docs/TOOLS.md`) to note the
+- [x] 6. Update `docs/reencode-x264.md` (and/or `docs/TOOLS.md`) to note the
       "Keep which version?" prompt is non-modal so the output video can be
       evaluated (scrub / play-pause / duration) while choosing. Cross-reference
       INV-031.

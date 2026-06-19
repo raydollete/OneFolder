@@ -112,6 +112,15 @@ dialog[role='alertdialog'] {
   }
 }
 
+// Non-modal alert (e.g. "Keep which version?" post-media-job prompt).
+// show() does not use the top layer, so we override the default centered
+// position to anchor the box near the top of the viewer, leaving the video's
+// native control bar at the bottom fully reachable.
+dialog[role='alertdialog'][data-nonmodal] {
+  bottom: auto;
+  margin-top: 2vh;
+}
+
 // DIALOG UNTIL HERE
 
 [data-popover] {

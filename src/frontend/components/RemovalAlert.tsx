@@ -385,6 +385,7 @@ export const DeleteOriginalAfterJob = observer(() => {
   return (
     <Alert
       open={isOpen}
+      modal={false}
       title="Keep which version?"
       icon={IconSet.WARNING}
       type="warning"

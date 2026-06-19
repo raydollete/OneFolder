@@ -76,8 +76,11 @@ that creates the row, and no race.
      excludes it — SlideMode-safe; never `clearSearchCriteriaList()` / content-mode setters).
    - **e.** Release the suppression in a `finally`; by now the row exists, so a late watcher
      `add()` dedups by inode in `addFile`.
-5. Show any follow-up prompt (e.g. the Keep Modified / Keep Original / Keep Both modal) — AFTER
-   finalize returns.
+5. Show any follow-up prompt (e.g. the Keep Modified / Keep Original / Keep Both prompt) — AFTER
+   finalize returns. The `DeleteOriginalAfterJob` prompt is **non-modal** (`modal={false}`) so
+   the output video stays interactive: the user can scrub, play/pause, and read the duration
+   while deciding which version to keep (INV-031). Position it at the top of the viewer so the
+   video's native control bar at the bottom remains reachable.
 6. Release the lock (`endMediaProcessing`) — in a `finally`, so it also releases on failure and
    cancel.
 

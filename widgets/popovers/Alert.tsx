@@ -10,10 +10,16 @@ export interface AlertProps extends AlertActionsProps {
   icon?: JSX.Element;
   type?: Intent;
   children: React.ReactNode;
+  /**
+   * When false, opens the dialog with `show()` instead of `showModal()` — no top-layer
+   * promotion, no ::backdrop, the rest of the page stays interactive.
+   * @default true
+   */
+  modal?: boolean;
 }
 
 export const Alert = (props: AlertProps) => {
-  const { open, onClick, title, children, icon, type } = props;
+  const { open, onClick, title, children, icon, type, modal = true } = props;
   const dialog = useRef<HTMLDialogElement>(null);
   const alertTitleId = useId();
   const alertMessageId = useId();
@@ -33,10 +39,18 @@ export const Alert = (props: AlertProps) => {
   }, []);
 
   useEffect(() => {
-    if (dialog.current) {
-      open ? dialog.current.showModal() : dialog.current.close();
+    const el = dialog.current;
+    if (el) {
+      if (open) {
+        // modal=true (default): promote to the top layer with backdrop, making
+        // everything behind it inert. modal=false: open in normal stacking order
+        // so content behind the dialog (e.g. a <video>) stays interactive.
+        modal ? el.showModal() : el.show();
+      } else {
+        el.close();
+      }
     }
-  }, [open]);
+  }, [open, modal]);
 
   return (
     <dialog
@@ -45,6 +59,7 @@ export const Alert = (props: AlertProps) => {
       aria-labelledby={alertTitleId}
       aria-describedby={alertMessageId}
       data-message-intent={type}
+      data-nonmodal={modal === false ? '' : undefined}
     >
       <div className="alert-content">
         <span className="dialog-icon">{icon}</span>

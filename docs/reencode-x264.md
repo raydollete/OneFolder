@@ -301,9 +301,15 @@ media-processing lock is held throughout and released exactly once in the
 ## Delete-Original Prompt
 
 `DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is
-a modal driven by `uiStore.deleteOriginalAfterJobFile`.  It reuses the same
-trash flow as `MoveFilesToTrashBin` and is shared by all tools that produce a
-derived output (Re-encode, Compress & Normalize Audio, etc.) — INV-020 / TASK-086:
+driven by `uiStore.deleteOriginalAfterJobFile`.  It is rendered **non-modally**
+(`modal={false}` on its `Alert`) so the SlideMode `<video>` behind it stays fully
+interactive: the user can scrub the seek bar, click play/pause, and watch the
+duration / current-time update while deciding which version to keep (INV-031).
+The prompt is anchored to the top of the viewer so it does not cover the video's
+native control bar at the bottom edge.
+
+It reuses the same trash flow as `MoveFilesToTrashBin` and is shared by all tools
+that produce a derived output (Re-encode, Compress & Normalize Audio, etc.) — INV-020 / TASK-086:
 
 1. `mediaReleaseCoordinator.releasePaths([source.absolutePath])` — release any
    open `<video>` element handles (INV-008).

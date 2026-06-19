@@ -2,11 +2,11 @@
 id: TASK-116
 title: 'Add an opt-in non-modal mode to the Alert widget (show() vs showModal())'
 investigation: INV-031
-status: planned
+status: DONE
 priority: medium
 blocked_by: []
 date_created: 2026-06-19
-date_completed:
+date_completed: 2026-06-19
 files:
   - widgets/popovers/Alert.tsx
 ---
@@ -35,29 +35,29 @@ See [INV-031](../investigations/INV-031_MEDIUM_FRONTEND_keep-which-version-video
 
 ## Implementation Steps
 
-- [ ] 1. In `widgets/popovers/Alert.tsx`, add `modal?: boolean` to `AlertProps`
+- [x] 1. In `widgets/popovers/Alert.tsx`, add `modal?: boolean` to `AlertProps`
       (document: `@default true`). Destructure it in the `Alert` component with a
       default of `true`.
-- [ ] 2. In the `open`-effect (the `useEffect` keyed on `[open]`, currently
+- [x] 2. In the `open`-effect (the `useEffect` keyed on `[open]`, currently
       `dialog.current.showModal()`), branch:
       `open ? (modal ? el.showModal() : el.show()) : el.close()`. Add `modal` to
       that effect's dependency array so a runtime change is reflected. Keep the
       existing `cancel`-event preventDefault listener unchanged (harmless under
       `show()`).
-- [ ] 3. On the `<dialog>` element, set `data-nonmodal={modal === false ? '' : undefined}`
+- [x] 3. On the `<dialog>` element, set `data-nonmodal={modal === false ? '' : undefined}`
       (or `data-nonmodal={String(!modal)}`) so SCSS can target the non-modal
       case for positioning (consumed by TASK-118). Do not add positioning styles
       in this task.
-- [ ] 4. Verify no existing consumer passes `modal` (grep `<Alert` across
+- [x] 4. Verify no existing consumer passes `modal` (grep `<Alert` across
       `src/`), so all current call sites keep `modal=true` and are unchanged.
 
 ## Done When
 
-- [ ] `Alert` accepts `modal?: boolean` defaulting to `true`; passing
+- [x] `Alert` accepts `modal?: boolean` defaulting to `true`; passing
       `modal={false}` opens the dialog via `show()` (no backdrop, background
       interactive), and omitting it / passing `true` opens via `showModal()`
       exactly as before.
-- [ ] The non-modal case exposes a `data-nonmodal` hook on the `<dialog>` for
+- [x] The non-modal case exposes a `data-nonmodal` hook on the `<dialog>` for
       CSS positioning.
-- [ ] `yarn build` succeeds and `yarn test` passes with no behavior change to
+- [x] `yarn build` succeeds and `yarn test` passes with no behavior change to
       existing `Alert` consumers.
