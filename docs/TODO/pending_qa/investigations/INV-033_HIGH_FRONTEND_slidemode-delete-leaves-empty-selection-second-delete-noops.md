@@ -3,7 +3,7 @@ id: INV-033
 title: 'Second consecutive delete in SlideMode silently does nothing: auto-advance reconciles firstItem but never re-selects the advanced-to file, so fileSelection is left empty and the next delete targets nothing'
 reported_bug: 'When watching a video and deleting it, the viewer correctly auto-advances to the next video, but the user is then unable to delete THAT next video — the delete action does nothing. Navigating away from the video and back makes delete work again.'
 date: 2026-06-19
-status: tasks-created
+status: pending-qa
 superseded_by:
 tasks_spawned: [TASK-123, TASK-124, TASK-125]
 root_cause_category: order-of-operations

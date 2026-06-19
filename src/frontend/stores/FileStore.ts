@@ -806,6 +806,13 @@ class FileStore {
         // Look up its new index in the rebuilt index map.
         const newIndex = this.index.get(targetFile.id);
         uiStore.firstItem = newIndex !== undefined ? newIndex : 0;
+        // INV-033: While in SlideMode the viewed file must also be the selected
+        // file, because the delete command is selection-driven. The auto-advance
+        // just moved firstItem to targetFile; re-select it so the next Delete
+        // targets the file now on screen rather than an empty selection.
+        if (uiStore.isSlideMode) {
+          uiStore.fileSelection.replace([targetFile]);
+        }
       } else {
         // No survivors found at all (shouldn't reach here because fileList.length
         // > 0 guards this branch, but be defensive).
@@ -817,6 +824,12 @@ class FileStore {
       const newIndex = this.index.get(oldFirstItemId);
       if (newIndex !== undefined) {
         uiStore.firstItem = newIndex;
+        // INV-033: Same selection-sync invariant for the "viewed file survived"
+        // branch — the splice may have shifted its index, but it is still
+        // on screen and must remain the sole selection.
+        if (uiStore.isSlideMode) {
+          uiStore.fileSelection.replace([this.fileList[newIndex]]);
+        }
       }
     }
   }

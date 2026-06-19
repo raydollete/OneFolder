@@ -637,6 +637,24 @@ class UiStore {
     if (this.mediaProcessing.active) {
       return;
     }
+    // INV-033: Fail-loud / self-heal guard. While in SlideMode a delete invoked
+    // on the viewer must never be a silent no-op. If the selection is empty but
+    // there is a visible file (firstFileInView), self-heal by selecting it now.
+    // This is belt-and-suspenders behind the TASK-123 root-cause fix: the selection
+    // should always track the viewed file after an auto-advance, but if any future
+    // code path ever breaks that invariant, this guard ensures the user can still
+    // delete the on-screen file rather than silently deleting nothing.
+    if (this.isSlideMode && this.fileSelection.size === 0) {
+      const viewed = this.firstFileInView;
+      if (viewed !== undefined) {
+        console.warn(
+          '[delete] empty selection while viewing',
+          viewed.absolutePath,
+          '— self-healing selection (INV-033)',
+        );
+        this.selectFile(viewed, true);
+      }
+    }
     this.isMoveFilesToTrashOpen = true;
   }
 
