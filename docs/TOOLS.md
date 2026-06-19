@@ -345,6 +345,39 @@ intact.
 
 See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
 
+### Example 5 — Rotate CW / Rotate CCW (INV-030)
+
+The fifth and sixth consumers are the **simplest** tools in the stack — they
+validate the parameterized design by adding two fully-functional rotate tools
+with the minimum possible surface area:
+
+- **Two entries in `MEDIA_JOB_SPECS`** (in `src/main.ts`) — one for Rotate CW
+  (`-vf transpose=1 -c:v libx264 -c:a copy`, `outputExt: 'mp4'`) and one for
+  Rotate CCW (`-vf transpose=2 -c:v libx264 -c:a copy`, `outputExt: 'mp4'`).
+  These are **fully static** — there are no per-invocation args, no `clip`
+  payload, and no handler branch required.  The existing `onStartMediaJob`
+  handler falls through to `jobArgs = spec.args` with empty `preInputArgs` for
+  any type it does not special-case, so rotate is handled correctly with zero
+  new handler code.
+- **Two buttons in `ImageTools.tsx`** — placed as the first two controls in the
+  Tools section (above Re-encode (x264)), video-gated, disabled while
+  `isMediaProcessing`, each wired to `runMediaJob('rotate-cw')` /
+  `runMediaJob('rotate-ccw')` with no clip argument.
+- **Three derived label strings extended** — `progressLabel` ("Rotating
+  clockwise… N%" / "Rotating counterclockwise… N%"), `cancelTitle` ("Cancel
+  rotate"), and the error/cancel `toastLabel` ("Rotate clockwise" / "Rotate
+  counterclockwise").
+- **No new binary, no new IPC channels, no new manager class, no new handler
+  branch, no pre-input args, no per-invocation validation.**
+
+`transpose` is a video filter so the video stream must be re-encoded (`-c:v
+libx264`); audio is stream-copied (`-c:a copy`).  This is inherent to
+pixel-level rotation and matches the user's stated command example.  The
+encoder relies on the existing `--enable-gpl --enable-libx264` ffmpeg build
+(no new binary, no new licensing obligation).
+
+See [rotate-video.md](rotate-video.md) and INV-030 for the full feature doc.
+
 ---
 
 ## Related
@@ -352,7 +385,9 @@ See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
 - [Re-encode (x264)](reencode-x264.md) — the primary worked example for every layer
 - [Compress & Normalize Audio](normalize-audio.md) — the second worked example confirming layers 3–6 are reusable
 - [Create Clip](create-clip.md) — the third worked example, introducing pre-input args and per-invocation parameters
+- [Rotate CW / Rotate CCW](rotate-video.md) — the fifth/sixth consumers; the simplest tool (static spec only, no preInputArgs, no clip payload, no handler branch)
 - [Personal Fork Notes](personal-fork-notes.md) — bundled binaries and licensing
 - INV-018 — original investigation, behavioral spec, and design rejections
 - INV-020 — Compress & Normalize Audio investigation and the parameterized media-job stack
 - INV-022 — Create Clip investigation, `-ss`/`-to` pre-input ordering, stream-copy caveats
+- INV-030 — Rotate CW / Rotate CCW investigation, `transpose` filter semantics, non-destructive contract

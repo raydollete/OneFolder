@@ -1,6 +1,9 @@
 /**
  * subtract-clip arg builder.
  *
+ * Uses NVENC_H264_VIDEO_ARGS (shared constant in audioArgs.ts) for the video-codec block so
+ * that all video-encoding jobs share a single source of truth and cannot drift (INV-032).
+ *
  * "Subtract Clip" removes the marked middle section `[startSec, endSec]` from a video and
  * cross-fades the two surviving pieces back together in a SINGLE ffmpeg pass:
  *
@@ -23,6 +26,8 @@
  *   - The whole graph is ONE argv element — `spawn()` runs without a shell, so no quoting is
  *     needed (mirrors the `normalize-audio` filtergraph in `src/main.ts`).
  */
+
+import { NVENC_H264_VIDEO_ARGS } from './audioArgs';
 
 /** Default cross-fade length, in seconds. Matches the value baked into the UI's validity check. */
 export const SUBTRACT_CLIP_CROSSFADE_SEC = 1;
@@ -57,14 +62,7 @@ export function buildSubtractClipArgs(
     '[v]',
     '-map',
     '[a]',
-    '-c:v',
-    'h264_nvenc',
-    '-preset',
-    'p7',
-    '-tune',
-    'hq',
-    '-cq',
-    '21',
+    ...NVENC_H264_VIDEO_ARGS,
     '-c:a',
     'aac',
   ];

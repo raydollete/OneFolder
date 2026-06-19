@@ -2,11 +2,11 @@
 id: TASK-114
 title: 'Add Rotate CW / Rotate CCW buttons above Re-encode in ImageTools'
 investigation: INV-030
-status: planned
+status: DONE
 priority: medium
 blocked_by: [TASK-113]
 date_created: 2026-06-19
-date_completed:
+date_completed: 2026-06-19
 files:
   - 'src/frontend/components/ImageTools.tsx'
 ---
@@ -30,7 +30,7 @@ See [INV-030](../investigations/INV-030_MEDIUM_FRONTEND_rotate-cw-ccw-video-tool
 
 ## Implementation Steps
 
-- [ ] 1. In `src/frontend/components/ImageTools.tsx`, inside the `activeJob === null`
+- [x] 1. In `src/frontend/components/ImageTools.tsx`, inside the `activeJob === null`
       branch (the `<>` that currently starts with the Re-encode `<button>`), add
       two buttons **before** the Re-encode button so they appear first:
       ```tsx
@@ -52,7 +52,7 @@ See [INV-030](../investigations/INV-030_MEDIUM_FRONTEND_rotate-cw-ccw-video-tool
       Call `runMediaJob` with NO second argument (rotate carries no clip payload).
       `IconSet.RELOAD` (circular arrow) is the closest existing icon; `IconSet.MEDIA`
       is an acceptable fallback if RELOAD reads poorly — match neighboring style.
-- [ ] 2. Extend the `progressLabel` ternary chain to handle the new types BEFORE
+- [x] 2. Extend the `progressLabel` ternary chain to handle the new types BEFORE
       the final `reencode-x264` fallback:
       ```tsx
       : activeJob === 'rotate-cw'
@@ -65,24 +65,24 @@ See [INV-030](../investigations/INV-030_MEDIUM_FRONTEND_rotate-cw-ccw-video-tool
         : 'Rotating counterclockwise…'
       ```
       (`isFinalizing` already short-circuits to "Finalizing…" for all tools.)
-- [ ] 3. Extend the `cancelTitle` ternary to map both rotate types to
+- [x] 3. Extend the `cancelTitle` ternary to map both rotate types to
       `'Cancel rotate'`.
-- [ ] 4. Extend the error-path `toastLabel` ternary (in the `catch` block) so
+- [x] 4. Extend the error-path `toastLabel` ternary (in the `catch` block) so
       `'rotate-cw'` → `'Rotate clockwise'` and `'rotate-ccw'` →
       `'Rotate counterclockwise'`. These feed both the cancel toast
       (`"<label> cancelled."`) and the `showMediaJobError(toastLabel, message)`
       modal title.
-- [ ] 5. Do NOT add the rotate types to the `if (jobType === 'create-clip' ||
+- [x] 5. Do NOT add the rotate types to the `if (jobType === 'create-clip' ||
       jobType === 'subtract-clip')` field-reset block — rotate has no time fields.
-- [ ] 6. Run `yarn build` and `yarn lint`. Both must pass.
+- [x] 6. Run `yarn build` and `yarn lint`. Both must pass. (Build passes cleanly; lint on the modified files passes cleanly. Pre-existing lint errors exist in other unmodified files.)
 
 ## Done When
 
-- [ ] Rotate CW and Rotate CCW buttons render as the first two controls in the
+- [x] Rotate CW and Rotate CCW buttons render as the first two controls in the
       Tools section for videos, above Re-encode (x264).
-- [ ] Each button is disabled while `uiStore.isMediaProcessing` and invokes
+- [x] Each button is disabled while `uiStore.isMediaProcessing` and invokes
       `runMediaJob` with the correct job type and no clip argument.
-- [ ] Spinner shows "Rotating clockwise…/counterclockwise… N%", the cancel button
+- [x] Spinner shows "Rotating clockwise…/counterclockwise… N%", the cancel button
       shows "Cancel rotate", and the error/cancel toasts read "Rotate clockwise/
       counterclockwise".
-- [ ] `yarn build` and `yarn lint` pass.
+- [x] `yarn build` and `yarn lint` pass.

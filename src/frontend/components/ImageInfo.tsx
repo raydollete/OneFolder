@@ -9,14 +9,23 @@ import { AppToaster } from './Toaster';
 
 type CommonMetadata = {
   name: string;
+  folder: string;
   dimensions: string;
   size: string;
 };
 
 const commonMetadataLabels: Record<keyof CommonMetadata, string> = {
   name: 'Filename',
+  folder: 'Folder Name',
   dimensions: 'Dimensions',
   size: 'Size',
+};
+
+/** Name of the immediate folder containing the file (not the full path). */
+const immediateFolderName = (absolutePath: string): string => {
+  const parts = absolutePath.split(/[/\\]+/).filter(Boolean);
+  // The last part is the filename; the one before it is the immediate folder.
+  return parts.length >= 2 ? parts[parts.length - 2] : '';
 };
 
 type ExifField = { label: string; modifiable?: boolean; format?: (val: string) => ReactNode };
@@ -68,6 +77,7 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
 
   const fileStats: CommonMetadata = {
     name: file.name,
+    folder: immediateFolderName(file.absolutePath),
     dimensions: `${file.width || '?'} x ${file.height || '?'}`,
     size: humanFileSize(file.size),
   };

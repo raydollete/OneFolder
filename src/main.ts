@@ -25,7 +25,9 @@ import { parseHmsToSeconds } from '../common/fmt';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress, MediaJobType, MediaJobStartResult } from './ipc/messages';
 import { mediaJobService } from './media/MediaJobService';
+import { FfmpegRunner } from './media/FfmpegRunner';
 import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subtractClip';
+import { NVENC_H264_VIDEO_ARGS, decideAudioArgs } from './media/audioArgs';
 
 // ---------------------------------------------------------------------------
 // Media job specs — map each job type to its ffmpeg codec/filter args and the
@@ -34,11 +36,12 @@ import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subt
 // ---------------------------------------------------------------------------
 const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string }> = {
   'reencode-x264': {
-    // Despite the legacy "x264" name, this re-encodes video with NVIDIA NVENC (H.264)
-    // using the same high-quality settings as Subtract Clip: -preset p7 (slowest/best),
-    // -tune hq, constant-quality -cq 21. Requires an NVIDIA GPU + NVENC-enabled ffmpeg;
-    // there is no software fallback — the job fails loudly if NVENC is unavailable.
-    args: ['-c:a', 'copy', '-c:v', 'h264_nvenc', '-preset', 'p7', '-tune', 'hq', '-cq', '21'],
+    // Despite the legacy "x264" name, this re-encodes video with NVIDIA NVENC (H.264) via the
+    // shared NVENC_H264_VIDEO_ARGS constant: -preset p7 (slowest/best), -tune hq, -cq 21.
+    // Requires an NVIDIA GPU + NVENC-enabled ffmpeg; there is no software fallback — the job
+    // fails loudly if NVENC is unavailable. Audio args are appended per-invocation by the
+    // onStartMediaJob handler via decideAudioArgs (ffprobe-driven copy-vs-AAC decision).
+    args: [...NVENC_H264_VIDEO_ARGS],
     outputExt: 'mp4',
   },
   'normalize-audio': {
@@ -68,6 +71,21 @@ const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string 
     // (buildSubtractClipArgs); the static entry below is only a placeholder — see the
     // onStartMediaJob handler, which replaces jobArgs for this type.
     args: [],
+    outputExt: 'mp4',
+  },
+  'rotate-cw': {
+    // 90° clockwise. transpose is a video filter so the video stream MUST be re-encoded
+    // (a rotated frame is a new frame). Video uses the shared NVENC_H264_VIDEO_ARGS block —
+    // identical settings to reencode-x264 and subtract-clip; no software fallback (fails
+    // loudly if NVENC is unavailable). Audio args are appended per-invocation by the
+    // onStartMediaJob handler via decideAudioArgs (ffprobe-driven copy-vs-AAC decision).
+    args: ['-vf', 'transpose=1', ...NVENC_H264_VIDEO_ARGS],
+    outputExt: 'mp4',
+  },
+  'rotate-ccw': {
+    // 90° counterclockwise (transpose=2). Same NVENC settings and per-invocation audio
+    // decision as rotate-cw; see that entry's comment.
+    args: ['-vf', 'transpose=2', ...NVENC_H264_VIDEO_ARGS],
     outputExt: 'mp4',
   },
 };
@@ -771,7 +789,12 @@ MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 // with { outputPath } when the job finishes, or rejects on failure/cancel.
 // The first MEDIA_JOB_PROGRESS event carries the jobId so the renderer can call
 // CANCEL_MEDIA_JOB if the user clicks cancel.
-MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
+// Shared FfmpegRunner instance used by the media-job handler for the pre-encode audio probe.
+// MediaJobService has its own internal runner for encoding; this is a lightweight probe-only
+// runner that shares the same bundled binaries. Instantiated once at module load.
+const _probeRunner = new FfmpegRunner();
+
+MainMessenger.onStartMediaJob(async (wc, { inputPath, jobType, clip }) => {
   const spec = MEDIA_JOB_SPECS[jobType];
 
   // Post-`-i` args. Defaults to the static spec; subtract-clip replaces it with a
@@ -784,29 +807,25 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
   const preInputArgs: string[] = [];
   if (jobType === 'create-clip') {
     if (clip === undefined || (clip.start === undefined && clip.end === undefined)) {
-      return Promise.reject(new Error('create-clip job requires at least one of start/end'));
+      throw new Error('create-clip job requires at least one of start/end');
     }
     let startSec: number | null = null;
     let endSec: number | null = null;
     if (clip.start !== undefined) {
       startSec = parseHmsToSeconds(clip.start);
       if (startSec === null) {
-        return Promise.reject(
-          new Error(`create-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
-        );
+        throw new Error(`create-clip: invalid start time "${clip.start}" — expected HH:MM:SS`);
       }
     }
     if (clip.end !== undefined) {
       endSec = parseHmsToSeconds(clip.end);
       if (endSec === null) {
-        return Promise.reject(
-          new Error(`create-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
-        );
+        throw new Error(`create-clip: invalid end time "${clip.end}" — expected HH:MM:SS`);
       }
     }
     if (startSec !== null && endSec !== null && startSec >= endSec) {
-      return Promise.reject(
-        new Error(`create-clip: start time (${clip.start}) must be before end time (${clip.end})`),
+      throw new Error(
+        `create-clip: start time (${clip.start}) must be before end time (${clip.end})`,
       );
     }
     if (clip.start !== undefined) {
@@ -820,37 +839,43 @@ MainMessenger.onStartMediaJob((wc, { inputPath, jobType, clip }) => {
     // BOTH marks are required (you can't remove a middle without both bounds). Trimming is done
     // by the filtergraph, so there are NO preInputArgs — the dynamic args go after -i.
     if (clip === undefined || clip.start === undefined || clip.end === undefined) {
-      return Promise.reject(new Error('subtract-clip job requires both start and end'));
+      throw new Error('subtract-clip job requires both start and end');
     }
     const startSec = parseHmsToSeconds(clip.start);
     if (startSec === null) {
-      return Promise.reject(
-        new Error(`subtract-clip: invalid start time "${clip.start}" — expected HH:MM:SS`),
-      );
+      throw new Error(`subtract-clip: invalid start time "${clip.start}" — expected HH:MM:SS`);
     }
     const endSec = parseHmsToSeconds(clip.end);
     if (endSec === null) {
-      return Promise.reject(
-        new Error(`subtract-clip: invalid end time "${clip.end}" — expected HH:MM:SS`),
-      );
+      throw new Error(`subtract-clip: invalid end time "${clip.end}" — expected HH:MM:SS`);
     }
     if (startSec >= endSec) {
-      return Promise.reject(
-        new Error(
-          `subtract-clip: start time (${clip.start}) must be before end time (${clip.end})`,
-        ),
+      throw new Error(
+        `subtract-clip: start time (${clip.start}) must be before end time (${clip.end})`,
       );
     }
     // offset = startSec − crossfade must be ≥ 0, so start must be at least one cross-fade in.
     if (startSec < SUBTRACT_CLIP_CROSSFADE_SEC) {
-      return Promise.reject(
-        new Error(
-          `subtract-clip: start time (${clip.start}) must be at least ${SUBTRACT_CLIP_CROSSFADE_SEC}s ` +
-            'into the video to fit the cross-fade',
-        ),
+      throw new Error(
+        `subtract-clip: start time (${clip.start}) must be at least ${SUBTRACT_CLIP_CROSSFADE_SEC}s ` +
+          'into the video to fit the cross-fade',
       );
     }
     jobArgs = buildSubtractClipArgs(startSec, endSec);
+  } else if (
+    jobType === 'rotate-cw' ||
+    jobType === 'rotate-ccw' ||
+    jobType === 'reencode-x264'
+  ) {
+    // These three jobs copy audio into a forced .mp4, so we probe the source's first audio stream
+    // up-front and decide: MP4-legal codec → -c:a copy; non-legal → -c:a aac -b:a 192k; no audio
+    // stream → -an. A probe FAILURE on a file that should have audio throws here, which rejects the
+    // handler promise and surfaces a loud MediaJobErrorAlert. This is deterministic (probe once,
+    // decide, encode once) — NOT a retry-on-failure scheme. (INV-032, Directive 2.)
+    //
+    // subtract-clip and normalize-audio already re-encode audio and are intentionally not probed.
+    const audioArgs = await decideAudioArgs(_probeRunner, inputPath);
+    jobArgs = [...spec.args, ...audioArgs];
   }
 
   return new Promise<MediaJobStartResult>((resolve, reject) => {

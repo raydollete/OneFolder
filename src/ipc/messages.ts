@@ -147,7 +147,13 @@ export const CANCEL_MEDIA_JOB = 'CANCEL_MEDIA_JOB';
 export const COMMIT_MEDIA_JOB = 'COMMIT_MEDIA_JOB';
 
 /** Discriminator for all supported ffmpeg job types. */
-export type MediaJobType = 'reencode-x264' | 'normalize-audio' | 'create-clip' | 'subtract-clip';
+export type MediaJobType =
+  | 'reencode-x264'
+  | 'normalize-audio'
+  | 'create-clip'
+  | 'subtract-clip'
+  | 'rotate-cw'
+  | 'rotate-ccw';
 
 /**
  * Payload for a START_MEDIA_JOB invoke.

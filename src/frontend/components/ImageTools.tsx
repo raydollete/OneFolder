@@ -154,6 +154,10 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
             ? 'Create clip'
             : jobType === 'subtract-clip'
             ? 'Subtract clip'
+            : jobType === 'rotate-cw'
+            ? 'Rotate clockwise'
+            : jobType === 'rotate-ccw'
+            ? 'Rotate counterclockwise'
             : 'Re-encode';
         if (message === 'MEDIA_JOB_CANCELLED') {
           // User-initiated cancel — show a neutral toast, no error. The source stays on screen.
@@ -235,6 +239,14 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
     ? jobPercent !== null
       ? `Subtracting clip… ${jobPercent}%`
       : 'Subtracting clip…'
+    : activeJob === 'rotate-cw'
+    ? jobPercent !== null
+      ? `Rotating clockwise… ${jobPercent}%`
+      : 'Rotating clockwise…'
+    : activeJob === 'rotate-ccw'
+    ? jobPercent !== null
+      ? `Rotating counterclockwise… ${jobPercent}%`
+      : 'Rotating counterclockwise…'
     : jobPercent !== null
     ? `Re-encoding… ${jobPercent}%`
     : 'Re-encoding…';
@@ -246,6 +258,8 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
       ? 'Cancel clip'
       : activeJob === 'subtract-clip'
       ? 'Cancel subtract clip'
+      : activeJob === 'rotate-cw' || activeJob === 'rotate-ccw'
+      ? 'Cancel rotate'
       : 'Cancel re-encode';
 
   return (
@@ -269,6 +283,20 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
               </div>
             ) : (
               <>
+                <button
+                  disabled={uiStore.isMediaProcessing}
+                  onClick={() => runMediaJob('rotate-cw')}
+                  title="Rotate this video 90° clockwise (ffmpeg transpose=1)"
+                >
+                  {IconSet.RELOAD}Rotate CW
+                </button>
+                <button
+                  disabled={uiStore.isMediaProcessing}
+                  onClick={() => runMediaJob('rotate-ccw')}
+                  title="Rotate this video 90° counterclockwise (ffmpeg transpose=2)"
+                >
+                  {IconSet.RELOAD}Rotate CCW
+                </button>
                 <button
                   disabled={uiStore.isMediaProcessing}
                   onClick={() => runMediaJob('reencode-x264')}

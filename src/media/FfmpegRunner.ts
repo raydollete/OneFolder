@@ -38,6 +38,21 @@ export interface FfmpegRunOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Three-state result from FfmpegRunner.probeFirstAudioCodec.
+ *
+ *   codec    — ffprobe selected stream a:0 and returned a codec name.
+ *   no-audio — ffprobe succeeded but found no a:0 stream (video-only source).
+ *   error    — ffprobe exited non-zero, timed out, or could not be spawned.
+ *
+ * The `error` kind must NOT be collapsed into `no-audio` — doing so would introduce a silent
+ * failure path (the fork's philosophy is fail-loud, no silent fallbacks).
+ */
+export type AudioProbeResult =
+  | { kind: 'codec'; codecName: string }
+  | { kind: 'no-audio' }
+  | { kind: 'error'; error: Error };
+
 /** Thrown by `run()` when the job was cancelled via its AbortSignal (distinct from a real failure). */
 export class FfmpegAbortError extends Error {
   constructor() {
@@ -192,6 +207,80 @@ export class FfmpegRunner {
       child.on('error', () => {
         clearTimeout(timeout);
         resolve(undefined);
+      });
+    });
+  }
+
+  /**
+   * Probe the codec name of the first audio stream (a:0) in `input`.
+   *
+   * Uses ffprobe with `-select_streams a:0 -show_entries stream=codec_name` to get a single
+   * codec_name line on stdout. Returns a THREE-state result:
+   *
+   *   { kind: 'codec', codecName }  — exit 0 + non-empty stdout (a:0 stream found).
+   *   { kind: 'no-audio' }          — exit 0 + empty stdout (no audio stream selected).
+   *   { kind: 'error', error }      — non-zero exit, spawn failure, or timeout.
+   *
+   * IMPORTANT: unlike probeDuration, this method does NOT collapse an error into undefined.
+   * A probe failure on a file that should have audio must surface a loud error so the job
+   * aborts rather than silently assuming the audio is compatible (fail-loud philosophy).
+   */
+  probeFirstAudioCodec(input: string): Promise<AudioProbeResult> {
+    return new Promise((resolve) => {
+      const args = [
+        '-v',
+        'error',
+        '-select_streams',
+        'a:0',
+        '-show_entries',
+        'stream=codec_name',
+        '-of',
+        'default=nokey=1:noprint_wrappers=1',
+        input,
+      ];
+
+      let stdout = '';
+      let child: ChildProcess;
+      try {
+        child = spawn(this.ffprobePath, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+      } catch (err) {
+        resolve({ kind: 'error', error: err instanceof Error ? err : new Error(String(err)) });
+        return;
+      }
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+
+      const timeout = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* ignore */
+        }
+        resolve({ kind: 'error', error: new Error('ffprobe timed out after 10s') });
+      }, 10_000);
+
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code !== 0) {
+          resolve({
+            kind: 'error',
+            error: new Error(`ffprobe exited with code ${code ?? 'null'}`),
+          });
+          return;
+        }
+        const codecName = stdout.trim();
+        if (codecName === '') {
+          resolve({ kind: 'no-audio' });
+        } else {
+          resolve({ kind: 'codec', codecName });
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        resolve({ kind: 'error', error: err });
       });
     });
   }
