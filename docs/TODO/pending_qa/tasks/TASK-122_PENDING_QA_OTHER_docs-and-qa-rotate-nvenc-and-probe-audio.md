@@ -2,7 +2,7 @@
 id: TASK-122
 title: 'Docs + manual QA: rotate NVENC parity and probe-driven copy-vs-AAC audio'
 investigation: INV-032
-status: planned
+status: pending_qa
 priority: medium
 blocked_by: [TASK-119, TASK-120]
 date_created: 2026-06-19
@@ -36,7 +36,7 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
 
 ### Docs
 
-- [ ] 1. **`docs/rotate-video.md`** — in "ffmpeg Commands", change `-c:v libx264` to the
+- [x] 1. **`docs/rotate-video.md`** — in "ffmpeg Commands", change `-c:v libx264` to the
       NVENC block `-c:v h264_nvenc -preset p7 -tune hq -cq 21` for both CW and CCW, and
       replace the static `-c:a copy` with a description of the runtime audio decision.
       Update the argument table, the "Video is re-encoded" limitation (NVENC, requires
@@ -45,21 +45,21 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
       MP4-legal → copy; otherwise → AAC 192k; no audio → omitted; probe failure on a
       should-have-audio source → loud error. Update the QA-matrix audio-incompatible
       row accordingly.
-- [ ] 2. **`docs/reencode-x264.md`** — change the ffmpeg command from `-c:a copy` to the
+- [x] 2. **`docs/reencode-x264.md`** — change the ffmpeg command from `-c:a copy` to the
       runtime audio decision; add a short "Audio handling" subsection mirroring rotate
       (copy / AAC 192k / `-an` / loud probe-failure). The video command is already NVENC
       in the spec but the doc still shows `-c:v libx264` at line 57/65 — correct it to
       NVENC to match `src/main.ts:41`.
-- [ ] 3. **`docs/TOOLS.md`** — update **Worked Example 5** (lines ~348–379, currently says
+- [x] 3. **`docs/TOOLS.md`** — update **Worked Example 5** (lines ~348–379, currently says
       `-c:v libx264 -c:a copy`) to NVENC + runtime audio decision. Add/extend the
       encoder/audio rule: video tools use the shared `NVENC_H264_VIDEO_ARGS`; copy-audio
       tools route audio through the shared `decideAudioArgs` probe; note `subtract-clip`
       and `normalize-audio` already re-encode audio and are not probed. Note the
       `create-clip` (`-c copy`) sibling defect as a known, broader, out-of-scope issue
       for a future investigation.
-- [ ] 4. **`docs/index.md`** — update line ~49 (rotate summary) from
+- [x] 4. **`docs/index.md`** — update line ~49 (rotate summary) from
       `-c:v libx264 -c:a copy` to NVENC + the audio note.
-- [ ] 5. **Confirm out-of-scope safety claims in docs:** explicitly state that
+- [x] 5. **Confirm out-of-scope safety claims in docs:** explicitly state that
       `subtract-clip` forces `-c:a aac` (acrossfade) and `normalize-audio` re-encodes via
       `-af …,loudnorm`, so both are already MP4-safe and intentionally not probed.
 
@@ -89,11 +89,11 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
 
 ## Done When
 
-- [ ] `docs/rotate-video.md`, `docs/reencode-x264.md`, `docs/TOOLS.md`, and `docs/index.md`
+- [x] `docs/rotate-video.md`, `docs/reencode-x264.md`, `docs/TOOLS.md`, and `docs/index.md`
       describe NVENC for rotate and the probe-driven copy/AAC/`-an`/loud-fail audio
       behavior for all three copy-audio jobs, and confirm subtract-clip/normalize-audio
       are already safe and create-clip is a noted sibling.
-- [ ] No doc still claims rotate uses `libx264` or that any of the three jobs
+- [x] No doc still claims rotate uses `libx264` or that any of the three jobs
       unconditionally `-c:a copy`.
 - [ ] The manual QA steps above are executed in the running app with evidence (ffprobe
       output / screenshots) attached or linked here. (Per QA-DISCIPLINE.md, automated

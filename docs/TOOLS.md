@@ -345,38 +345,46 @@ intact.
 
 See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
 
-### Example 5 — Rotate CW / Rotate CCW (INV-030)
+### Example 5 — Rotate CW / Rotate CCW (INV-030; updated INV-032)
 
-The fifth and sixth consumers are the **simplest** tools in the stack — they
-validate the parameterized design by adding two fully-functional rotate tools
-with the minimum possible surface area:
+The fifth and sixth consumers of the media-job stack.  Originally the simplest tools
+(fully static spec); updated in INV-032 to use the project-standard NVENC encoder and
+the shared probe-driven audio decision:
 
 - **Two entries in `MEDIA_JOB_SPECS`** (in `src/main.ts`) — one for Rotate CW
-  (`-vf transpose=1 -c:v libx264 -c:a copy`, `outputExt: 'mp4'`) and one for
-  Rotate CCW (`-vf transpose=2 -c:v libx264 -c:a copy`, `outputExt: 'mp4'`).
-  These are **fully static** — there are no per-invocation args, no `clip`
-  payload, and no handler branch required.  The existing `onStartMediaJob`
-  handler falls through to `jobArgs = spec.args` with empty `preInputArgs` for
-  any type it does not special-case, so rotate is handled correctly with zero
-  new handler code.
-- **Two buttons in `ImageTools.tsx`** — placed as the first two controls in the
-  Tools section (above Re-encode (x264)), video-gated, disabled while
+  (`-vf transpose=1 ...NVENC_H264_VIDEO_ARGS`, `outputExt: 'mp4'`) and one for Rotate
+  CCW (`-vf transpose=2 ...NVENC_H264_VIDEO_ARGS`, `outputExt: 'mp4'`).  The specs
+  contain **video-only** args; audio is decided per-invocation by the handler.
+- **Shared NVENC constant** — `NVENC_H264_VIDEO_ARGS` (`src/media/audioArgs.ts`)
+  contains `['-c:v','h264_nvenc','-preset','p7','-tune','hq','-cq','21']` and is
+  referenced by reencode-x264, subtract-clip, rotate-cw, and rotate-ccw.  No more
+  NVENC arg duplication; no software fallback (fails loudly on non-NVENC machines).
+- **Per-invocation audio probe** — the `onStartMediaJob` handler has a branch for
+  `rotate-cw`, `rotate-ccw`, and `reencode-x264` that probes the source's first audio
+  stream with ffprobe and calls the shared `decideAudioArgs` helper to produce the
+  appropriate audio flags (`-c:a copy` / `-c:a aac -b:a 192k` / `-an`).  A probe
+  failure on a file that should have audio throws and surfaces a loud error.  This is
+  identical to how `subtract-clip` builds its dynamic args in the handler.
+- **Two buttons in `ImageTools.tsx`** (unchanged) — placed as the first two controls
+  in the Tools section (above Re-encode (x264)), video-gated, disabled while
   `isMediaProcessing`, each wired to `runMediaJob('rotate-cw')` /
   `runMediaJob('rotate-ccw')` with no clip argument.
-- **Three derived label strings extended** — `progressLabel` ("Rotating
-  clockwise… N%" / "Rotating counterclockwise… N%"), `cancelTitle` ("Cancel
-  rotate"), and the error/cancel `toastLabel` ("Rotate clockwise" / "Rotate
-  counterclockwise").
-- **No new binary, no new IPC channels, no new manager class, no new handler
-  branch, no pre-input args, no per-invocation validation.**
 
-`transpose` is a video filter so the video stream must be re-encoded (`-c:v
-libx264`); audio is stream-copied (`-c:a copy`).  This is inherent to
-pixel-level rotation and matches the user's stated command example.  The
-encoder relies on the existing `--enable-gpl --enable-libx264` ffmpeg build
-(no new binary, no new licensing obligation).
+**Encoder/audio rules for copy-audio jobs:**
+- All video-encoding jobs use the shared `NVENC_H264_VIDEO_ARGS` constant.
+- Jobs that previously unconditionally `-c:a copy` (`rotate-cw`, `rotate-ccw`,
+  `reencode-x264`) now route audio through the shared `decideAudioArgs` probe.
+- `subtract-clip` forces `-c:a aac` (via `acrossfade`) and is already safe — not probed.
+- `normalize-audio` re-encodes audio via `-af …,loudnorm` — already safe, not probed.
+- `create-clip` uses `-c copy` (both streams) and is a **known sibling defect**: it can
+  fail for VP8/VP9/Theora video too (a broader variant of the same audio-copy issue).
+  It is out of scope for INV-032; a future investigation should address it.
 
-See [rotate-video.md](rotate-video.md) and INV-030 for the full feature doc.
+`transpose` is a video filter so the video stream must be re-encoded.  The NVENC
+encoder requires an NVIDIA GPU; no software fallback is provided (matches
+`reencode-x264`).
+
+See [rotate-video.md](rotate-video.md), INV-030, and INV-032 for the full feature doc.
 
 ---
 

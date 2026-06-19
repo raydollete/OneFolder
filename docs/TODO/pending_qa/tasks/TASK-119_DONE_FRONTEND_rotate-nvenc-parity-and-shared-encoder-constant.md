@@ -2,11 +2,11 @@
 id: TASK-119
 title: 'Rotate CW/CCW use NVENC; extract a single shared NVENC video-args constant'
 investigation: INV-032
-status: in-progress
+status: done
 priority: medium
 blocked_by: []
 date_created: 2026-06-19
-date_completed:
+date_completed: 2026-06-19
 files:
   - 'src/main.ts'
   - 'src/media/subtractClip.ts'
@@ -59,17 +59,17 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
       forward-referencing TASK-120).
 - [x] 5. **Confirm no software fallback** is introduced anywhere for rotate; the spec is
       NVENC-only and inherits the loud-failure behavior of `reencode-x264`.
-- [ ] 6. **Build:** `yarn build` must compile (the `Record<MediaJobType, …>` typing still
-      holds; rotate entries still have `args` + `outputExt`). — Deferred to batch build at end.
+- [x] 6. **Build:** `yarn build` must compile (the `Record<MediaJobType, …>` typing still
+      holds; rotate entries still have `args` + `outputExt`). — Passed (34s, 1 pre-existing mapbox-gl warning).
 
 ## Done When
 
-- [ ] `NVENC_H264_VIDEO_ARGS` is defined once and imported by reencode, subtract-clip,
+- [x] `NVENC_H264_VIDEO_ARGS` is defined once and imported by reencode, subtract-clip,
       and both rotate specs; no inline NVENC string remains at those four sites.
-- [ ] `rotate-cw` args = `['-vf','transpose=1','-c:v','h264_nvenc','-preset','p7','-tune','hq','-cq','21']`
+- [x] `rotate-cw` args = `['-vf','transpose=1','-c:v','h264_nvenc','-preset','p7','-tune','hq','-cq','21']`
       and `rotate-ccw` args = the same with `transpose=2`; neither contains a static
       `-c:a` arg.
-- [ ] `reencode-x264` and `subtract-clip` produce the exact same argv as before this task
+- [x] `reencode-x264` and `subtract-clip` produce the exact same argv as before this task
       (verified by the existing `tests/subtract-clip.test.ts` still passing unchanged).
-- [ ] No libx264 reference remains in any executable media-job spec.
-- [ ] `yarn build` passes.
+- [x] No libx264 reference remains in any executable media-job spec.
+- [x] `yarn build` passes.

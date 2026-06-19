@@ -61,14 +61,23 @@ cannot run concurrently with any other media job.
 ### Rotate CW (90° clockwise)
 
 ```
-ffmpeg -hide_banner -i "<input>" -vf transpose=1 -c:v libx264 -c:a copy -progress pipe:1 -nostats -y "<output>"
+ffmpeg -hide_banner -i "<input>" -vf transpose=1 -c:v h264_nvenc -preset p7 -tune hq -cq 21 <audio-args> -progress pipe:1 -nostats -y "<output>"
 ```
 
 ### Rotate CCW (90° counterclockwise)
 
 ```
-ffmpeg -hide_banner -i "<input>" -vf transpose=2 -c:v libx264 -c:a copy -progress pipe:1 -nostats -y "<output>"
+ffmpeg -hide_banner -i "<input>" -vf transpose=2 -c:v h264_nvenc -preset p7 -tune hq -cq 21 <audio-args> -progress pipe:1 -nostats -y "<output>"
 ```
+
+Where `<audio-args>` is determined at runtime by an up-front ffprobe of the source's first
+audio stream (see Audio Handling below):
+
+| Source audio | `<audio-args>` |
+|---|---|
+| MP4-legal codec (AAC, MP3, AC3, EAC3, ALAC) | `-c:a copy` (lossless, instant) |
+| Non-MP4-legal codec (Vorbis, Opus, FLAC, PCM, …) | `-c:a aac -b:a 192k` (transparent re-encode) |
+| No audio stream | `-an` (no audio in output) |
 
 | Argument | Purpose |
 |---|---|
@@ -76,12 +85,39 @@ ffmpeg -hide_banner -i "<input>" -vf transpose=2 -c:v libx264 -c:a copy -progres
 | `-i <input>` | Source file |
 | `-vf transpose=1` | **Rotate 90° clockwise** — video filter; cannot stream-copy |
 | `-vf transpose=2` | **Rotate 90° counterclockwise** — video filter; cannot stream-copy |
-| `-c:v libx264` | Re-encode the video stream with H.264 (libx264); required because `transpose` produces new frames |
-| `-c:a copy` | **Stream-copy the audio** — no audio re-encode (bit-for-bit identical to source audio) |
+| `-c:v h264_nvenc` | Re-encode the video stream with NVIDIA NVENC H.264; requires an NVIDIA GPU + NVENC-enabled ffmpeg; **no software fallback** — the job fails loudly if NVENC is unavailable |
+| `-preset p7` | Slowest/best-quality NVENC preset (p1 = fastest, p7 = slowest) |
+| `-tune hq` | High-quality NVENC tuning mode |
+| `-cq 21` | Constant-quality target (lower = better; 21 is visually transparent) |
+| `-c:a copy` | Stream-copy audio (used when the source codec is MP4-legal) |
+| `-c:a aac -b:a 192k` | Re-encode audio to AAC 192k (used when the source codec is non-MP4-legal) |
+| `-an` | No audio (used when the source has no audio stream) |
 | `-progress pipe:1` | Emit machine-readable `key=value` progress lines to stdout |
 | `-nostats` | Suppress the human-readable stat line (avoids duplicating progress) |
 | `-y` | Overwrite output without prompting — safe because the output path is freshly computed to be collision-free |
 | `<output>` | Always has a `.mp4` extension; computed by `getUniqueSiblingPath` |
+
+### Audio Handling
+
+Before encoding, the `onStartMediaJob` handler probes the source's first audio stream
+via `FfmpegRunner.probeFirstAudioCodec` (ffprobe `-select_streams a:0 -show_entries
+stream=codec_name`).  The probe result drives a deterministic decision:
+
+1. **MP4-legal codec** (aac, mp3, ac3, eac3, alac) → `-c:a copy` (bit-for-bit lossless,
+   instant; the common case for `.mp4` sources).
+2. **Non-MP4-legal codec** (vorbis, opus, flac, pcm_s16le, …) → `-c:a aac -b:a 192k`
+   (transparent re-encode; previously failed with a mux error).
+3. **No audio stream** → `-an` (output has no audio; must NOT error).
+4. **Probe failure on a file that should have audio** → the handler throws, the promise
+   rejects, and the renderer shows `MediaJobErrorAlert` with the probe error.  No silent
+   "assume compatible" fallback (consistent with the fork's fail-loud philosophy).
+
+This decision is **deterministic and up-front** — probe once, decide, encode once.  It
+is NOT a try-copy-then-retry-on-failure scheme.  The same logic is applied to
+`reencode-x264` via the shared `decideAudioArgs` helper (`src/media/audioArgs.ts`).
+
+`subtract-clip` and `normalize-audio` already re-encode audio unconditionally and are
+intentionally NOT probed.
 
 ### `transpose` filter values
 
@@ -90,15 +126,20 @@ ffmpeg -hide_banner -i "<input>" -vf transpose=2 -c:v libx264 -c:a copy -progres
 | `transpose=1` | 90° clockwise |
 | `transpose=2` | 90° counterclockwise |
 
-The codec/filter arguments are defined as static entries in the `MEDIA_JOB_SPECS`
-map in `src/main.ts`.  Only transport and progress flags are added around them by
-`FfmpegRunner`.  Because `spawn` runs without a shell, no shell quoting is needed
+The video-codec arguments are defined in the shared `NVENC_H264_VIDEO_ARGS` constant
+(`src/media/audioArgs.ts`) and spread into `MEDIA_JOB_SPECS` in `src/main.ts`.  The
+audio arguments are not static — they are determined at runtime by the `decideAudioArgs`
+helper (also in `src/media/audioArgs.ts`) via an up-front ffprobe call in the
+`onStartMediaJob` IPC handler.  Only transport and progress flags are added around them
+by `FfmpegRunner`.  Because `spawn` runs without a shell, no shell quoting is needed
 (the surrounding quotes above are only for the shell-form illustration).
 
-The `-c:v libx264` encoder relies on the existing `--enable-gpl --enable-libx264`
-ffmpeg build.  No new binary is bundled; the existing bundled ffmpeg (documented in
-[personal-fork-notes.md](personal-fork-notes.md)) is reused.  No new licensing
-obligation arises.
+The `-c:v h264_nvenc` encoder requires an NVIDIA GPU and an NVENC-enabled ffmpeg build.
+No software fallback is provided — if NVENC is unavailable, ffmpeg exits non-zero and
+the job surfaces a loud `MediaJobErrorAlert`.  No new binary is bundled; the existing
+bundled ffmpeg (documented in [personal-fork-notes.md](personal-fork-notes.md)) is
+reused.  The NVENC block is shared with `reencode-x264` and `subtract-clip` via the
+`NVENC_H264_VIDEO_ARGS` constant (extracted in INV-032) so they cannot drift.
 
 ---
 
@@ -144,16 +185,17 @@ The source extension is replaced unconditionally with `.mp4`.
 ## Reused Media-Job Stack
 
 Rotate CW / Rotate CCW are the fifth and sixth consumers of the generalized
-media-job stack.  They are the **simplest** consumers to date:
+media-job stack.  After INV-032 they differ from their original INV-030 form:
 
 - No `preInputArgs` (unlike Create Clip, which pushes `-ss`/`-to` before `-i`).
-- No per-invocation validation (unlike Create Clip and Subtract Clip, which
-  validate `clip.start`/`clip.end` in the `onStartMediaJob` IPC handler).
-- No per-invocation dynamic args (unlike Subtract Clip, which builds a
-  `-filter_complex` graph from the clip marks).
-- The args are fully static entries in `MEDIA_JOB_SPECS`; the existing handler
-  falls through to `jobArgs = spec.args` with empty `preInputArgs` with no new
-  branch required.
+- No per-invocation validation of clip marks (unlike Create Clip and Subtract Clip).
+- **Per-invocation audio args** — the `onStartMediaJob` handler now has a branch for
+  `rotate-cw`, `rotate-ccw`, and `reencode-x264` that probes the source audio and
+  appends the decided `-c:a copy` / `-c:a aac -b:a 192k` / `-an` args at runtime.
+  This mirrors how `subtract-clip` builds its `-filter_complex` args dynamically.
+- The `MEDIA_JOB_SPECS` entries contain video-only args
+  (`-vf transpose=N -c:v h264_nvenc -preset p7 -tune hq -cq 21`); audio is NOT
+  static in the spec.
 
 The reused layers — `FfmpegRunner`, `MediaJobService`, the three IPC channels,
 `UiStore.beginMediaProcessing`/`endMediaProcessing`,
@@ -170,35 +212,38 @@ order-of-operations rules.
 ### Video is re-encoded (lossy, slower than a stream copy)
 
 The `transpose` video filter produces new frames — the video stream **must** be
-re-encoded.  `-c:v libx264` matches the Re-encode (x264) tool's encoder choice
-for consistency and quality.  This is inherent to pixel-level rotation; there is
-no lossless path via `transpose`.
+re-encoded.  `-c:v h264_nvenc -preset p7 -tune hq -cq 21` (the shared NVENC block,
+same as `reencode-x264` and `subtract-clip`) provides constant-quality H.264.
+This is inherent to pixel-level rotation; there is no lossless path via `transpose`.
 
 This means:
 - Quality loss (small but non-zero) each time you rotate.
 - Encoding time proportional to video length and resolution.
+- Requires an NVIDIA GPU with NVENC support.  On a machine without NVENC, ffmpeg exits
+  non-zero and the job surfaces a loud `MediaJobErrorAlert` — there is **no software
+  fallback**.  This matches the behavior of `reencode-x264` and `subtract-clip`.
 
 If you only need the player to *display* the video rotated without re-encoding,
 set the `Rotate` / `display:matrix` metadata tag in the source file with an
 external tool — that is out of scope for this tool.
 
-### `-c:a copy` into forced `.mp4` can fail for non-MP4-muxable audio
+### Non-MP4-legal audio is re-encoded to AAC (previously failed)
 
-Stream-copying audio into the forced `.mp4` container **fails if the source
-audio codec cannot be muxed into MP4** — for example, Vorbis audio from a
-`.webm` or `.ogg` source.
+Prior to INV-032, stream-copying audio into the forced `.mp4` container failed if the
+source audio codec was not MP4-muxable (Vorbis from `.webm`/`.ogg`, FLAC, PCM, etc.).
 
-| Source format | Audio codec | Muxable into `.mp4`? |
-|---|---|---|
-| `.mp4` | AAC / MP3 | Yes (common case) |
-| `.webm` | Vorbis / Opus | **Vorbis: No; Opus: may work** |
-| `.ogg` | Vorbis | **No** |
+This is now fixed: the handler probes the source audio up-front and chooses
+transparently:
 
-When the codec is not muxable, ffmpeg exits non-zero.  The existing error path
-surfaces this honestly: partial output is deleted, the UI lock is released, and a
-blocking `MediaJobErrorAlert` modal appears containing the tail of ffmpeg's
-stderr (which will include the container/codec mismatch message).  The source
-file is always left untouched.
+| Source audio codec | Behavior |
+|---|---|
+| AAC, MP3, AC3, EAC3, ALAC (MP4-legal) | `-c:a copy` — lossless, instant |
+| Vorbis, Opus, FLAC, PCM, … (non-MP4-legal) | `-c:a aac -b:a 192k` — transparent re-encode |
+| No audio stream | `-an` — no audio in output, no error |
+| Probe failure on a file that should have audio | Job aborts with `MediaJobErrorAlert` |
+
+The re-encode is applied only when `-c:a copy` would fail; the common MP4/AAC case
+is unchanged (lossless, instant copy).
 
 ### Rotation baked into pixels, not a display-matrix flag
 
@@ -268,10 +313,12 @@ start`).  Steps marked REQUIRES MANUAL EXECUTION cannot be exercised headlessly.
       Verify no partial file is left in the source directory.
 - [ ] REQUIRES MANUAL EXECUTION — Lock enforcement: verify arrow keys, Space,
       Delete, and navigation shortcuts are inert during the job.
-- [ ] REQUIRES MANUAL EXECUTION — Audio-incompatible source: rotate a `.webm`
-      with Vorbis audio.  Verify ffmpeg fails, a blocking `MediaJobErrorAlert`
-      modal appears with a meaningful error message, and the source is left
-      untouched.
+- [ ] REQUIRES MANUAL EXECUTION — Non-MP4-legal audio: rotate a `.webm`/`.ogg`
+      with Vorbis (or any source with FLAC/PCM audio).  Verify the job now
+      **SUCCEEDS** (previously failed), the output is a playable `.mp4`, and the
+      output audio codec is `aac` (~192k) as reported by ffprobe.  Capture ffprobe
+      output.  (Previously this would have shown a `MediaJobErrorAlert`; the new
+      behavior is transparent AAC re-encode.)
 
 ---
 

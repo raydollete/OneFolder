@@ -38,10 +38,14 @@ import { FfmpegRunner, AudioProbeResult } from './FfmpegRunner';
  * rotate-cw and rotate-ccw (src/main.ts). Any future encoder change belongs here alone.
  */
 export const NVENC_H264_VIDEO_ARGS: readonly string[] = [
-  '-c:v', 'h264_nvenc',
-  '-preset', 'p7',
-  '-tune', 'hq',
-  '-cq', '21',
+  '-c:v',
+  'h264_nvenc',
+  '-preset',
+  'p7',
+  '-tune',
+  'hq',
+  '-cq',
+  '21',
 ];
 
 // ---------------------------------------------------------------------------
@@ -57,11 +61,11 @@ export const NVENC_H264_VIDEO_ARGS: readonly string[] = [
  * very slightly lossy) — that is the safe default and preferred over a silent mux failure.
  */
 export const MP4_LEGAL_AUDIO_CODECS: ReadonlySet<string> = new Set([
-  'aac',    // AAC-LC, AAC-HE, …  (native MP4 audio)
-  'mp3',    // MPEG-1/2 Audio Layer III (ISO 14496-3)
-  'ac3',    // Dolby Digital
-  'eac3',   // Dolby Digital Plus
-  'alac',   // Apple Lossless (ISO 14496-14)
+  'aac', // AAC-LC, AAC-HE, …  (native MP4 audio)
+  'mp3', // MPEG-1/2 Audio Layer III (ISO 14496-3)
+  'ac3', // Dolby Digital
+  'eac3', // Dolby Digital Plus
+  'alac', // Apple Lossless (ISO 14496-14)
 ]);
 
 /**
@@ -91,9 +95,7 @@ export function audioArgsForProbe(result: AudioProbeResult, input = '<unknown>')
       return ['-an'];
 
     case 'error':
-      throw new Error(
-        `audio probe failed for "${input}": ${result.error.message}`,
-      );
+      throw new Error(`audio probe failed for "${input}": ${result.error.message}`);
   }
 }
 

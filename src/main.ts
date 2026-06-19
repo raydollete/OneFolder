@@ -789,6 +789,7 @@ MainMessenger.onIsPortableMode(() => IS_PORTABLE_MODE);
 // with { outputPath } when the job finishes, or rejects on failure/cancel.
 // The first MEDIA_JOB_PROGRESS event carries the jobId so the renderer can call
 // CANCEL_MEDIA_JOB if the user clicks cancel.
+
 // Shared FfmpegRunner instance used by the media-job handler for the pre-encode audio probe.
 // MediaJobService has its own internal runner for encoding; this is a lightweight probe-only
 // runner that shares the same bundled binaries. Instantiated once at module load.
@@ -862,11 +863,7 @@ MainMessenger.onStartMediaJob(async (wc, { inputPath, jobType, clip }) => {
       );
     }
     jobArgs = buildSubtractClipArgs(startSec, endSec);
-  } else if (
-    jobType === 'rotate-cw' ||
-    jobType === 'rotate-ccw' ||
-    jobType === 'reencode-x264'
-  ) {
+  } else if (jobType === 'rotate-cw' || jobType === 'rotate-ccw' || jobType === 'reencode-x264') {
     // These three jobs copy audio into a forced .mp4, so we probe the source's first audio stream
     // up-front and decide: MP4-legal codec → -c:a copy; non-legal → -c:a aac -b:a 192k; no audio
     // stream → -an. A probe FAILURE on a file that should have audio throws here, which rejects the

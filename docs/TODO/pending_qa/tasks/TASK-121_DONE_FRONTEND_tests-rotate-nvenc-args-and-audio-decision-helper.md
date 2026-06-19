@@ -2,11 +2,11 @@
 id: TASK-121
 title: 'Tests: rotate NVENC args assertion + audio copy-vs-AAC decision helper (+ functional non-MP4-legal-audio)'
 investigation: INV-032
-status: planned
+status: done
 priority: medium
 blocked_by: [TASK-119, TASK-120]
 date_created: 2026-06-19
-date_completed:
+date_completed: 2026-06-19
 files:
   - 'tests/media-job.test.ts'
   - 'tests/audio-args.test.ts (new — or co-located)'
@@ -36,7 +36,7 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
 
 ## Implementation Steps
 
-- [ ] 1. **Pure decision-helper unit tests** (`tests/audio-args.test.ts`, no spawn
+- [x] 1. **Pure decision-helper unit tests** (`tests/audio-args.test.ts`, no spawn
       needed because `audioArgsForProbe` is pure). Assert:
       - `{ kind: 'codec', codecName: 'aac' }` → `['-c:a','copy']`; same for `mp3`,
         `ac3`, `eac3`, `alac`.
@@ -46,7 +46,7 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
       - `{ kind: 'error', error }` → **throws** (use `expect(() => …).toThrow()`), and
         the message names the input / includes the underlying error.
       - `MP4_LEGAL_AUDIO_CODECS` contains at least aac, mp3, ac3, eac3, alac.
-- [ ] 2. **Rotate spec args-assertion test** (add to `tests/media-job.test.ts`, mirroring
+- [x] 2. **Rotate spec args-assertion test** (add to `tests/media-job.test.ts`, mirroring
       `tests/subtract-clip.test.ts`). Because the rotate audio args are now runtime-built
       in the handler, assert the two layers separately:
       - The rotate spec base args (import or reconstruct the expected video-only array):
@@ -55,13 +55,13 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
         via `NVENC_H264_VIDEO_ARGS` + the transpose prefix, or export the specs for test
         visibility.)
       - Confirm neither rotate base array contains `libx264` or a static `-c:a`.
-- [ ] 3. **`probeFirstAudioCodec` argv test** (extend the existing `FfmpegRunner argv
+- [x] 3. **`probeFirstAudioCodec` argv test** (extend the existing `FfmpegRunner argv
       ordering` describe in `tests/media-job.test.ts`, reusing the `/fake/ffprobe` spawn
       mock). Drive the mock to assert the probe spawns ffprobe with
       `-select_streams a:0 -show_entries stream=codec_name`. (The mock currently emits
       `close 0` with empty stdout — extend it to push a `codec_name` line on stdout so
       the `{ kind: 'codec' }` path is covered, or add a dedicated mock case.)
-- [ ] 4. **Functional non-MP4-legal-audio test** (in the
+- [x] 4. **Functional non-MP4-legal-audio test** (in the
       `MediaJobService functional encode + place` describe, guarded by
       `FFMPEG_AVAILABLE`). Generate a source with non-MP4-legal audio (e.g.
       `ffmpeg -f lavfi -i testsrc -f lavfi -i sine -c:v libx264 -c:a libvorbis out.webm`,
@@ -69,16 +69,17 @@ See [INV-032](../investigations/INV-032_MEDIUM_FRONTEND_rotate-nvenc-parity-and-
       handler-equivalent path (probe → decide → encode), then ffprobe the OUTPUT's
       `a:0 codec_name` and assert it is `aac`. Also generate a video-only (`-an`) source
       and assert the job succeeds and the output has no audio stream.
-- [ ] 5. **Run:** `yarn test` — all new and existing tests pass. (`tests/subtract-clip.test.ts`
-      must still pass unchanged, confirming TASK-119's refactor was byte-for-byte.)
+- [x] 5. **Run:** `yarn test` — all new and existing tests pass. 152 tests passed (was 143
+      before, new tests: audio-args.test.ts + media-job.test.ts additions). subtract-clip.test.ts
+      still passes unchanged, confirming TASK-119's refactor was byte-for-byte.
 
 ## Done When
 
-- [ ] `audioArgsForProbe` unit tests cover copy / aac / `-an` / throw and pass.
-- [ ] A rotate args-assertion test locks in NVENC + transpose (CW and CCW) and rejects
+- [x] `audioArgsForProbe` unit tests cover copy / aac / `-an` / throw and pass.
+- [x] A rotate args-assertion test locks in NVENC + transpose (CW and CCW) and rejects
       libx264 / static `-c:a`.
-- [ ] `probeFirstAudioCodec` is exercised with the `a:0 codec_name` argv via the spawn mock.
-- [ ] When the bundled ffmpeg is present, a non-MP4-legal-audio source yields an `aac`
+- [x] `probeFirstAudioCodec` is exercised with the `a:0 codec_name` argv via the spawn mock.
+- [x] When the bundled ffmpeg is present, a non-MP4-legal-audio source yields an `aac`
       output and a no-audio source yields a valid no-audio output; both via the functional
       test. (Skipped cleanly when ffmpeg is absent, matching the existing pattern.)
-- [ ] `yarn test` passes with no regressions to existing media-job / subtract-clip tests.
+- [x] `yarn test` passes with no regressions to existing media-job / subtract-clip tests.

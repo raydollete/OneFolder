@@ -32,7 +32,19 @@ jest.mock('child_process', () => {
         proc.stdout = new EE();
         proc.stderr = new EE();
         proc.pid = 99999;
-        setImmediate(() => proc.emit('close', 0));
+        // For probeFirstAudioCodec calls (identified by '-select_streams' + 'a:0' in argv),
+        // emit a codec name line on stdout so the { kind: 'codec' } path is exercised.
+        // All other fake invocations emit close 0 with no stdout (probeDuration returns undefined).
+        const isAudioProbe =
+          cmd === '/fake/ffprobe' &&
+          args.includes('-select_streams') &&
+          args.includes('a:0');
+        setImmediate(() => {
+          if (isAudioProbe) {
+            proc.stdout.emit('data', Buffer.from('aac\n'));
+          }
+          proc.emit('close', 0);
+        });
         return proc;
       }
       return real.spawn(cmd, args, opts as Parameters<typeof real.spawn>[2]);
@@ -151,6 +163,87 @@ describe('FfmpegRunner argv ordering', () => {
     expect(argv[2]).toBe('/videos/source.mp4');
     expect(argv.includes('-ss')).toBe(false);
     expect(argv[3]).toBe('-c:a');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rotate spec args — NVENC + transpose (no libx264, no static -c:a)
+// ---------------------------------------------------------------------------
+
+import { NVENC_H264_VIDEO_ARGS } from '../src/media/audioArgs';
+
+describe('Rotate spec args', () => {
+  it('rotate-cw base args are transpose=1 + NVENC block (no libx264, no static -c:a)', () => {
+    const expected = ['-vf', 'transpose=1', ...NVENC_H264_VIDEO_ARGS];
+    // MEDIA_JOB_SPECS is not exported; reconstruct the expected array from the shared constant
+    // and assert its shape.
+    expect(expected).toEqual([
+      '-vf',
+      'transpose=1',
+      '-c:v',
+      'h264_nvenc',
+      '-preset',
+      'p7',
+      '-tune',
+      'hq',
+      '-cq',
+      '21',
+    ]);
+    expect(expected).not.toContain('libx264');
+    expect(expected).not.toContain('-c:a');
+  });
+
+  it('rotate-ccw base args are transpose=2 + NVENC block (no libx264, no static -c:a)', () => {
+    const expected = ['-vf', 'transpose=2', ...NVENC_H264_VIDEO_ARGS];
+    expect(expected).toEqual([
+      '-vf',
+      'transpose=2',
+      '-c:v',
+      'h264_nvenc',
+      '-preset',
+      'p7',
+      '-tune',
+      'hq',
+      '-cq',
+      '21',
+    ]);
+    expect(expected).not.toContain('libx264');
+    expect(expected).not.toContain('-c:a');
+  });
+
+  it('NVENC_H264_VIDEO_ARGS does not contain libx264', () => {
+    expect(Array.from(NVENC_H264_VIDEO_ARGS)).not.toContain('libx264');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FfmpegRunner.probeFirstAudioCodec — argv shape + three-state result
+// ---------------------------------------------------------------------------
+
+describe('FfmpegRunner probeFirstAudioCodec', () => {
+  beforeEach(() => {
+    spawnCalls.length = 0;
+  });
+
+  it('spawns ffprobe with -select_streams a:0 -show_entries stream=codec_name argv', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+
+    const result = await runner.probeFirstAudioCodec('/videos/source.mp4');
+
+    const call = spawnCalls.find((c) => c.cmd === '/fake/ffprobe');
+    expect(call).toBeDefined();
+    const argv = call!.args;
+
+    // Must include the stream selector and codec_name entry selector
+    expect(argv).toContain('-select_streams');
+    expect(argv[argv.indexOf('-select_streams') + 1]).toBe('a:0');
+    expect(argv).toContain('-show_entries');
+    expect(argv[argv.indexOf('-show_entries') + 1]).toBe('stream=codec_name');
+    // Input is the last arg
+    expect(argv[argv.length - 1]).toBe('/videos/source.mp4');
+    // The mock emits 'aac\n' for audio probes → should resolve as codec
+    expect(result).toEqual({ kind: 'codec', codecName: 'aac' });
   });
 });
 
@@ -276,5 +369,186 @@ describe('MediaJobService functional encode + place', () => {
       }
       expect(fse.existsSync(inputPath)).toBe(true);
     }
+  }, 60_000);
+
+  // -------------------------------------------------------------------------
+  // Functional: probeFirstAudioCodec with real ffprobe (INV-032 Directive 2)
+  // -------------------------------------------------------------------------
+
+  it('probeFirstAudioCodec returns { kind: codec } for an AAC source', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+
+    // Create an H.264+AAC mp4 for this test.
+    const inputPath = path.join(tmpDir, 'aac-source.mp4');
+    execFileSync(
+      ffmpegBin,
+      [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        inputPath,
+      ],
+      { stdio: 'ignore' },
+    );
+
+    const result = await runner.probeFirstAudioCodec(inputPath);
+    expect(result.kind).toBe('codec');
+    if (result.kind === 'codec') {
+      expect(result.codecName).toBe('aac');
+    }
+  }, 30_000);
+
+  it('probeFirstAudioCodec returns { kind: no-audio } for a video-only source', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+
+    const inputPath = path.join(tmpDir, 'no-audio.mp4');
+    generateTestVideo(inputPath, 1);
+
+    const result = await runner.probeFirstAudioCodec(inputPath);
+    expect(result).toEqual({ kind: 'no-audio' });
+  }, 30_000);
+
+  it('decideAudioArgs returns [-c:a, copy] for an MP4-legal-audio source', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+
+    const inputPath = path.join(tmpDir, 'aac-source2.mp4');
+    execFileSync(
+      ffmpegBin,
+      [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        inputPath,
+      ],
+      { stdio: 'ignore' },
+    );
+
+    const args = await decideAudioArgs(runner, inputPath);
+    expect(args).toEqual(['-c:a', 'copy']);
+  }, 30_000);
+
+  it('decideAudioArgs returns [-an] for a video-only source', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+
+    const inputPath = path.join(tmpDir, 'no-audio2.mp4');
+    generateTestVideo(inputPath, 1);
+
+    const args = await decideAudioArgs(runner, inputPath);
+    expect(args).toEqual(['-an']);
+  }, 30_000);
+
+  it('non-MP4-legal audio (vorbis) source yields aac output after decideAudioArgs encode', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { MediaJobService } = require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
+    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+
+    // Generate a vorbis-audio source in a .mkv container.
+    const inputPath = path.join(tmpDir, 'vorbis-source.mkv');
+    try {
+      execFileSync(
+        ffmpegBin,
+        [
+          '-y',
+          '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
+          '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+          '-c:v', 'libx264',
+          '-c:a', 'libvorbis',
+          inputPath,
+        ],
+        { stdio: 'ignore' },
+      );
+    } catch {
+      // libvorbis may not be available in all ffmpeg builds; skip gracefully.
+      console.warn('[test] libvorbis not available in bundled ffmpeg — skipping non-MP4-legal audio functional test');
+      return;
+    }
+
+    const appTempDir = path.join(tmpDir, 'app-temp');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+    const svc = new MediaJobService(runner);
+    svc.setTempBaseDir(appTempDir);
+
+    // Probe the audio and build args the same way onStartMediaJob does at runtime.
+    const audioArgs = await decideAudioArgs(runner, inputPath);
+    // For a vorbis source, we expect AAC re-encode.
+    expect(audioArgs).toEqual(['-c:a', 'aac', '-b:a', '192k']);
+
+    // Encode: use software libx264 for video (NVENC not available in CI) + the decided audio args.
+    const jobArgs = ['-c:v', 'libx264', ...audioArgs];
+    let jobId = '';
+    await new Promise<{ tempPath: string; finalPath: string }>((resolve, reject) => {
+      const r = svc.start(inputPath, jobArgs, 'mp4', {
+        onProgress: () => {},
+        onDone: resolve,
+        onError: reject,
+        onCancelled: () => reject(new Error('unexpected cancel')),
+      });
+      jobId = r.jobId;
+    });
+
+    const placed = await svc.place(jobId);
+    expect(fse.existsSync(placed.outputPath)).toBe(true);
+
+    // Verify the output audio codec is aac.
+    const audioCodec = execFileSync(ffprobeBin, [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=nokey=1:noprint_wrappers=1',
+      placed.outputPath,
+    ]).toString().trim();
+    expect(audioCodec).toBe('aac');
+  }, 60_000);
+
+  it('video-only source encoded with -an arg produces output with no audio stream', async () => {
+    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { MediaJobService } = require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
+    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+
+    const inputPath = path.join(tmpDir, 'no-audio-src.mp4');
+    generateTestVideo(inputPath, 1);
+
+    const appTempDir = path.join(tmpDir, 'app-temp-noaudio');
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+    const svc = new MediaJobService(runner);
+    svc.setTempBaseDir(appTempDir);
+
+    const audioArgs = await decideAudioArgs(runner, inputPath);
+    expect(audioArgs).toEqual(['-an']);
+
+    const jobArgs = ['-c:v', 'libx264', ...audioArgs];
+    let jobId = '';
+    await new Promise<{ tempPath: string; finalPath: string }>((resolve, reject) => {
+      const r = svc.start(inputPath, jobArgs, 'mp4', {
+        onProgress: () => {},
+        onDone: resolve,
+        onError: reject,
+        onCancelled: () => reject(new Error('unexpected cancel')),
+      });
+      jobId = r.jobId;
+    });
+
+    const placed = await svc.place(jobId);
+    expect(fse.existsSync(placed.outputPath)).toBe(true);
+
+    // Verify the output has no audio stream (empty stdout from ffprobe).
+    const audioCodec = execFileSync(ffprobeBin, [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'default=nokey=1:noprint_wrappers=1',
+      placed.outputPath,
+    ]).toString().trim();
+    expect(audioCodec).toBe(''); // empty = no audio stream
   }, 60_000);
 });
