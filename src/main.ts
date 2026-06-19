@@ -34,7 +34,11 @@ import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subt
 // ---------------------------------------------------------------------------
 const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string }> = {
   'reencode-x264': {
-    args: ['-c:a', 'copy', '-c:v', 'libx264'],
+    // Despite the legacy "x264" name, this re-encodes video with NVIDIA NVENC (H.264)
+    // using the same high-quality settings as Subtract Clip: -preset p7 (slowest/best),
+    // -tune hq, constant-quality -cq 21. Requires an NVIDIA GPU + NVENC-enabled ffmpeg;
+    // there is no software fallback — the job fails loudly if NVENC is unavailable.
+    args: ['-c:a', 'copy', '-c:v', 'h264_nvenc', '-preset', 'p7', '-tune', 'hq', '-cq', '21'],
     outputExt: 'mp4',
   },
   'normalize-audio': {
