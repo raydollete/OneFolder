@@ -1,19 +1,20 @@
 ---
 title: Compress & Normalize Audio Feature
 author: @rjdollete
-last_updated: 2026-06-13
+last_updated: 2026-06-22
 scope: feature
 ---
 
 # Compress & Normalize Audio Feature
 
 The "Compress & Normalize Audio" tool appears in the inspector **Tools** section
-whenever a video file is open in SlideMode.  Clicking it passes the video stream
-through untouched and re-encodes only the audio with an ffmpeg filtergraph that
-first dynamic-range-compresses the audio (`acompressor`) and then loudness-
-normalizes it to EBU R128 targets (`loudnorm`), producing a corrected MP4 beside
-the source.  Like Re-encode (x264), it copies all source tags to the output,
-auto-opens the result, and offers to delete the original.
+whenever a video file is open in SlideMode.  Clicking it enqueues a job that
+passes the video stream through untouched and re-encodes only the audio with an
+ffmpeg filtergraph that first dynamic-range-compresses the audio (`acompressor`)
+and then loudness-normalizes it to EBU R128 targets (`loudnorm`), producing a
+corrected MP4 beside the source.  Like Re-encode (x264), it copies all source
+tags to the output and adds a row to the media queue drawer where the user can
+review and keep the result.
 
 ---
 
@@ -22,36 +23,37 @@ auto-opens the result, and offers to delete the original.
 1. Open a video in SlideMode. The inspector Tools section shows an enabled
    **Compress & Normalize Audio** button (alongside the **Re-encode (x264)**
    button).
-2. Click the button. The UI lock engages — arrow keys, Space, Delete, and all
-   view-method shortcuts are inert for the duration of the job. A spinner with
-   the label **"Compressing & normalizing audio… N%"** (or just "Compressing &
-   normalizing audio…" when duration probing fails) replaces the button.
-3. The ffmpeg process starts. A **Cancel** button is shown; clicking it kills
-   ffmpeg, removes any partial output, and releases the lock.
+2. Click the button. The job is enqueued and the button returns immediately.
+   The media queue drawer at the bottom of the window auto-opens (if not already
+   open) with the new row showing status `Queued`.  Navigation, tagging, and all
+   other input remain fully available.
+3. When the queue is idle the job starts: the drawer row updates to
+   **"Compressing & normalizing audio… N%"** (or "Compressing & normalizing
+   audio…" when duration probing fails).  A **Cancel** button is shown in the
+   row; clicking it kills ffmpeg, removes any partial output, and removes the row.
 4. On completion:
    - The output `.mp4` lands beside the source with an auto-incremented name
      (`video.mp4`, `video 1.mp4`, `video 2.mp4` …).
    - All source tags (DB + EXIF/XMP HierarchicalSubject / Subject / Keywords)
-     are copied to the output before it is shown.
-   - The output auto-opens in the viewer (it becomes the selected file in
-     SlideMode).
-   - A post-job **"Keep which version?"** modal appears with three choices:
-     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
-       permanently deletes it if the volume has no Recycle Bin) and keeps the new
-       file open.
-     - **Keep Original** — moves the NEW file to the Recycle Bin and switches the
-       viewer back to the original.
-     - **Keep Both** — keeps both files; the new file stays open.
-5. The UI lock releases when the job finishes (success, failure, or cancel).
+     are copied to the output.
+   - The drawer row transitions to `Completed`: the status becomes a
+     **`View Completed`** control (clicking it opens the new file in the viewer);
+     actions become three Keep buttons:
+     - **Keep New** — moves the original to the Recycle Bin (or permanently
+       deletes it if the volume has no Recycle Bin) and removes the row.
+     - **Keep Original** — moves the new file to the Recycle Bin and removes
+       the row.
+     - **Keep Both** — keeps both files and removes the row.
+   - The viewer is not moved by the job; the user chooses when (and whether)
+     to open the result via `View Completed`.
+5. If the job fails, the drawer row shows `Failed` (clicking the status reveals
+   the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
 **Tool scope:** the button is shown only for files where
 `isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
 `ogg` (the three formats the HTML5 `<video>` player can render in SlideMode).
 For any other file type the Tools section shows the neutral caption "No tools
 available for this file type."
-
-Both the Compress & Normalize Audio and Re-encode (x264) buttons are disabled
-while `uiStore.isMediaProcessing` is true — they cannot run concurrently.
 
 ---
 
@@ -129,10 +131,9 @@ sources whose video codec cannot be muxed into MP4**:
 | `.ogg` | Theora | **No** |
 
 When the codec is not muxable, ffmpeg exits non-zero.  The existing error path
-surfaces this honestly: partial output is deleted, the UI lock is released, and
-an error toast appears containing the tail of ffmpeg's stderr (which will
-include the container/codec mismatch message).  The source file is always left
-untouched.
+surfaces this honestly: partial output is deleted, and the queue drawer row
+shows `Failed` with the ffmpeg stderr tail (which will include the
+container/codec mismatch message).  The source file is always left untouched.
 
 This is tracked as INV-020 open question 1.  If webm or ogg sources prove
 relevant in practice, the output-extension decision should be revisited in
@@ -153,7 +154,7 @@ renderer is the **sole ingester**: it creates the library row deterministically 
 the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
 is no watcher race and no untagged-row window — eliminating the intermittent
 "outside a watched folder" error and untagged imports. This staging logic is shared
-uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip.
+uniformly by all media tools.
 
 ## Output Path Computation
 
@@ -180,7 +181,7 @@ stack built by INV-018 and parameterized by TASK-085.  The reused layers are:
 ### Main-Process Job Runner (FfmpegRunner + MediaJobService)
 
 `src/media/MediaJobService.ts` (which runs ffmpeg via `src/media/FfmpegRunner.ts`)
-is shared by all three tools via the parameterized signature:
+is shared by all tools via the parameterized signature:
 
 ```typescript
 mediaJobService.start(inputPath, jobArgs, outputExt, callbacks)
@@ -232,33 +233,20 @@ ffmpeg error message (stderr tail) on ffmpeg failure.
 
 ### Post-Encode Finalization
 
-After a successful job, the renderer calls
-`fileStore.finalizeEncodedOutput(source, outputPath)`, which runs the corrected
-INV-019 post-encode order (see [reencode-x264.md](reencode-x264.md) for the
-detailed description of each step).  Both tools share this helper exactly.
+After a successful job, `MediaQueueStore.runItem` calls
+`fileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath }, { focusViewer: false })`,
+which runs the corrected INV-019 post-encode order (see [reencode-x264.md](reencode-x264.md)
+for the detailed description of each step).  All tools share this helper exactly.
+The `focusViewer: false` option means the viewer is not moved on completion; the
+`View Completed` control in the drawer row opens the output on demand.
 
-### Delete-Original Prompt
+### Queue Store and Keep Actions
 
-`DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is a
-modal driven by `uiStore.deleteOriginalAfterJobFile`.  It is shared by both
-tools:
-
-```typescript
-uiStore.openDeleteOriginalPrompt(file)   // opens the modal for `file`
-uiStore.closeDeleteOriginalPrompt()      // closes it
-```
-
-The prompt reuses the same Recycle-Bin trash flow as the regular delete:
-release media handles → `checkRecyclable` → `trashFile` /
-`deleteFilePermanently` → `fileStore.deleteFiles`.
-
-### Button and Orchestration
-
-`ImageTools.tsx` renders the video-gated buttons and tracks which job is
-active via a `activeJob: MediaJobType | null` state variable.  Both buttons are
-disabled while `uiStore.isMediaProcessing` is true.  The shared `runMediaJob`
-helper accepts a `MediaJobType` and runs the full orchestrated flow for either
-tool.
+`ImageTools.tsx` calls `mediaQueueStore.enqueue(file, 'normalize-audio')` and
+returns immediately.  `MediaQueueStore` handles the full lifecycle: enqueue →
+processNext → runItem → Completed / Failed row.  Keep actions in the drawer
+(Keep New / Keep Original / Keep Both) invoke the shared recyclable-check trash
+helper as needed.
 
 ---
 
@@ -266,12 +254,13 @@ tool.
 
 | Scenario | Behavior |
 |---|---|
-| ffmpeg exits non-zero (including codec/container mismatch) | Lock released; partial output deleted; error toast with stderr tail; no delete prompt |
-| User cancels | ffmpeg killed; partial output deleted; lock released; quiet cancel toast ("Compress & normalize audio cancelled.") |
+| ffmpeg exits non-zero (including codec/container mismatch) | Partial output deleted; queue row shows `Failed` with stderr tail |
+| User cancels (Queued) | Row removed immediately; no ffmpeg started |
+| User cancels (Running) | ffmpeg killed; partial output deleted; row removed; quiet cancel toast ("Compress & normalize audio cancelled.") |
 | App quits mid-job | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
-| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; fallback clears filter and retries; honest toast if still absent — never asserts "outside a watched folder" as the sole cause |
-| Source already deleted | Defensive guard in `DeleteOriginalAfterJob`; `handleConfirm` no-ops if `source === null` |
-| ffprobe duration probe fails | Job proceeds; spinner runs in indeterminate mode (no percent shown) |
+| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; honest error row if still absent — source untouched |
+| Source already deleted before Keep action | Defensive guard in the Keep handler; no-ops if `source` is null |
+| ffprobe duration probe fails | Job proceeds; drawer row runs in indeterminate mode (no percent shown) |
 
 ---
 
@@ -280,10 +269,11 @@ tool.
 - [Creating Inspector Tools](TOOLS.md) — media-job layer stack, order of
   operations, rules, and checklist for adding a new tool
 - [Re-encode (x264)](reencode-x264.md) — the companion tool; shares the
-  manager, IPC channels, finalize helper, and delete-original prompt
+  manager, IPC channels, finalize helper, and queue drawer
 - INV-020 — investigation, behavioral spec, open questions (container
   compatibility), and design rejections
+- INV-035 — non-blocking queue drawer; removal of the in-viewer pin + blocking modals
 - TASK-085 — parameterized `ReEncodeManager.start` + `MEDIA_JOB_SPECS` + generalized IPC channels
-- TASK-086 — generalized `DeleteOriginalAfterJob` delete-original prompt
+- TASK-086 — generalized delete-original prompt (now replaced by queue drawer Keep actions)
 - TASK-087 — Normalize Audio button and `runMediaJob` orchestration in `ImageTools.tsx`
 - TASK-088 — this feature doc and the manual QA matrix

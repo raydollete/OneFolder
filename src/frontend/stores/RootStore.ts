@@ -7,6 +7,7 @@ import FileStore from './FileStore';
 import TagStore from './TagStore';
 import UiStore from './UiStore';
 import LocationStore from './LocationStore';
+import MediaQueueStore from './MediaQueueStore';
 import ExifIO from 'common/ExifIO';
 import ImageLoader from '../image/ImageLoader';
 import platform from 'src/frontend/platform';
@@ -39,6 +40,7 @@ class RootStore {
   readonly locationStore: LocationStore;
   readonly uiStore: UiStore;
   readonly searchStore: SearchStore;
+  readonly mediaQueueStore: MediaQueueStore;
   readonly exifTool: ExifIO;
   readonly imageLoader: ImageLoader;
   readonly mediaReleaseCoordinator: MediaReleaseCoordinator;
@@ -57,6 +59,7 @@ class RootStore {
     this.fileStore = new FileStore(backend, this, prefix);
     this.locationStore = new LocationStore(backend, this, prefix);
     this.uiStore = new UiStore(this, prefix);
+    this.mediaQueueStore = new MediaQueueStore(this);
     this.searchStore = new SearchStore(backend, this);
     // Cross-store reactions must be wired only after every store above exists;
     // see FileStore.watchUiPreferences for why this cannot live in its constructor.

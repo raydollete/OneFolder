@@ -1,7 +1,7 @@
 ---
 title: Subtract Clip Feature (Mark Start / Mark End / Subtract Clip)
 author: @rjdollete
-last_updated: 2026-06-18
+last_updated: 2026-06-22
 scope: feature
 ---
 
@@ -17,7 +17,8 @@ together:
 
 The button appears in the inspector **Tools** section, directly below **Create Clip**, for any video
 open in SlideMode. It reuses the same **Mark Start** / **Mark End** fields, the same media-job stack,
-and the same finalize → tag → place → ingest → viewer-pin flow as the other video tools.
+and the same finalize → tag → place → ingest flow as the other video tools.  Like all tools, it adds
+a row to the media queue drawer where the user can review and keep the result.
 
 ---
 
@@ -31,15 +32,20 @@ and the same finalize → tag → place → ingest → viewer-pin flow as the ot
    - start ≥ 1s (the cross-fade is 1s and must fit inside clip A; `offset = start − 1` must be ≥ 0).
    Otherwise it stays disabled (the same "End must be after start." hint as Create Clip covers the
    backwards-range case).
-3. Clicking it engages the shared UI lock, pins the viewer to the source, and shows the shared
-   spinner with the label **"Subtracting clip… N%"** (or "Subtracting clip…" if duration probing
-   fails). A **Cancel** button kills ffmpeg and releases the lock.
-4. On success the output `.mp4` lands beside the source (auto-incremented name), carries all source
-   tags, auto-opens in place, the Mark fields are cleared, and the **"Keep which version?"** prompt
-   appears — identical to the other tools.
+3. Clicking it enqueues the job and returns immediately.  The media queue drawer auto-opens (if not
+   already open) with the new row showing `Queued`.  Navigation, tagging, and all other input remain
+   fully available.
+4. When the queue picks up the job, the drawer row updates to **"Subtracting clip… N%"** (or
+   "Subtracting clip…" if duration probing fails). A **Cancel** button is shown in the row; clicking
+   it kills ffmpeg, removes any partial output, and removes the row.
+5. On success the output `.mp4` lands beside the source (auto-incremented name), carries all source
+   tags, the Mark fields are cleared, and the drawer row transitions to `Completed`: the status
+   becomes a **`View Completed`** control; actions become `[Keep New] [Keep Original] [Keep Both]` —
+   identical to the other tools.
+6. If the job fails, the drawer row shows `Failed` (clicking the status reveals the ffmpeg stderr
+   tail); actions become `[Retry] [Dismiss]`.
 
-All controls are disabled while `uiStore.isMediaProcessing` is true and are shown only for files
-where `isFileExtensionVideo(file.extension)` is true.
+All controls are shown only for files where `isFileExtensionVideo(file.extension)` is true.
 
 ---
 
@@ -91,6 +97,11 @@ renderer-side finalize flow. It is an ordinary single-invocation job whose only 
 per-invocation `-filter_complex` arg array (analogous to how Create Clip supplies per-invocation
 `-ss`/`-to`). See [create-clip.md](create-clip.md) and [TOOLS.md](TOOLS.md) for the shared layers.
 
+`ImageTools.tsx` calls `mediaQueueStore.enqueue(file, 'subtract-clip', { start, end })` and returns
+immediately.  `MediaQueueStore.runItem` calls `finalizeEncodedOutput(..., { focusViewer: false })` on
+success so the viewer is not moved; the `View Completed` control in the drawer row opens the output
+on demand.
+
 ---
 
 ## Known Limitations
@@ -98,21 +109,21 @@ per-invocation `-filter_complex` arg array (analogous to how Create Clip supplie
 ### Sources with no audio stream
 
 The graph references `[0:a]`, so a video with no audio track makes ffmpeg exit non-zero. The
-existing error path handles this honestly: the partial output is deleted, the lock is released, and a
-blocking `MediaJobErrorAlert` modal shows the ffmpeg stderr tail. The source is left untouched.
+existing error path handles this honestly: the partial output is deleted, and the queue drawer row
+shows `Failed` with the ffmpeg stderr tail. The source is left untouched.
 
 ### End within one cross-fade of the true end (clip B too short)
 
 If Mark End is within ~1s of the real end-of-video, clip B is shorter than the cross-fade and ffmpeg
 fails. This is **not** pre-validated in the UI/handler (it would require probing the source
-duration); it surfaces as the same loud error modal. The clip-A side is guarded up front (start ≥ 1s
-disables the button).
+duration); it surfaces as a `Failed` row in the queue drawer. The clip-A side is guarded up front
+(start ≥ 1s disables the button).
 
 ### Progress percent computed against source duration
 
 `MediaJobService` probes the **source** duration for the progress percentage, but the output is
-shorter (the middle was removed), so the bar approaches but does not reach 100% before flipping to
-"Finalizing…". Cosmetic only.
+shorter (the middle was removed), so the bar approaches but does not reach 100% before the row
+transitions to `Completed`. Cosmetic only.
 
 ---
 
@@ -122,3 +133,4 @@ shorter (the middle was removed), so the bar approaches but does not reach 100% 
 - [Creating Inspector Tools](TOOLS.md) — the media-job layer stack and checklist
 - [Re-encode (x264)](reencode-x264.md) / [Normalize Audio](normalize-audio.md) — earlier worked
   examples of the shared stack
+- INV-035 — non-blocking queue drawer; removal of the in-viewer pin + blocking modals

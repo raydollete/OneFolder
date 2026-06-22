@@ -51,7 +51,6 @@ function makeMockRootStore(): any {
     isSlideMode: false,
     hideMissingFilesInBrowsing: false,
     showVideosOnly: false,
-    mediaProcessingFile: null,
     fileSelection,
     thumbnailDirectory: '/tmp/thumbs',
     disableSlideMode: jest.fn(),

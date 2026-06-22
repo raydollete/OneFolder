@@ -10,6 +10,7 @@ import { useAction } from '../hooks/mobx';
 import { comboMatches, getKeyCombo, parseKeyCombo } from '../hotkeyParser';
 import AppToolbar from './AppToolbar';
 import ContentView from './ContentView';
+import MediaQueueDrawer from './MediaQueue';
 import Outliner from './Outliner';
 
 const Main = () => {
@@ -58,8 +59,6 @@ const Main = () => {
       e.preventDefault();
       uiStore.openToolbarTagPopover();
     } else if (matches(hotkeyMap.deleteSelection)) {
-      // openMoveFilesToTrash already guards against media-processing; call it unconditionally
-      // so the guard lives in one place (UiStore.openMoveFilesToTrash).
       uiStore.openMoveFilesToTrash();
     }
   });
@@ -74,6 +73,7 @@ const Main = () => {
             <main id="main" onKeyDown={handleShortcuts}>
               <AppToolbar />
               <ContentView />
+              <MediaQueueDrawer />
             </main>
           }
           axis="vertical"

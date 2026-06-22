@@ -1,16 +1,16 @@
 ---
 title: Re-encode (x264) Feature
 author: @rjdollete
-last_updated: 2026-06-11
+last_updated: 2026-06-22
 scope: feature
 ---
 
 # Re-encode (x264) Feature
 
 The "Re-encode (x264)" tool appears in the inspector **Tools** section whenever
-a video file is open in SlideMode.  Clicking it transcodes the video to an H.264
-MP4 file in place, copies all tags to the output, auto-opens the result, and
-offers to delete the original.
+a video file is open in SlideMode.  Clicking it enqueues a job that transcodes
+the video to an H.264 MP4 file in place, copies all tags to the output, and
+adds a row to the media queue drawer where the user can review and keep the result.
 
 ---
 
@@ -18,28 +18,31 @@ offers to delete the original.
 
 1. Open a video in SlideMode. The inspector Tools section shows an enabled
    **Re-encode (x264)** button.
-2. Click the button. The UI lock engages — arrow keys, Space, Delete, and all
-   view-method shortcuts are inert for the duration of the encode. A spinner
-   with percent progress replaces the button.
-3. The ffmpeg process starts. A **Cancel** button is shown; clicking it kills
-   ffmpeg, removes any partial output, and releases the lock.
+2. Click the button. The job is enqueued and the button returns immediately.
+   The media queue drawer at the bottom of the window auto-opens (if not already
+   open) with the new row showing status `Queued`. Navigation, tagging, and all
+   other input remain fully available.
+3. When the queue is idle the job starts: the drawer row updates to
+   `Processing… N%`. A **Cancel** button is shown in the row; clicking it kills
+   ffmpeg, removes any partial output, and removes the row.
 4. On completion:
    - The output `.mp4` lands beside the source with an auto-incremented name
      (`video.mp4`, `video 1.mp4`, `video 2.mp4` …).
    - All source tags (DB + EXIF/XMP HierarchicalSubject / Subject / Keywords)
      are copied to the output.
-   - The viewer swaps to the output **in place** (INV-021): the source stays on
-     screen in SlideMode through finalization — with a "Finalizing…" indicator
-     covering the stabilization/ingest gap — then the output becomes the selected
-     file without ever returning to the thumbnail grid.
-   - A post-job **"Keep which version?"** modal appears with three choices:
-     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
-       permanently deletes it if the volume has no Recycle Bin, per INV-014
-       handling) and keeps the new file open.
-     - **Keep Original** — moves the NEW file to the Recycle Bin and switches the
-       viewer back to the original.
-     - **Keep Both** — keeps both files; the new file stays open.
-5. The UI lock releases when the encode finishes (success, failure, or cancel).
+   - The drawer row transitions to `Completed`: the status becomes a
+     **`View Completed`** control (clicking it opens the new file in the viewer);
+     actions become three Keep buttons:
+     - **Keep New** — moves the original to the Recycle Bin (or permanently
+       deletes it if the volume has no Recycle Bin, per INV-014 handling) and
+       removes the row.
+     - **Keep Original** — moves the new file to the Recycle Bin and removes
+       the row.
+     - **Keep Both** — keeps both files and removes the row.
+   - The viewer is not moved by the encode; the user chooses when (and whether)
+     to open the result via `View Completed`.
+5. If the encode fails, the drawer row shows `Failed` (clicking the status
+   reveals the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
 **Tool scope:** the button is shown only for files where
 `isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
@@ -98,7 +101,8 @@ stream=codec_name`).  The probe result drives a deterministic decision:
    (transparent re-encode; previously caused a silent mux failure).
 3. **No audio stream** → `-an` (output has no audio; must NOT error).
 4. **Probe failure on a file that should have audio** → the handler throws, the promise
-   rejects, and `MediaJobErrorAlert` is shown.  No silent "assume compatible" fallback.
+   rejects, and the queue row shows a `Failed` status with the probe error.  No silent
+   "assume compatible" fallback.
 
 This decision is **deterministic and up-front** (probe once, decide, encode once) and is
 shared with `rotate-cw` and `rotate-ccw` via the `decideAudioArgs` helper in
@@ -129,7 +133,7 @@ renderer is the **sole ingester**: it creates the library row deterministically 
 the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
 is no watcher race and no untagged-row window — eliminating the intermittent
 "outside a watched folder" error and untagged imports. This staging logic is shared
-uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip.
+uniformly by all media tools.
 
 ## Output Path Computation
 
@@ -190,7 +194,8 @@ The runner is split into two single-responsibility layers:
     single `fse.move`.
   - `cancel(jobId)` — aborts the ffmpeg child (`taskkill /F /PID` on Windows,
     `SIGKILL` elsewhere) and removes the staged partial.
-  - `killAll()` — called from `app.on('before-quit')`; cancels every live job.
+  - `killAll()` — called from `app.on('before-quit')`; cancels every live job and
+    removes their staged partials.
 
 A job registry (`Map<jobId, …>`) lets the IPC handlers reference jobs.  Progress
 events are throttled to a minimum of 200 ms between emissions.
@@ -220,28 +225,28 @@ ffmpeg error message (stderr tail) on failure.
 
 ---
 
-## Media-Job Lock
+## Media Queue Store
 
-`UiStore` exposes a media-processing lock used to freeze navigation and
-destructive actions during an encode:
+`MediaQueueStore` (in `src/frontend/stores/MediaQueueStore.ts`) owns the queue
+and serializes execution.  When a tool button is clicked, `ImageTools.tsx` calls:
 
 ```typescript
-uiStore.beginMediaProcessing(filePath)  // acquire
-uiStore.endMediaProcessing()            // release (idempotent)
-uiStore.isMediaProcessing               // computed boolean
+mediaQueueStore.enqueue(file, 'reencode-x264')
 ```
 
-When `isMediaProcessing` is true:
+This adds a `QueueItem` to the FIFO list and returns immediately.  The store's
+`processNext` method runs one job at a time — when the running slot is free it
+picks the oldest `Queued` item and calls the appropriate IPC channel.  Progress
+updates flow back to the item via a subscription and are shown as `Processing… N%`
+in the drawer row.
 
-- `processGlobalShortCuts` swallows navigation (view-method switch, viewSlide)
-  and delete shortcuts.
-- `SlideMode/index.tsx`'s arrow-key and Space handlers are inert.
-- `UiStore.openMoveFilesToTrash()` returns immediately without opening the
-  dialog.
+On success `runItem` calls `finalizeEncodedOutput(..., { focusViewer: false })`
+and then marks the item `Completed` — the viewer is not moved.  On failure the
+item is marked `Failed` with the error detail stored for on-click reveal.
 
-The orchestration in `ImageTools.tsx` always wraps the encode in `try/finally`
-so `endMediaProcessing()` is called even on failure or cancel, preventing a
-lock-leak.
+The queue is **session-only** (in-memory).  On quit, `MediaJobService.killAll`
+(called from `before-quit`) cancels all pending/running jobs; committed outputs
+that were already placed on disk remain there unchanged.
 
 ---
 
@@ -259,13 +264,12 @@ there is no race and no partial/untagged-row window.
 
 ---
 
-## Post-Media-Job Finalization (Placement, Ingestion, Seamless Swap)
+## Post-Media-Job Finalization (Placement and Ingestion)
 
-After ffmpeg finishes, the renderer calls
-`fileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath })`. Every
-step is awaited and every failure throws a LOUD error that the caller surfaces as a
-blocking modal (`showMediaJobError`) while keeping the source on screen — there are
-no silent fallbacks:
+After ffmpeg finishes, `MediaQueueStore.runItem` calls
+`fileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath }, { focusViewer: false })`.
+Every step is awaited and every failure throws a LOUD error that the store records
+as a `Failed` row — there are no silent fallbacks:
 
 1. **Tag the temp file** (`tagTempFile`) — write the source's tags to the staged
    temp file (EXIF/XMP) exactly once. Zero-tag sources skip the write.
@@ -276,51 +280,29 @@ no silent fallbacks:
    library row itself and sets the source's tag ids on it. Because the watcher is
    suppressed for this path, the renderer is the **sole ingester**: exactly one row,
    already tagged, no race.
-4. **Refetch + resolve** — `refetch()` then `resolveOutputClientFile` anchors
-   `uiStore.firstItem` to the output by identity (preferring the grid's instance, or
-   injecting it if the active filter excludes it), so the viewer swaps source →
-   output **in place** without ever returning to the grid. SlideMode stays mounted
-   throughout (the source is pinned by identity until the swap).
+4. **Refetch** — `refetch()` updates the view. Because `focusViewer` is `false`, the
+   output `ClientFile` is resolved but the viewer is not moved. The `View Completed`
+   control in the drawer row lets the user open the output on demand.
 5. **Release suppression** in a `finally` — by now the row exists, so a late watcher
    `add()` for the path dedups by inode in `addFile`.
 
-### "Finalizing…" Inspector Phase
-
-ffmpeg exit (`startMediaJob` resolving) is followed by a short gap — tag temp →
-place → ingest → refetch — before the output opens. `runMediaJob` sets an
-`isFinalizing` flag the instant `startMediaJob` resolves (and the progress
-subscription is torn down) and clears it after `finalizeEncodedOutput` returns (and
-defensively in the `finally`). While `isFinalizing` is true the `reencode-progress`
-spinner shows an indeterminate **"Finalizing…"** label (parameterized so every tool
-reuses it) and the **Cancel** button is hidden (ffmpeg is already done). The
-media-processing lock is held throughout and released exactly once in the
-`runMediaJob` `finally`.
-
 ---
 
-## Delete-Original Prompt
+## Keep Actions (Queue Drawer)
 
-`DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is
-driven by `uiStore.deleteOriginalAfterJobFile`.  It is rendered **non-modally**
-(`modal={false}` on its `Alert`) so the SlideMode `<video>` behind it stays fully
-interactive: the user can scrub the seek bar, click play/pause, and watch the
-duration / current-time update while deciding which version to keep (INV-031).
-The prompt is anchored to the top of the viewer so it does not cover the video's
-native control bar at the bottom edge.
+After completion, the drawer row offers three Keep actions that route deletions
+through the shared recyclable-check trash flow (extracted from the old
+`DeleteOriginalAfterJob` component, now a shared helper):
 
-It reuses the same trash flow as `MoveFilesToTrashBin` and is shared by all tools
-that produce a derived output (Re-encode, Compress & Normalize Audio, etc.) — INV-020 / TASK-086:
-
-1. `mediaReleaseCoordinator.releasePaths([source.absolutePath])` — release any
-   open `<video>` element handles (INV-008).
-2. `RendererMessenger.checkRecyclable([source.absolutePath])` — determine
-   whether the drive supports the Recycle Bin.
+1. `mediaReleaseCoordinator.releasePaths([path])` — release any open `<video>`
+   element handles (INV-008).
+2. `RendererMessenger.checkRecyclable([path])` — determine whether the drive
+   supports the Recycle Bin.
 3. `RendererMessenger.trashFile` or `RendererMessenger.deleteFilePermanently`
    depending on recyclability.
-4. `fileStore.deleteFiles([source])` — in-place splice, no refetch (INV-015).
+4. `fileStore.deleteFiles([file])` — in-place splice, no refetch (INV-015).
 
-The component is mounted in `ContentView/index.tsx` alongside
-`MoveFilesToTrashBin` so it participates in the same modal layer.
+The row is removed from the queue regardless of which Keep action is chosen.
 
 ---
 
@@ -328,12 +310,13 @@ The component is mounted in `ContentView/index.tsx` alongside
 
 | Scenario | Behavior |
 |---|---|
-| ffmpeg exits non-zero | Lock released; staged partial deleted; blocking error modal with stderr tail; no delete prompt |
-| User cancels | ffmpeg aborted (`AbortSignal`); staged partial deleted; lock released; quiet cancel toast |
+| ffmpeg exits non-zero | Staged partial deleted; queue row shows `Failed` with stderr tail; no Keep actions |
+| User cancels (Queued) | Row removed immediately; no ffmpeg started |
+| User cancels (Running) | ffmpeg aborted (`AbortSignal`); staged partial deleted; row removed; quiet cancel toast |
 | App quits mid-encode | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
-| Place or ingest fails | `finalizeEncodedOutput` throws; watcher suppression released in `finally`; source kept on screen behind a blocking error modal (`showMediaJobError`); no delete prompt; lock released |
-| Source already deleted | `handleConfirm` no-ops if `source === null`; defensive guard in `DeleteOriginalAfterJob` |
-| ffprobe duration probe fails | Encode proceeds; spinner runs in indeterminate mode |
+| Place or ingest fails | `finalizeEncodedOutput` throws; watcher suppression released in `finally`; queue row shows `Failed`; source left on disk untouched |
+| Source already deleted before Keep action | Defensive guard in the Keep handler; no-ops if `source` is null |
+| ffprobe duration probe fails | Encode proceeds; drawer row runs in indeterminate mode (no percent shown) |
 
 ---
 
@@ -359,9 +342,10 @@ distribution.  This mirrors the `brave.exe` rename caveat in
 - [Personal Fork Notes](personal-fork-notes.md) — second bundled binary
   (`resources/ffmpeg/`) and GPL licensing deviation
 - INV-018 — investigation and full behavioral specification
+- INV-035 — non-blocking queue drawer; removal of the in-viewer pin + blocking modals
 - TASK-074 — ffmpeg bundling and `getFfmpegPath`/`getFfprobePath`
 - TASK-075 — `ReEncodeManager` and `getUniqueSiblingPath`
 - TASK-076 — IPC channels (`START_REENCODE`, `REENCODE_PROGRESS`, `CANCEL_REENCODE`)
 - TASK-077 — UI lock, `waitForIngestedFile`, `copyTagsToFile`
 - TASK-078 — `ImageTools.tsx` orchestration
-- TASK-079 — `DeleteOriginalAfterJob` modal (originally `ReEncodeDeleteOriginal`; generalized by TASK-086)
+- TASK-079 — delete-original prompt (originally `ReEncodeDeleteOriginal`; generalized by TASK-086; replaced by queue drawer Keep actions in INV-035)

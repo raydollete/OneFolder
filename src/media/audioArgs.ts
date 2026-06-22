@@ -32,7 +32,7 @@ import { FfmpegRunner, AudioProbeResult } from './FfmpegRunner';
  * -cq 21            Constant-quality target (lower = better; 21 is visually transparent).
  *
  * There is NO software fallback — if NVENC is unavailable the ffmpeg invocation exits non-zero
- * and the job surfaces a loud error via MediaJobErrorAlert.
+ * and the job surfaces a Failed row in the media queue drawer.
  *
  * Referenced by: reencode-x264 (src/main.ts), subtract-clip (src/media/subtractClip.ts),
  * rotate-cw and rotate-ccw (src/main.ts). Any future encoder change belongs here alone.
@@ -76,7 +76,7 @@ export const MP4_LEGAL_AUDIO_CODECS: ReadonlySet<string> = new Set([
  * - Present but non-MP4-legal codec → ['-c:a', 'aac', '-b:a', '192k']  (transparent re-encode)
  * - No audio stream  → ['-an']                     (drop audio mapping; must NOT error)
  * - Probe failure    → throws (loud abort; the caller rejects the media-job promise so the
- *                      renderer shows MediaJobErrorAlert — consistent with fail-loud)
+ *                      renderer shows a Failed row in the media queue drawer — consistent with fail-loud)
  *
  * Pure (no side-effects, no spawning) so it can be unit-tested without ffprobe.
  *

@@ -75,7 +75,6 @@ function makeMinimalStore(images: any[]): any {
   const uiStore: any = observable({
     firstItem: 0,
     isSlideMode: false,
-    mediaProcessingFile: null,
     fileSelection,
     get fileSelectionSize() {
       return fileSelection.size;

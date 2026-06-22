@@ -26,6 +26,9 @@ target/
 
 # Electron userData runtime state (cache, leveldb, GPU caches, etc.)
 data/
+# ...but src/frontend/data/ is source code (shared data modules), not runtime state.
+!src/frontend/data/
+!src/frontend/data/**
 
 # Scratch/agent task output files
 task*-stdout.txt

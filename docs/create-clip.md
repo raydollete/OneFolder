@@ -1,7 +1,7 @@
 ---
 title: Create Clip Feature (Mark Start / Mark End / Create Clip)
 author: @rjdollete
-last_updated: 2026-06-13
+last_updated: 2026-06-22
 scope: feature
 ---
 
@@ -11,9 +11,10 @@ The **Mark Start**, **Mark End**, and **Create Clip** tools appear in the
 inspector **Tools** section whenever a video file is open in SlideMode, alongside
 Re-encode (x264) and Normalize Audio.  Clicking Mark Start or Mark End captures
 the live playback position into an editable `HH:MM:SS` field; clicking Create
-Clip runs a lossless stream-copy trim (`-c copy`, no re-encode) and produces an
-`.mp4` clip beside the source.  Like the other video tools, it copies all source
-tags to the output, auto-opens the result, and offers to delete the original.
+Clip enqueues a lossless stream-copy trim (`-c copy`, no re-encode) that produces
+an `.mp4` clip beside the source.  Like the other video tools, it copies all source
+tags to the output and adds a row to the media queue drawer where the user can
+review and keep the result.
 
 ---
 
@@ -53,38 +54,39 @@ tags to the output, auto-opens the result, and offers to delete the original.
    - Either present field malformed (`1:2:3`, `99:99:99`, `aa:bb:cc`): **disabled**.
    - Both empty: **disabled**.
 
-4. **Create Clip clicked.** The UI lock engages (`beginMediaProcessing`) — arrow
-   keys, Space, Delete, and all view-method shortcuts are inert for the duration.
-   The existing spinner block (shared with Re-encode and Normalize Audio) shows,
-   with the label **"Creating clip… N%"** (or just "Creating clip…" if duration
-   probing fails).
+4. **Create Clip clicked.** The job is enqueued and the button returns immediately.
+   The media queue drawer at the bottom of the window auto-opens (if not already
+   open) with the new row showing status `Queued`.  Navigation, tagging, and all
+   other input remain fully available.
 
 5. The main process re-validates the `HH:MM:SS` strings and the start < end
-   constraint (defense in depth), then spawns ffmpeg.  A **Cancel** button is
-   shown while ffmpeg is running; clicking it kills ffmpeg, removes any partial
-   output, and releases the lock.
+   constraint (defense in depth), then spawns ffmpeg when the queue picks up the
+   job.  A **Cancel** button is shown in the Running row; clicking it kills ffmpeg,
+   removes any partial output, and removes the row.  The drawer row shows
+   **"Creating clip… N%"** (or just "Creating clip…" if duration probing fails).
 
 6. On completion:
    - The output `.mp4` lands beside the source with an auto-incremented name
      (`video.mp4`, `video 1.mp4`, `video 2.mp4` …).
    - All source tags (DB + EXIF/XMP HierarchicalSubject / Subject / Keywords)
-     are copied to the output before it is shown.
-   - The output auto-opens in the viewer (it becomes the selected file in
-     SlideMode).
+     are copied to the output.
    - The **Start** and **End** fields are cleared, ready for the next clip.
-   - A post-job **"Keep which version?"** modal appears with three choices:
-     - **Keep Modified** (default) — moves the original to the Recycle Bin (or
-       permanently deletes it if the volume has no Recycle Bin) and keeps the new
-       clip open.
-     - **Keep Original** — moves the NEW clip to the Recycle Bin and switches the
-       viewer back to the original.
-     - **Keep Both** — keeps both files; the new clip stays open.
-7. The UI lock releases when the job finishes (success, failure, or cancel).
+   - The drawer row transitions to `Completed`: the status becomes a
+     **`View Completed`** control (clicking it opens the clip in the viewer);
+     actions become three Keep buttons:
+     - **Keep New** — moves the original to the Recycle Bin (or permanently
+       deletes it if the volume has no Recycle Bin) and removes the row.
+     - **Keep Original** — moves the new clip to the Recycle Bin and removes
+       the row.
+     - **Keep Both** — keeps both files and removes the row.
+   - The viewer is not moved by the job; the user chooses when (and whether)
+     to open the result via `View Completed`.
+7. If the job fails, the drawer row shows `Failed` (clicking the status reveals
+   the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
 **Tool scope:** all three controls are shown only for files where
 `isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
 `ogg` (the three formats the HTML5 `<video>` player renders in SlideMode).
-All video tools are disabled while `uiStore.isMediaProcessing` is true.
 
 ---
 
@@ -172,9 +174,9 @@ source codec cannot be muxed into MP4:
 | `.ogg` | Theora | No |
 
 When the codec is not muxable, ffmpeg exits non-zero.  The existing error path
-handles this honestly: the partial output is deleted, the UI lock is released,
-and an error toast appears containing the tail of ffmpeg's stderr (which will
-include the container/codec mismatch message).  **The source file is always left
+handles this honestly: the partial output is deleted, and the queue drawer row
+shows `Failed` with the ffmpeg stderr tail (which will include the
+container/codec mismatch message).  **The source file is always left
 untouched.**  This is expected behavior, not a bug.
 
 ---
@@ -192,9 +194,8 @@ renderer is the **sole ingester**: it creates the library row deterministically 
 the source's tags (`LocationStore.ingestFile`), then releases the suppression. There
 is no watcher race and no untagged-row window — eliminating the intermittent
 "outside a watched folder" error and untagged imports. This staging logic is shared
-uniformly by Re-encode (x264), Compress & Normalize Audio, and Create Clip; the
-`-ss`/`-to` pre-input args for Create Clip are orthogonal to output placement and
-are unaffected by this change.
+uniformly by all media tools; the `-ss`/`-to` pre-input args for Create Clip are
+orthogonal to output placement and are unaffected by this change.
 
 ## Output Path Computation
 
@@ -243,7 +244,7 @@ runner now accepts `preInputArgs` for arguments that must precede `-i`.
 ### Main-Process Job Runner (FfmpegRunner + MediaJobService)
 
 `src/media/MediaJobService.ts` (which runs ffmpeg via `src/media/FfmpegRunner.ts`)
-is shared by all three tools via the parameterized signature:
+is shared by all tools via the parameterized signature:
 
 ```typescript
 mediaJobService.start(inputPath, jobArgs, outputExt, callbacks, preInputArgs?)
@@ -293,45 +294,20 @@ ffmpeg error message (stderr tail) on ffmpeg failure.
 
 ### Post-Encode Finalization
 
-After a successful job, the renderer calls
-`fileStore.finalizeEncodedOutput(source, outputPath)`, which runs the corrected
-INV-019 post-encode order (see [reencode-x264.md](reencode-x264.md) for the
-detailed description of each step).  All three video tools share this helper
-exactly.
+After a successful job, `MediaQueueStore.runItem` calls
+`fileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath }, { focusViewer: false })`,
+which runs the corrected INV-019 post-encode order (see [reencode-x264.md](reencode-x264.md)
+for the detailed description of each step).  All tools share this helper exactly.
+The `focusViewer: false` option means the viewer is not moved on completion.
 
-### Delete-Original Prompt
+### Queue Store and Orchestration
 
-`DeleteOriginalAfterJob` (in `src/frontend/components/RemovalAlert.tsx`) is a
-modal driven by `uiStore.deleteOriginalAfterJobFile`.  It is shared by all three
-tools:
-
-```typescript
-uiStore.openDeleteOriginalPrompt(file)   // opens the modal for `file`
-uiStore.closeDeleteOriginalPrompt()      // closes it
-```
-
-The prompt reuses the same Recycle-Bin trash flow as the regular delete:
-release media handles → `checkRecyclable` → `trashFile` /
-`deleteFilePermanently` → `fileStore.deleteFiles`.
-
-### Button and Orchestration
-
-`ImageTools.tsx` renders all video-gated controls.  While a job is active, the
-spinner block (shared across all three tools) replaces all buttons.  The shared
-`runMediaJob` helper accepts an optional `clip: { start?, end? }` argument and
-runs the full orchestrated flow:
-
-```
-beginMediaProcessing →
-startMediaJob('create-clip', path, { start?, end? }) →
-finalizeEncodedOutput →
-openDeleteOriginalPrompt →
-finally: endMediaProcessing
-```
-
-On success, after `finalizeEncodedOutput` returns, the Start and End fields are
-cleared (reset to `''`) so they are ready for the next clip.  On failure or
-cancel, the fields are left unchanged so the user can retry with the same values.
+`ImageTools.tsx` calls `mediaQueueStore.enqueue(file, 'create-clip', { start?, end? })`
+with only the filled fields and returns immediately.  The Start and End fields are
+cleared after the job completes (on success) or left unchanged (on failure or cancel)
+so the user can retry with the same values.  `MediaQueueStore` handles the full
+lifecycle: enqueue → processNext → runItem → Completed / Failed row.  Keep actions
+in the drawer invoke the shared recyclable-check trash helper as needed.
 
 ---
 
@@ -339,14 +315,15 @@ cancel, the fields are left unchanged so the user can retry with the same values
 
 | Scenario | Behavior |
 |---|---|
-| ffmpeg exits non-zero (including codec/container mismatch) | Lock released; partial output deleted; error toast with stderr tail ("Create clip failed: …"); no delete prompt; Start/End fields unchanged |
-| User cancels | ffmpeg killed; partial output deleted; lock released; neutral toast ("Create clip cancelled."); Start/End fields unchanged |
+| ffmpeg exits non-zero (including codec/container mismatch) | Partial output deleted; queue row shows `Failed` with stderr tail; Start/End fields unchanged |
+| User cancels (Queued) | Row removed immediately; no ffmpeg started; Start/End fields unchanged |
+| User cancels (Running) | ffmpeg killed; partial output deleted; row removed; neutral toast ("Create clip cancelled."); Start/End fields unchanged |
 | App quits mid-job | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
-| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; SlideMode-safe fallback resolves the output by absolute path and swaps to it in place; if DB row genuinely absent: source kept on screen + honest toast (never asserts "outside a watched folder" as the sole cause — docs/TOOLS.md rule 4); lock released |
-| Source already deleted | Defensive guard in `DeleteOriginalAfterJob`; `handleConfirm` no-ops if `source === null` |
-| ffprobe duration probe fails | Job proceeds; spinner runs in indeterminate mode ("Creating clip…", no percent shown) |
-| Invalid time strings reach main | Main re-validates and rejects with a clear error toast; source untouched |
-| start ≥ end reaches main | Main rejects with a clear error toast; source untouched |
+| Output not visible after wait | Tags already copied (DB + EXIF/XMP) before the wait; SlideMode-safe fallback resolves the output by absolute path; if DB row genuinely absent: honest error row (never asserts "outside a watched folder" as the sole cause — docs/TOOLS.md rule 4) |
+| Source already deleted before Keep action | Defensive guard in the Keep handler; no-ops if `source` is null |
+| ffprobe duration probe fails | Job proceeds; drawer row runs in indeterminate mode ("Creating clip…", no percent shown) |
+| Invalid time strings reach main | Main re-validates and rejects with a clear error row; source untouched |
+| start ≥ end reaches main | Main rejects with a clear error row; source untouched |
 
 ---
 
@@ -355,10 +332,11 @@ cancel, the fields are left unchanged so the user can retry with the same values
 - [Creating Inspector Tools](TOOLS.md) — media-job layer stack, order of
   operations, rules, and checklist for adding a new tool
 - [Re-encode (x264)](reencode-x264.md) — the primary worked example; shares the
-  manager, IPC channels, finalize helper, and delete-original prompt
+  manager, IPC channels, finalize helper, and queue drawer
 - [Normalize Audio](normalize-audio.md) — the second worked example; confirms
   layers 3–6 are reusable without modification
 - INV-022 — investigation, behavioral spec, explicit rejections, and risks
+- INV-035 — non-blocking queue drawer; removal of the in-viewer pin + blocking modals
 - TASK-093 — backend: `preInputArgs` widening + `create-clip` job type + validated IPC
 - TASK-094 — frontend: Mark Start / Mark End / Create Clip UI + orchestration in `ImageTools.tsx`
 - TASK-095 — this feature doc and the manual QA matrix

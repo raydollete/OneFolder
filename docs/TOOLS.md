@@ -1,7 +1,7 @@
 ---
 title: Creating Inspector Tools
 author: @rjdollete
-last_updated: 2026-06-11
+last_updated: 2026-06-22
 scope: architecture
 ---
 
@@ -35,10 +35,10 @@ takes more than ~1 second, or mutates the watched filesystem needs the full
 | 3a. ffmpeg runner | `src/media/FfmpegRunner.ts` | The ONLY ffmpeg/ffprobe spawn site: run + progress + cancel (`AbortSignal`) |
 | 3b. Job service | `src/media/MediaJobService.ts` | Path planning, temp staging, single-`move` place, job registry, killAll |
 | 4. IPC channels | `src/ipc/{messages,renderer,main}.ts` | invoke (start) + push stream (progress) + send (cancel) + invoke (commit/place) |
-| 5. UI lock | `UiStore.beginMediaProcessing` / `endMediaProcessing` | Freeze nav/edit/delete while the job owns the file |
-| 6. Post-job finalization | `FileStore.finalizeEncodedOutput` | tag temp → suppress watcher + place → deterministic ingest → refetch → select/slide |
-| 7. Button + orchestration | `ImageTools.tsx` | Gating, spinner, cancel, the ordered happy path |
-| 8. Follow-up prompt | `RemovalAlert.tsx` pattern | e.g. delete-original via the existing trash flow |
+| 5. Queue store | `MediaQueueStore` (enqueue / processNext / runItem / keep actions) | Session-scoped FIFO queue that serializes execution and surfaces job state to the drawer |
+| 6. Post-job finalization | `FileStore.finalizeEncodedOutput` | tag temp → suppress watcher + place → deterministic ingest → refetch (no viewer anchor — `focusViewer: false`) |
+| 7. Bottom drawer | `src/frontend/containers/MediaQueue/index.tsx` | Persistent, collapsible FIFO list; rows for Queued / Processing / Completed / Failed |
+| 8. Button + orchestration | `ImageTools.tsx` | Gating, `mediaQueueStore.enqueue(file, jobType, clip)` call, returns immediately |
 
 Layers 3–6 are **reusable** — a new tool that produces a sibling file should
 need only layers 7–8 plus a new manager method (or a new manager if the binary
@@ -53,16 +53,20 @@ Getting this order wrong is the main implementation hazard (INV-019/INV-026; reb
 output — the folder watcher is suppressed for the output path, so there is exactly one code path
 that creates the row, and no race.
 
-1. Acquire the UI lock (`beginMediaProcessing`).
-2. `mediaJobService.start()` computes a collision-free **final** path beside the source
-   (`getUniqueSiblingPath`) AND a **temp** path in the application staging dir (a subfolder of
-   the OS temp dir, OUTSIDE any watched location — `MediaJobService.setTempBaseDir`), then runs
-   ffmpeg (via `FfmpegRunner`) into the temp path. The watched folder never sees a partial file.
-3. Show the spinner from streamed progress. `startMediaJob` resolves with
+1. `mediaQueueStore.enqueue(file, jobType, clip)` — adds the job to the FIFO queue and returns
+   immediately. The tool button is not disabled; no navigation or input freeze occurs. The drawer
+   auto-opens if this is the first job in the queue (INV-035).
+2. `MediaQueueStore.processNext` picks up the job when the queue is idle and calls
+   `MediaJobService.start()` (via IPC), which computes a collision-free **final** path beside
+   the source (`getUniqueSiblingPath`) AND a **temp** path in the application staging dir (a
+   subfolder of the OS temp dir, OUTSIDE any watched location — `MediaJobService.setTempBaseDir`),
+   then runs ffmpeg (via `FfmpegRunner`) into the temp path. The watched folder never sees a
+   partial file.
+3. The drawer row shows `Processing… N%` from streamed progress. `startMediaJob` resolves with
    `{ jobId, tempPath, finalPath }` when ffmpeg finishes (file complete, in staging, untagged).
-4. Call `FileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath })`. Every step is
-   awaited; every failure THROWS a loud error the caller shows as a blocking modal — no silent
-   fallbacks:
+4. Call `FileStore.finalizeEncodedOutput(source, { jobId, tempPath, finalPath }, { focusViewer: false })`.
+   Every step is awaited; every failure THROWS a loud error that the queue store surfaces as an
+   inline `Failed` row — no silent fallbacks, no blocking modals:
    - **a.** Tag the **temp** file (EXIF/XMP) via `tagTempFile`, exactly once. Zero-tag sources
      skip the write.
    - **b.** `LocationStore.suppressIngest(finalPath)` so the watcher ignores the output path,
@@ -71,18 +75,31 @@ that creates the row, and no race.
    - **c.** Deterministically ingest via `LocationStore.ingestFile(finalPath, locationId, tagIds)`
      — the renderer creates the row itself and sets the source's tags. It is the SOLE ingester
      (the watcher is suppressed), so there is no race and no untagged-row window.
-   - **d.** Refetch the active view, then resolve the output `ClientFile` and anchor `firstItem`
-     to it by identity (preferring the grid instance, or injecting it if the active filter
-     excludes it — SlideMode-safe; never `clearSearchCriteriaList()` / content-mode setters).
+   - **d.** Refetch the active view. The output `ClientFile` is resolved but the viewer is NOT
+     moved (`focusViewer: false`); the queue row's `View Completed` control lets the user open
+     the output on demand.
    - **e.** Release the suppression in a `finally`; by now the row exists, so a late watcher
      `add()` dedups by inode in `addFile`.
-5. Show any follow-up prompt (e.g. the Keep Modified / Keep Original / Keep Both prompt) — AFTER
-   finalize returns. The `DeleteOriginalAfterJob` prompt is **non-modal** (`modal={false}`) so
-   the output video stays interactive: the user can scrub, play/pause, and read the duration
-   while deciding which version to keep (INV-031). Position it at the top of the viewer so the
-   video's native control bar at the bottom remains reachable.
-6. Release the lock (`endMediaProcessing`) — in a `finally`, so it also releases on failure and
-   cancel.
+5. The drawer row transitions to `Completed`: the status becomes a **`View Completed`** control
+   that opens the new file in the viewer on click; actions become `[Keep New] [Keep Original]
+   [Keep Both]`. The row stays until a Keep action is chosen (multiple completed rows can stack).
+   - **Keep New** — trashes the source via the shared recyclable-check trash flow.
+   - **Keep Original** — trashes the committed output; if the viewer is on the output, focuses
+     the source instead.
+   - **Keep Both** — removes the row with no file deletion.
+6. If the job fails, the row transitions to `Failed`: the status shows "Failed" (ffmpeg error
+   detail revealed on click); actions become `[Retry] [Dismiss]`. No blocking modal.
+7. Cancel: a Pending row is spliced immediately (no ffmpeg starts); a Running row calls
+   `cancelMediaJob` and the row is removed when the in-flight promise rejects with
+   `MEDIA_JOB_CANCELLED`.
+
+**Note — intentional reversal of INV-021 / INV-023 (INV-035):** The viewer-pin invariant
+that previously kept the viewer locked to the source file during an encode is **deliberately
+retired** by INV-035. Jobs no longer run in the viewer; they run in a session-scoped queue
+(`MediaQueueStore`) that is fully independent of the viewer. Navigation, deletion, and all
+other input are unrestricted while jobs run. The `isMediaProcessing` lock,
+`beginMediaProcessing` / `endMediaProcessing`, and the `mediaProcessingFile` pin in `UiStore`
+have been removed.
 
 ---
 
@@ -178,11 +195,11 @@ the `LayoutSwitcher` mount gate) whenever a refetch reorders/shrinks the list �
 original INV-021/INV-023 "drops to the grid / jumps to an unrelated video" bug.
 
 **This is now handled inside `updateFromBackend` (INV-023):** before replacing the
-list it captures the anchor file id (the media-processing pin if a job is pinning the
-viewer, otherwise the file currently at `firstItem`) and, after the rebuild, calls
-`reconcileFirstItemTo(anchorId)` to re-point `firstItem` at that file's NEW index by
-identity (clamping into range if it's gone). So a plain `await refetch()` already
-preserves the viewed file across list churn — `finalizeEncodedOutput` relies on this.
+list it captures the anchor file id (the file currently at `firstItem`) and, after
+the rebuild, calls `reconcileFirstItemTo(anchorId)` to re-point `firstItem` at that
+file's NEW index by identity (clamping into range if it's gone). So a plain
+`await refetch()` already preserves the viewed file across list churn —
+`finalizeEncodedOutput` relies on this.
 
 **Rules that remain binding:**
 - Anchor by **identity (file id), never by raw index** when reconciling `firstItem`.
@@ -201,11 +218,10 @@ overwrite the user's live scroll position.
 
 Specifically: the async existence-check phase of `updateFromBackend` re-anchors
 `firstItem` ONLY when a splice actually changed the list (`splicedList === true`), and
-re-anchors to the LIVE position read at that moment (`mediaProcessingFile?.id ??
-fileList[uiStore.firstItem]?.id`), NOT the start-of-fetch snapshot `anchorFileId`
-captured before the await. When no splice occurred, the sync first-pass already
-anchored correctly and any subsequent movement is the user's own scroll — leave it
-alone. See INV-028.
+re-anchors to the LIVE position read at that moment (`fileList[uiStore.firstItem]?.id`),
+NOT the start-of-fetch snapshot `anchorFileId` captured before the await. When no
+splice occurred, the sync first-pass already anchored correctly and any subsequent
+movement is the user's own scroll — leave it alone. See INV-028.
 
 ---
 
@@ -234,10 +250,9 @@ These were decided up front and remain binding for new tools:
 - **Scope tools by file type** with the existing predicates
   (`isFileExtensionVideo` etc.); widening a predicate is a separate decision
   with player implications, not a side effect of adding a tool.
-- **Prefer the scoped `mediaProcessing` lock over a global blocking overlay.**
-  Gate the specific affordances (global shortcuts, SlideMode keys,
-  `openMoveFilesToTrash` as the single delete choke point) so the UI stays
-  honest about what is frozen. Always release in `finally`.
+- **Enqueue and return immediately.** Tool buttons call `mediaQueueStore.enqueue(...)`
+  and return. They do not disable navigation, freeze input, or hold a lock. The
+  queue serializes execution (one job at a time) without blocking the UI thread.
 - **Bundling a new binary has a licensing footprint.** Check the build flags
   (the bundled ffmpeg is `--enable-gpl --enable-libx264`) and document the
   obligation in [personal-fork-notes.md](personal-fork-notes.md) — acceptable
@@ -254,20 +269,27 @@ These were decided up front and remain binding for new tools:
        partial-output cleanup, `before-quit` registration.
 3. [ ] IPC trio (invoke start / push progress / send cancel) following the
        existing static-method pattern; first progress event carries the jobId.
-4. [ ] Button in `ImageTools.tsx`: type-gated, disabled while
-       `isMediaProcessing`, spinner + whole-percent progress + Cancel.
-5. [ ] Orchestration wrapped in `try/finally` around `endMediaProcessing()`;
-       distinct handling for cancel vs failure vs ingestion timeout.
+4. [ ] Button in `ImageTools.tsx`: type-gated, calls
+       `mediaQueueStore.enqueue(file, jobType, clip)` and returns immediately.
+       Buttons are not disabled while other jobs run (the queue serializes execution
+       automatically); clip-field validation may still disable the button if input
+       is incomplete.
+5. [ ] `MediaQueueStore` handles the full lifecycle: enqueue → processNext →
+       runItem (calls IPC, streams progress, calls `finalizeEncodedOutput`) →
+       Completed / Failed row. Keep actions (Keep New / Keep Original / Keep Both)
+       invoke the shared recyclable-check trash flow as needed.
 6. [ ] Post-job finalization via `fileStore.finalizeEncodedOutput(source,
-       { jobId, tempPath, finalPath })` — tags the temp file, suppresses the watcher
-       for the output path + places it (single `fse.move`), deterministically ingests
-       it (sole ingester), refetches, and resolves the output ClientFile. Every step
-       throws loud on failure (no silent fallback). (INV-026, rebuilt as the 3-layer
-       subsystem.)
-7. [ ] Any destructive follow-up reuses the `RemovalAlert` trash-flow pattern.
+       { jobId, tempPath, finalPath }, { focusViewer: false })` — tags the temp file,
+       suppresses the watcher for the output path + places it (single `fse.move`),
+       deterministically ingests it (sole ingester), refetches, but does NOT move
+       the viewer. Every step throws loud on failure (no silent fallback). (INV-026,
+       rebuilt as the 3-layer subsystem; `focusViewer: false` added by INV-035.)
+7. [ ] Any destructive Keep action reuses the shared recyclable-check trash helper
+       extracted from the old `RemovalAlert` flow (release handles →
+       `checkRecyclable` → `trashFile`/`deleteFilePermanently` → `fileStore.deleteFiles`).
 8. [ ] Manual QA in the running app: happy path, filtered view + fully-tagged
-       library, name collision, zero-tag source, failure, cancel,
-       quit-mid-job, lock enforcement.
+       library, name collision, zero-tag source, failure (inline Failed row),
+       cancel (pending and running), quit-mid-job, all three Keep actions.
 9. [ ] Feature doc in `docs/`, linked from [index.md](index.md); licensing
        caveat in [personal-fork-notes.md](personal-fork-notes.md) if a new
        binary is bundled.
@@ -279,16 +301,15 @@ These were decided up front and remain binding for new tools:
 ### Example 1 — Re-encode (x264) (INV-018)
 
 The first tool.  It uses all the layers: binary bundling, path resolution, the
-`FfmpegRunner` + `MediaJobService` job runner, the IPC channels, the UI lock,
-`finalizeEncodedOutput`, the `ImageTools.tsx` button + orchestration, and the
-`DeleteOriginalAfterJob` prompt.  See [reencode-x264.md](reencode-x264.md) for
-the complete feature doc.
+`FfmpegRunner` + `MediaJobService` job runner, the IPC channels, the queue store,
+`finalizeEncodedOutput`, the `ImageTools.tsx` button, and the queue drawer's
+Keep actions.  See [reencode-x264.md](reencode-x264.md) for the complete feature doc.
 
 ### Example 2 — Compress & Normalize Audio (INV-020)
 
 The second tool confirms the rule stated in layer 3–6's description above: **a
-new sibling-file tool needs only the button/orchestration layer (layer 7) plus
-a parameterized manager entry point — the reusable layers 3–6 are unchanged.**
+new sibling-file tool needs only the button/orchestration layer (layer 8) plus
+a parameterized entry in `MEDIA_JOB_SPECS` — the reusable layers 3–6 are unchanged.**
 
 Specifically, Compress & Normalize Audio added:
 
@@ -296,14 +317,12 @@ Specifically, Compress & Normalize Audio added:
   `['-c:v', 'copy', '-af', 'acompressor=…,loudnorm=…']` and output
   extension `'mp4'`.  The service (`mediaJobService.start(inputPath, jobArgs,
   outputExt, callbacks)`), IPC channels (`START_MEDIA_JOB` /
-  `MEDIA_JOB_PROGRESS` / `CANCEL_MEDIA_JOB`), UI lock, and
+  `MEDIA_JOB_PROGRESS` / `CANCEL_MEDIA_JOB`), queue store, and
   `finalizeEncodedOutput` helper were all reused without modification.
-- **A second button in `ImageTools.tsx`** — video-gated, disabled while
-  `isMediaProcessing`, wired to the shared `runMediaJob('normalize-audio')`
-  helper.  The spinner label reads "Compressing & normalizing audio… N%".
+- **A second button in `ImageTools.tsx`** — video-gated, wired to
+  `mediaQueueStore.enqueue(file, 'normalize-audio')`.
 - **No new binary, no new IPC channels, no new manager class.**  The
-  delete-original prompt (`DeleteOriginalAfterJob`) was already generalized by
-  TASK-086 and is shared verbatim.
+  Keep actions in the queue drawer are shared verbatim across all tools.
 
 See [normalize-audio.md](normalize-audio.md) and INV-020 for the full feature
 doc and the `-c:v copy` container-compatibility caveat (VP8/Theora sources
@@ -335,16 +354,15 @@ Specifically, Create Clip added:
   otherwise resolve first.  `formatSecondsToHms(...)` converts the value to
   `HH:MM:SS`.  Create Clip is enabled when at least one valid marker is present
   (end-only requires end > 0; start < end enforced when both present) and calls
-  `runMediaJob('create-clip', { start?, end? })` with only the filled fields.  The
-  spinner, cancel, lock, finalize, and delete-original flows are all shared.
+  `mediaQueueStore.enqueue(file, 'create-clip', { start?, end? })` with only the
+  filled fields.  The queue store, finalize, and Keep actions are all shared.
 - **No new binary, no new IPC channels, no new manager class.**
 
 Key caveats documented in [create-clip.md](create-clip.md): stream-copy start
 snaps to the preceding keyframe (inherent to lossless copy); progress percent is
 computed against the source duration (the clip appears to finish "early");
-webm/VP8 and ogg/Theora sources fail with an honest error toast when
-stream-copied into the forced `.mp4` container — the source is always left
-intact.
+webm/VP8 and ogg/Theora sources fail with an honest error when stream-copied into
+the forced `.mp4` container — the source is always left intact.
 
 See [create-clip.md](create-clip.md) and INV-022 for the full feature doc.
 
@@ -366,12 +384,11 @@ the shared probe-driven audio decision:
   `rotate-cw`, `rotate-ccw`, and `reencode-x264` that probes the source's first audio
   stream with ffprobe and calls the shared `decideAudioArgs` helper to produce the
   appropriate audio flags (`-c:a copy` / `-c:a aac -b:a 192k` / `-an`).  A probe
-  failure on a file that should have audio throws and surfaces a loud error.  This is
-  identical to how `subtract-clip` builds its dynamic args in the handler.
-- **Two buttons in `ImageTools.tsx`** (unchanged) — placed as the first two controls
-  in the Tools section (above Re-encode (x264)), video-gated, disabled while
-  `isMediaProcessing`, each wired to `runMediaJob('rotate-cw')` /
-  `runMediaJob('rotate-ccw')` with no clip argument.
+  failure on a file that should have audio throws and surfaces a loud error row.  This
+  is identical to how `subtract-clip` builds its dynamic args in the handler.
+- **Two buttons in `ImageTools.tsx`** — placed as the first two controls in the Tools
+  section (above Re-encode (x264)), video-gated, each wired to
+  `mediaQueueStore.enqueue(file, 'rotate-cw')` / `mediaQueueStore.enqueue(file, 'rotate-ccw')`.
 
 **Encoder/audio rules for copy-audio jobs:**
 - All video-encoding jobs use the shared `NVENC_H264_VIDEO_ARGS` constant.
@@ -402,3 +419,4 @@ See [rotate-video.md](rotate-video.md), INV-030, and INV-032 for the full featur
 - INV-020 — Compress & Normalize Audio investigation and the parameterized media-job stack
 - INV-022 — Create Clip investigation, `-ss`/`-to` pre-input ordering, stream-copy caveats
 - INV-030 — Rotate CW / Rotate CCW investigation, `transpose` filter semantics, non-destructive contract
+- INV-035 — Non-blocking media queue drawer; intentional reversal of the INV-021/INV-023 viewer-pin invariant

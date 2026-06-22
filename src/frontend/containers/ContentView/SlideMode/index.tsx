@@ -1,6 +1,6 @@
 import { autorun, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import React, { useCallback, useEffect, useMemo, useRef, useState, RefObject } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
 import { ClientFile } from 'src/frontend/entities/File';
 import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';
@@ -14,7 +14,7 @@ import Inspector from '../../Inspector';
 import { CommandDispatcher } from '../Commands';
 import ZoomPan, { CONTAINER_DEFAULT_STYLE, SlideTransform } from '../SlideMode/ZoomPan';
 import { ContentRect } from '../utils';
-import { Vec2, createDimension, createTransform } from './utils';
+import { Vec2, createDimension } from './utils';
 import AnnotoriousWrapper from './AnnotoriousWrapper';
 import { ToolbarButton } from 'widgets/toolbar';
 
@@ -89,12 +89,6 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
   }, [uiStore]);
 
   const decrImgIndex = useAction(() => {
-    // Navigation is disabled while a media job is in flight/finalizing — the viewer is pinned to the
-    // source/output by identity and must not move off it (requirement 1). Covers the on-screen
-    // NavigationButtons (keyboard arrows are already blocked in the keydown handler below).
-    if (uiStore.isMediaProcessing) {
-      return;
-    }
     const index = Math.max(0, uiStore.firstItem - 1);
     uiStore.setFirstItem(index);
 
@@ -102,9 +96,6 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
     uiStore.selectFile(fileStore.fileList[index], true);
   });
   const incrImgIndex = useAction(() => {
-    if (uiStore.isMediaProcessing) {
-      return;
-    }
     const index = Math.min(uiStore.firstItem + 1, fileStore.fileList.length - 1);
     uiStore.setFirstItem(index);
     uiStore.selectFile(fileStore.fileList[index], true);
@@ -113,22 +104,6 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
   // Detect left/right arrow keys to scroll between images. Top/down is already handled in the layout that's open in the background
   useEffect(() => {
     const handleUserKeyPress = (event: KeyboardEvent) => {
-      // While a media-processing operation is in flight (e.g. re-encode), block all
-      // navigation and destructive keys so the user cannot leave the source file or
-      // accidentally trigger a delete. Harmless keys (e.g. Escape) are also blocked
-      // for ArrowLeft/Right and Backspace/Delete specifically; Escape is kept as a
-      // no-op too so the full keyboard is inert for nav during processing.
-      if (uiStore.isMediaProcessing) {
-        if (
-          event.key === 'ArrowLeft' ||
-          event.key === 'ArrowRight' ||
-          event.key === 'Delete' ||
-          event.key === 'Backspace'
-        ) {
-          event.stopPropagation();
-        }
-        return;
-      }
       if (event.key === 'ArrowLeft') {
         decrImgIndex();
         event.stopPropagation();

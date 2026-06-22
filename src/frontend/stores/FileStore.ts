@@ -1085,10 +1085,7 @@ class FileStore {
         const { uiStore } = this.rootStore;
         const curFirst = uiStore.firstItem;
         const missingAnchorId =
-          uiStore.mediaProcessingFile?.id ??
-          (curFirst >= 0 && curFirst < this.fileList.length
-            ? this.fileList[curFirst].id
-            : undefined);
+          curFirst >= 0 && curFirst < this.fileList.length ? this.fileList[curFirst].id : undefined;
 
         const missingClientFiles = newClientFiles.filter((file) => file.isBroken);
         this.fileList.replace(missingClientFiles);
@@ -1205,10 +1202,9 @@ class FileStore {
 
   /**
    * Ensures `file` is present in `fileList` and returns its index, injecting it at `preferredIndex`
-   * (default: end of list) and patching `index` if it is currently absent. Used when handing the
-   * media-processing pin back to the firstItem-anchored viewer (UiStore.endMediaProcessing): the
-   * output may be excluded by the active filter, so this guarantees it is locatable and the pin can
-   * be cleared without ever blanking the viewer. In the common case the file is already present and
+   * (default: end of list) and patching `index` if it is currently absent. Used by MediaQueueStore
+   * when focusing the viewer on a completed job's output: the output may be excluded by the active
+   * filter, so this guarantees it is locatable. In the common case the file is already present and
    * its existing index is returned unchanged (no mutation). The transient "file in list but outside
    * the active query" state is reconciled by the next user-driven refetch (mirrors how
    * removeFilesFromListInPlace tolerates in-place edits).
@@ -1443,21 +1439,36 @@ class FileStore {
   }
 
   /**
-   * Resolve a freshly-ingested output DTO to a ClientFile in the active view and anchor
-   * `firstItem`/selection to it. Prefers the instance the grid already holds after refetch; if the
-   * active filter excludes it, builds one from the DTO and injects it at the source's position so
-   * the grid stays visually stable. Never routes through content-mode setters (which would disable
-   * SlideMode — docs/TOOLS.md rule 6).
+   * Resolve a freshly-ingested output DTO to a ClientFile in the active view.
+   *
+   * Prefers the instance the grid already holds after refetch; if the active filter excludes it,
+   * builds one from the DTO and injects it at the source's position so the grid stays visually
+   * stable. Never routes through content-mode setters (which would disable SlideMode —
+   * docs/TOOLS.md rule 6).
+   *
+   * The `fileList` injection / index rebuild is **unconditional** — the output always lands in the
+   * active view at the source's position regardless of `focusViewer`.
+   *
+   * @param opts.focusViewer  When `true`, also sets `uiStore.firstItem` and calls
+   *   `uiStore.selectFile` so the viewer anchors to the output. When `false` (the default used by
+   *   `MediaQueueStore`), the viewer and selection are NOT touched — the output is silently present
+   *   in `fileList` until the user explicitly opens it.
    */
-  @action private resolveOutputClientFile(source: ClientFile, dto: FileDTO): ClientFile {
+  @action private resolveOutputClientFile(
+    source: ClientFile,
+    dto: FileDTO,
+    opts: { focusViewer: boolean },
+  ): ClientFile {
     const { uiStore } = this.rootStore;
 
     const existingIdx = this.index.get(dto.id);
     if (existingIdx !== undefined) {
       const outputFile = this.fileList[existingIdx];
       transaction(() => {
-        uiStore.firstItem = existingIdx;
-        uiStore.selectFile(outputFile, true);
+        if (opts.focusViewer) {
+          uiStore.firstItem = existingIdx;
+          uiStore.selectFile(outputFile, true);
+        }
       });
       console.info('[media-job] finalize resolved (in list)', {
         id: outputFile.id,
@@ -1467,9 +1478,13 @@ class FileStore {
     }
 
     const outputFile = new ClientFile(this, dto, this.rootStore.exifTool);
-    // In the web build thumbnailDirectory is '' — use the file ID as the
-    // thumbnail path so encodeFilePath routes it to /api/thumb/:id.
-    outputFile.thumbnailPath = !uiStore.thumbnailDirectory
+    // In the web build there is no local thumbnail directory — use the file ID as the
+    // thumbnail path so encodeFilePath routes it to /api/thumb/:id. On desktop, gate on
+    // isWebBuild (NOT an empty thumbnailDirectory): thumbnailDirectory is set asynchronously
+    // via IPC and is transiently '' at startup, and using dto.id then would blank every
+    // thumbnail — including videos, which (needsThumbnail === false) must resolve to their
+    // own absolutePath so the <video> element can render them.
+    outputFile.thumbnailPath = platform.isWebBuild
       ? dto.id
       : this.rootStore.imageLoader.needsThumbnail(dto)
       ? getThumbnailPath(dto.absolutePath, uiStore.thumbnailDirectory)
@@ -1482,8 +1497,10 @@ class FileStore {
       for (let i = injectionIdx; i < this.fileList.length; i++) {
         this.index.set(this.fileList[i].id, i);
       }
-      uiStore.firstItem = injectionIdx;
-      uiStore.selectFile(outputFile, true);
+      if (opts.focusViewer) {
+        uiStore.firstItem = injectionIdx;
+        uiStore.selectFile(outputFile, true);
+      }
     });
     console.info('[media-job] finalize resolved (injected)', {
       id: outputFile.id,
@@ -1493,7 +1510,8 @@ class FileStore {
   }
 
   /**
-   * Reusable post-media-job finalization, shared by Re-encode, Normalize Audio, and Create Clip.
+   * Reusable post-media-job finalization, shared by Re-encode, Normalize Audio, Create Clip, and
+   * `MediaQueueStore`.
    *
    * Flow (every step awaited; every failure throws LOUD — there are no silent fallbacks):
    *   A. Tag the staged temp file (EXIF/XMP) once via `tagTempFile`. Zero-tag sources skip it.
@@ -1501,22 +1519,29 @@ class FileStore {
    *      what eliminates the dual-write race between the watcher and our deterministic ingest), then
    *      ask main to place temp → final (`commitMediaJob`).
    *   C. Deterministically ingest the placed file via `locationStore.ingestFile` and set its tags.
-   *   D. `refetch()` and resolve the output ClientFile, anchoring the viewer to it.
+   *   D. `refetch()` and resolve the output ClientFile, injecting it into `fileList` at the
+   *      source's position. When `focusViewer` is `true`, also anchors the viewer to the output.
    *   E. Unsuppress (in `finally`) — by now our row exists, so any late watcher `add()` dedups.
    *
-   * Does NOT toggle the media-processing lock/pin or open the delete prompt — the caller
-   * (ImageTools.tsx runMediaJob) owns those. Returns the output ClientFile, or THROWS (surfaced as
-   * a blocking modal by the caller; the source stays on screen).
+   * Does NOT toggle the media-processing lock/pin or open the delete prompt — those are the
+   * caller's concern. Returns the output ClientFile, or THROWS (surfaced by the caller).
    *
-   * @param source  The source ClientFile whose tags should be copied.
-   * @param paths   The `{ jobId, tempPath, finalPath }` result from `startMediaJob`.
+   * @param source           The source ClientFile whose tags should be copied.
+   * @param paths            The `{ jobId, tempPath, finalPath }` result from `startMediaJob`.
+   * @param opts.focusViewer When `true`, sets `uiStore.firstItem` and calls `uiStore.selectFile`
+   *   so the viewer anchors to the output (preserves the legacy in-viewer behaviour for
+   *   `ImageTools.tsx`). When `false` (the default), the output is committed and injected into
+   *   `fileList` but the viewer and selection are NOT touched — required by `MediaQueueStore` so
+   *   jobs run without interrupting the user's current view.
    * @returns The output ClientFile (tags copied, present in or injected into `fileList`).
    * @throws  If the EXIF write, placement, or ingest fails.
    */
   @action.bound async finalizeEncodedOutput(
     source: ClientFile,
     paths: { jobId: string; tempPath: string; finalPath: string },
+    opts: { focusViewer?: boolean } = {},
   ): Promise<ClientFile> {
+    const focusViewer = opts.focusViewer ?? false;
     const { locationStore } = this.rootStore;
     const { jobId, tempPath, finalPath } = paths;
     console.info('[media-job] finalize start', { jobId, tempPath, finalPath });
@@ -1550,7 +1575,7 @@ class FileStore {
 
       // D. Bring the output into the active view and resolve its ClientFile.
       await this.refetch();
-      return this.resolveOutputClientFile(source, dto);
+      return this.resolveOutputClientFile(source, dto, { focusViewer });
     } finally {
       // E. Release suppression — the row now exists, so a late watcher add() dedups harmlessly.
       locationStore.unsuppressIngest(finalPath);
@@ -1608,29 +1633,18 @@ class FileStore {
     const [newClientFiles, reusedStatus] = this.filesFromBackend(backendFiles);
 
     // Dispose of Client files that are not re-used (to get rid of MobX observers).
-    // Never dispose the media-processing pinned file: while a job is finalizing, the viewer shows
-    // it by identity (uiStore.mediaProcessingFile) even if the active filter would exclude it, so
-    // disposing it here would strip the observers off the file the user is currently watching.
-    const pinnedFileId = this.rootStore.uiStore.mediaProcessingFile?.id;
-
-    // Capture the file the viewer is currently anchored to — the media-processing pin if a job is
-    // pinning the viewer, otherwise the file at firstItem — BEFORE fileList is replaced, so we can
-    // re-point firstItem to it by IDENTITY after the rebuild. Without this, ANY refetch (most
-    // damagingly the folder watcher's debouncedRefetch when the re-encode output appears as a new
-    // file, or the trailing change event from the post-encode EXIF write that lands AFTER the
-    // media-processing pin is released) leaves firstItem at a now-stale index, so SlideMode jumps to
-    // an unrelated file while the delete-original prompt is up. The delete path
+    // Capture the file the viewer is currently anchored to (firstItem) BEFORE fileList is replaced,
+    // so we can re-point firstItem to it by IDENTITY after the rebuild. Without this, ANY refetch
+    // leaves firstItem at a now-stale index so SlideMode jumps to an unrelated file. The delete path
     // (removeFilesFromListInPlace) already reconciles firstItem this way; the fetch path did not.
-    // This is the structural fix INV-021/INV-023 were working around with the (too-short-lived) pin.
     const anchorFirstItem = this.rootStore.uiStore.firstItem;
     const anchorFileId =
-      pinnedFileId ??
-      (anchorFirstItem >= 0 && anchorFirstItem < this.fileList.length
+      anchorFirstItem >= 0 && anchorFirstItem < this.fileList.length
         ? this.fileList[anchorFirstItem].id
-        : undefined);
+        : undefined;
 
     for (const file of this.fileList) {
-      if (!reusedStatus.has(file.id) && file.id !== pinnedFileId) {
+      if (!reusedStatus.has(file.id)) {
         file.dispose();
       }
     }
@@ -1723,17 +1737,15 @@ class FileStore {
           // When a splice changed the list structure, re-anchor firstItem by identity.
           // IMPORTANT: read uiStore.firstItem LIVE at this moment (not the stale start-of-fetch
           // snapshot anchorFileId captured before the await) so the user's scroll during the
-          // existence-check window is honoured. The media-processing pin wins when a job is
-          // active (INV-021/INV-023). When no splice occurred, leave firstItem untouched —
+          // existence-check window is honoured. When no splice occurred, leave firstItem untouched —
           // the sync first-pass already anchored correctly. See INV-028, docs/TOOLS.md §6.
           if (splicedList) {
             const { uiStore } = this.rootStore;
             const curFirst = uiStore.firstItem;
             const liveAnchorId =
-              uiStore.mediaProcessingFile?.id ??
-              (curFirst >= 0 && curFirst < this.fileList.length
+              curFirst >= 0 && curFirst < this.fileList.length
                 ? this.fileList[curFirst].id
-                : undefined);
+                : undefined;
             this.reconcileFirstItemTo(liveAnchorId);
           }
 
@@ -1827,10 +1839,14 @@ class FileStore {
       const file = new ClientFile(this, f, this.rootStore.exifTool);
       // Initialize the thumbnail path so the image can be loaded immediately when it mounts.
       // To ensure the thumbnail actually exists, the `ensureThumbnail` function should be called.
-      // In the web build thumbnailDirectory is '' — use the file ID as the thumbnail path
-      // so encodeFilePath routes it to /api/thumb/:id on the sidecar server.
+      // In the web build there is no local thumbnail directory — use the file ID as the thumbnail
+      // path so encodeFilePath routes it to /api/thumb/:id on the sidecar server. On desktop, gate
+      // on isWebBuild (NOT an empty thumbnailDirectory): thumbnailDirectory is set asynchronously
+      // via IPC and is transiently '' during startup, and using f.id then would blank every
+      // thumbnail — including videos, which (needsThumbnail === false) must resolve to their own
+      // absolutePath so the <video> element can render them.
       const td = this.rootStore.uiStore.thumbnailDirectory;
-      file.thumbnailPath = !td
+      file.thumbnailPath = platform.isWebBuild
         ? f.id
         : this.rootStore.imageLoader.needsThumbnail(f)
         ? getThumbnailPath(f.absolutePath, td)

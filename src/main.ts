@@ -867,8 +867,8 @@ MainMessenger.onStartMediaJob(async (wc, { inputPath, jobType, clip }) => {
     // These three jobs copy audio into a forced .mp4, so we probe the source's first audio stream
     // up-front and decide: MP4-legal codec → -c:a copy; non-legal → -c:a aac -b:a 192k; no audio
     // stream → -an. A probe FAILURE on a file that should have audio throws here, which rejects the
-    // handler promise and surfaces a loud MediaJobErrorAlert. This is deterministic (probe once,
-    // decide, encode once) — NOT a retry-on-failure scheme. (INV-032, Directive 2.)
+    // handler promise and surfaces a Failed row in the media queue drawer. This is deterministic
+    // (probe once, decide, encode once) — NOT a retry-on-failure scheme. (INV-032, Directive 2.)
     //
     // subtract-clip and normalize-audio already re-encode audio and are intentionally not probed.
     const audioArgs = await decideAudioArgs(_probeRunner, inputPath);

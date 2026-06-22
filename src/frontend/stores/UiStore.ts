@@ -221,55 +221,6 @@ class UiStore {
   /** Dialog to warn the user when he tries to open too many files externally */
   @observable isManyExternalFilesOpen: boolean = false;
 
-  /**
-   * The source file for the delete-original prompt shown after a successful media job (TASK-079 / INV-020).
-   * null means the prompt is closed; a ClientFile value opens the prompt for that file.
-   * Shared by all tools that produce a derived output (Re-encode, Compress & Normalize Audio, etc.).
-   */
-  @observable deleteOriginalAfterJobFile: ClientFile | null = null;
-
-  /**
-   * The freshly-produced OUTPUT file paired with {@link deleteOriginalAfterJobFile}. The
-   * post-job modal lets the user Keep Modified (trash the original), Keep Original (trash this
-   * output), or Keep Both — so it needs a handle on BOTH files. null when the prompt is closed.
-   */
-  @observable deleteOriginalAfterJobOutput: ClientFile | null = null;
-
-  /**
-   * Media-processing lock: set while a long-running file operation (e.g. re-encode) is in
-   * flight for a specific file. When active, navigation and destructive actions are blocked so
-   * the user cannot move away from or delete the source while it is being processed.
-   * Callers must always release the lock in a finally block — see beginMediaProcessing /
-   * endMediaProcessing.
-   */
-  @observable mediaProcessing: { active: boolean; path: string | null } = {
-    active: false,
-    path: null,
-  };
-
-  /**
-   * The file the viewer (SlideMode + Inspector) must display while a media job is in flight or
-   * being finalized, pinned by IDENTITY rather than by `firstItem`/`fileList` index (INV-021 redo).
-   *
-   * The folder watcher fires `debouncedRefetch()` for every new file in a watched folder — and a
-   * re-encode/normalize/clip output IS a new file, and the post-encode EXIF write re-touches it —
-   * so `fileList` is rebuilt (and `firstItem` orphaned) several times during finalization. Anchoring
-   * the viewer to this pin makes it immune to that churn: the source stays on screen until the output
-   * is verified openable, then this pin is atomically swapped to the output for a seamless transition.
-   *
-   * null means "no media job is pinning the viewer" — the viewer falls back to `firstFileInView`.
-   * See {@link slideFile}, beginMediaProcessing, setMediaProcessingFile, endMediaProcessing.
-   */
-  @observable mediaProcessingFile: ClientFile | null = null;
-
-  /**
-   * Set when a media job (re-encode, normalize audio, create clip) fails, to drive a blocking modal
-   * (MediaJobErrorAlert) that surfaces the ffmpeg error and — crucially — does NOT close the source
-   * video. null means no error modal is shown. `tool` is a human-readable job label; `message` is the
-   * ffmpeg error tail (see FfmpegRunner: "ffmpeg exited with code N.\n<stderr tail>").
-   */
-  @observable mediaJobError: { tool: string; message: string } | null = null;
-
   // Selections
   // Observable arrays recommended like this here https://github.com/mobxjs/mobx/issues/669#issuecomment-269119270.
   // However, sets are more suitable because they have quicker lookup performance.
@@ -437,13 +388,6 @@ class UiStore {
   }
 
   @action.bound disableSlideMode(): void {
-    // While a media job is in flight/finalizing, the user must not be able to leave the current
-    // video (requirement 1). Every exit path funnels through here — the "Back" toolbar button, the
-    // mouse back-button popstate handler, and the Escape/Backspace keys — so a single guard blocks
-    // them all. The viewer is released normally once endMediaProcessing() clears the lock.
-    if (this.mediaProcessing.active) {
-      return;
-    }
     this.isSlideMode = false;
   }
 
@@ -632,11 +576,6 @@ class UiStore {
   }
 
   @action.bound openMoveFilesToTrash(): void {
-    // Do not open the trash modal while a media-processing operation is in flight.
-    // The source file must not be deleted mid-encode; all entry points funnel through here.
-    if (this.mediaProcessing.active) {
-      return;
-    }
     // INV-033: Fail-loud / self-heal guard. While in SlideMode a delete invoked
     // on the viewer must never be a silent no-op. If the selection is empty but
     // there is a visible file (firstFileInView), self-heal by selecting it now.
@@ -664,81 +603,6 @@ class UiStore {
 
   @action.bound closeManyExternalFiles(): void {
     this.isManyExternalFilesOpen = false;
-  }
-
-  /**
-   * Opens the delete-original prompt for the given source file after a successful media job.
-   * Shared by all tools that produce a derived output (Re-encode, Compress & Normalize Audio, etc.).
-   * The actual Alert is rendered by DeleteOriginalAfterJob in RemovalAlert.tsx.
-   */
-  @action.bound openDeleteOriginalPrompt(source: ClientFile, output: ClientFile): void {
-    this.deleteOriginalAfterJobFile = source;
-    this.deleteOriginalAfterJobOutput = output;
-  }
-
-  @action.bound closeDeleteOriginalPrompt(): void {
-    this.deleteOriginalAfterJobFile = null;
-    this.deleteOriginalAfterJobOutput = null;
-  }
-
-  /** True while a media-processing operation owns the current file (e.g. re-encode in flight). */
-  @computed get isMediaProcessing(): boolean {
-    return this.mediaProcessing.active;
-  }
-
-  /**
-   * Acquires the media-processing lock for the given source file and PINS the viewer to it.
-   * Navigation and destructive actions are blocked until endMediaProcessing() is called, and the
-   * SlideMode viewer + Inspector display this exact file regardless of any `fileList`/`firstItem`
-   * churn caused by the folder watcher refetching when the output appears (INV-021 redo).
-   * Always pair with endMediaProcessing() in a finally block.
-   */
-  @action.bound beginMediaProcessing(file: ClientFile): void {
-    this.mediaProcessing = { active: true, path: file.absolutePath };
-    this.mediaProcessingFile = file;
-  }
-
-  /**
-   * Atomically swaps the pinned media file (e.g. from the source to the freshly-encoded output once
-   * it is verified openable). Because the viewer reads {@link slideFile}, this produces a seamless
-   * in-place swap with no trip back to the grid and no intermediate `undefined` frame.
-   */
-  @action.bound setMediaProcessingFile(file: ClientFile): void {
-    this.mediaProcessingFile = file;
-  }
-
-  /**
-   * Releases the media-processing lock and unpins the viewer. Before unpinning, `firstItem` is
-   * reconciled to the pinned file's current index in `fileList` (by identity) so the handoff from
-   * the pin back to `firstFileInView` is seamless — the user never sees the grid even for one frame.
-   * If the pinned file is not in the current (possibly filtered) `fileList`, the pin is kept so the
-   * viewer keeps showing it rather than blanking; a subsequent user navigation reconciles it.
-   *
-   * Safe to call multiple times — idempotent so callers can always put it in a finally block.
-   */
-  @action.bound endMediaProcessing(): void {
-    this.mediaProcessing = { active: false, path: null };
-    const pinned = this.mediaProcessingFile;
-    if (pinned !== null) {
-      // Re-anchor firstItem to the pinned file (injecting it into fileList if the active filter
-      // excludes it, so the handoff never blanks the viewer), select it, then drop the pin — all in
-      // this one @action so MobX never renders an intermediate state where firstItem and the pin
-      // disagree, and so the viewer transitions seamlessly from the pinned file to firstFileInView.
-      const idx = this.rootStore.fileStore.ensureFileInListAt(pinned);
-      this.firstItem = idx;
-      this.selectFile(pinned, true);
-      this.mediaProcessingFile = null;
-    }
-  }
-
-  /** Opens the media-job failure modal (does NOT close the source video). */
-  @action.bound showMediaJobError(tool: string, message: string): void {
-    this.mediaJobError = { tool, message };
-  }
-
-  /** Dismisses the media-job failure modal. */
-  @action.bound closeMediaJobError(): void {
-    this.mediaJobError = null;
   }
 
   @action.bound toggleToolbarTagPopover(): void {
@@ -1113,30 +977,6 @@ class UiStore {
       (document.querySelector('.searchbar input') as HTMLElement).focus();
     } else if (matches(hotkeyMap.advancedSearch)) {
       this.toggleAdvancedSearch();
-      // View — navigation and destructive combos are blocked while a media-processing
-      // operation is in flight (e.g. re-encode). Harmless panel toggles above are
-      // still allowed; only file navigation (viewSlide / view-method switches) and
-      // the delete shortcut are gated here.
-    } else if (this.mediaProcessing.active) {
-      // During media processing: swallow navigation and delete combos so they are
-      // inert, but still mark them as "matched" (preventDefault) to prevent the
-      // browser's default behaviour for those keys.
-      if (
-        matches(hotkeyMap.deleteSelection) ||
-        matches(hotkeyMap.viewSlide) ||
-        matches(hotkeyMap.viewList) ||
-        matches(hotkeyMap.viewGrid) ||
-        matches(hotkeyMap.viewMasonryVertical) ||
-        matches(hotkeyMap.viewMasonryHorizontal) ||
-        matches(hotkeyMap.viewCalendar) ||
-        matches(hotkeyMap.viewFaces) ||
-        matches(hotkeyMap.viewMap) ||
-        matches(hotkeyMap.viewDuplicates)
-      ) {
-        // Block — do nothing, but let isMatch stay true so e.preventDefault() fires.
-      } else {
-        isMatch = false;
-      }
     } else if (matches(hotkeyMap.viewList)) {
       this.setMethodList();
     } else if (matches(hotkeyMap.viewGrid)) {
@@ -1373,13 +1213,11 @@ class UiStore {
   }
 
   /**
-   * The file SlideMode and the Inspector should actually display: the media-processing pin when a
-   * job is in flight/finalizing (so watcher-driven `fileList`/`firstItem` churn can never tear the
-   * viewer down), otherwise the normal `firstFileInView`. This is the single source of truth for the
+   * The file SlideMode and the Inspector should display. This is the single source of truth for the
    * mount gate (LayoutSwitcher), the slide image (SlideView), and the inspector body (Inspector).
    */
   @computed get slideFile(): ClientFile | undefined {
-    return this.mediaProcessingFile ?? this.firstFileInView;
+    return this.firstFileInView;
   }
 
   @action private viewAllContent(): void {

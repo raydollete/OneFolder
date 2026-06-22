@@ -11,11 +11,7 @@ import Layout from './LayoutSwitcher';
 
 import { LayoutMenuItems, SortMenuItems } from '../AppToolbar/Menus';
 import { useTagDnD } from 'src/frontend/contexts/TagDnDContext';
-import {
-  MoveFilesToTrashBin,
-  DeleteOriginalAfterJob,
-  MediaJobErrorAlert,
-} from 'src/frontend/components/RemovalAlert';
+import { MoveFilesToTrashBin } from 'src/frontend/components/RemovalAlert';
 import { useAction } from 'src/frontend/hooks/mobx';
 import useIsWindowMaximized from 'src/frontend/hooks/useIsWindowMaximized';
 import { ManyOpenExternal } from 'src/frontend/components/WarningAlert';
@@ -143,8 +139,6 @@ const Content = observer(() => {
     >
       <Layout contentRect={contentRect} />
       <MoveFilesToTrashBin />
-      <DeleteOriginalAfterJob />
-      <MediaJobErrorAlert />
       <ManyOpenExternal />
     </div>
   );

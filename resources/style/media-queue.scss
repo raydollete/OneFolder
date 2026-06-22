@@ -1,0 +1,218 @@
+// ---------------------------------------------------------------------------
+// Media Queue bottom drawer
+// Persistent collapsible drawer fixed to the bottom of #main (the content
+// area). Shows all media-job queue items oldest-on-top in a four-column table.
+// ---------------------------------------------------------------------------
+
+#main {
+  // Reserve space at the bottom for the drawer so ContentView scrollbar
+  // does not overlap it.  The drawer itself is position: absolute so it
+  // overlays the content rather than displacing it; #content-view already
+  // fills absolute from toolbar to bottom.
+}
+
+.media-queue {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--background-color-alt);
+  border-top: 0.0625rem solid var(--border-color);
+  box-shadow: 0 -0.125rem 0.5rem rgba(0, 0, 0, 0.15);
+  font-size: 0.8125rem;
+
+  // ---- Header bar ----
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    height: 2rem;
+    padding: 0 0.75rem;
+    cursor: default;
+  }
+
+  &__title {
+    font-weight: bold;
+    white-space: nowrap;
+  }
+
+  &__summary {
+    flex: 1;
+    color: var(--text-color-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__toggle {
+    // btn-icon already handles sizing; just ensure no extra margin.
+    flex-shrink: 0;
+  }
+
+  // ---- Collapsible body ----
+  &__body {
+    max-height: 14rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    &::-webkit-scrollbar {
+      width: 0.375rem;
+    }
+    &::-webkit-scrollbar-track {
+      background: var(--scrollbar-track-color);
+    }
+    &::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb-color);
+      border-radius: 0.1875rem;
+    }
+    &::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover-color);
+    }
+  }
+
+  // ---- Table ----
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+
+    th,
+    td {
+      padding: 0.25rem 0.5rem;
+      text-align: left;
+      vertical-align: middle;
+      border-bottom: 0.0625rem solid var(--border-color);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      font-weight: bold;
+      color: var(--text-color-muted);
+      background: var(--background-color-alt);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+  }
+
+  // Column widths
+  &__col-filename {
+    width: 30%;
+  }
+  &__col-operation {
+    width: 20%;
+  }
+  &__col-status {
+    width: 25%;
+    // Allow status cells to grow to accommodate error detail
+    white-space: normal;
+    overflow: visible;
+  }
+  &__col-actions {
+    width: 25%;
+  }
+
+  // ---- Filename button ----
+  &__filename-btn {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    text-align: left;
+    color: var(--accent-color-blue);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  // ---- Running status with spinner ----
+  &__running-status {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  // Small inline spinner — reuses the @keyframes spin from duplicate-gallery.scss
+  &__spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    flex-shrink: 0;
+  }
+
+  // ---- Status colours ----
+  &__status--queued {
+    color: var(--text-color-muted);
+  }
+
+  &__status--running {
+    color: var(--text-color);
+  }
+
+  &__status--completed {
+    color: var(--accent-color-green);
+  }
+
+  &__status--failed {
+    color: var(--accent-color-red);
+  }
+
+  // ---- View Completed button ----
+  &__view-completed-btn {
+    color: var(--accent-color-green);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  // ---- Failed button ----
+  &__failed-btn {
+    color: var(--accent-color-red);
+    font-weight: bold;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  // ---- Inline error detail ----
+  &__error-detail {
+    font-size: 0.75rem;
+    color: var(--text-color-muted);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 6rem;
+    overflow-y: auto;
+    margin: 0.25rem 0 0;
+    background: var(--shade1);
+    padding: 0.25rem 0.4rem;
+    border-radius: 0.25rem;
+  }
+
+  // ---- Action button group ----
+  &__col-actions {
+    display: table-cell;
+
+    .btn-minimal {
+      margin-right: 0.25rem;
+
+      &:last-child {
+        margin-right: 0;
+      }
+    }
+  }
+
+  // ---- Row hover ----
+  &__row:hover td {
+    background: var(--hover-color);
+  }
+}

@@ -51,7 +51,7 @@ jest.mock('../src/frontend/components/Toaster', () => ({
 
 // ---------------------------------------------------------------------------
 // Minimal mock RootStore — matches the pattern from file-store-generation-gate.test.ts
-// but adds firstItem (writable), mediaProcessingFile, and showVideosOnly.
+// but adds firstItem (writable) and showVideosOnly.
 // ---------------------------------------------------------------------------
 
 function makeMockRootStore(): any {
@@ -59,7 +59,6 @@ function makeMockRootStore(): any {
     firstItem: 0,
     hideMissingFilesInBrowsing: false,
     showVideosOnly: false,
-    mediaProcessingFile: null,
     isSlideMode: false,
     disableSlideMode: jest.fn(),
     searchCriteriaList: {
@@ -341,58 +340,5 @@ describe('FileStore firstItem scroll-during-fetch (INV-028, TASK-106)', () => {
 
     // No splice → splicedList=false → async phase must NOT have touched firstItem.
     expect(root.uiStore.firstItem).toBe(scrolledTo);
-  });
-
-  /**
-   * Case 3: Splice occurs AND mediaProcessingFile is set.
-   * The media-processing pin must win over the live firstItem (INV-021/INV-023 invariant).
-   */
-  it('splice case: media-processing pin wins over the live firstItem', async () => {
-    const filesA = [makeFileDTO('f0'), makeFileDTO('f1'), makeFileDTO('f2')];
-    const root = makeMockRootStore();
-    root.uiStore.hideMissingFilesInBrowsing = true;
-    const store = await makeFileStore(baseBackend(filesA), root);
-
-    const existenceResolvers: Array<(v: boolean) => void> = [];
-    const fse = await import('fs-extra');
-    (fse.default.pathExists as jest.Mock).mockImplementation(() => {
-      return new Promise<boolean>((resolve) => {
-        existenceResolvers.push(resolve);
-      });
-    });
-
-    const gen = (store as any).fetchGeneration;
-    const updatePromise = store.updateFromBackend(filesA, gen);
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // User scrolls to index 2 (f2) during the existence check.
-    runInAction(() => { root.uiStore.firstItem = 2; });
-
-    // Media-processing file is set to f1 (a file in the list that survives the splice).
-    // Pin must win regardless of where firstItem points.
-    // We need a real ClientFile-like object with an id. The store has fileList entries.
-    // Use the fileList entry after the sync pass (f1 is at index 1).
-    const pinnedFile = store.fileList[1]; // f1
-    expect(pinnedFile.id).toBe('f1');
-    root.uiStore.mediaProcessingFile = pinnedFile;
-
-    await new Promise<void>((res) => setTimeout(res, 10));
-
-    existenceResolvers[0](false); // f0 broken → splice will remove it
-    existenceResolvers[1](true);  // f1 fine (the pinned file)
-    existenceResolvers[2](true);  // f2 fine
-
-    await updatePromise;
-
-    // After splice: fileList = [f1, f2].
-    expect(store.fileList.length).toBe(2);
-    expect(store.fileList[0].id).toBe('f1');
-
-    // The live anchor reads: mediaProcessingFile?.id = 'f1' → wins immediately.
-    // reconcileFirstItemTo('f1') → index.get('f1') = 0 → firstItem=0.
-    expect(root.uiStore.firstItem).toBe(0); // NOT 2 (live firstItem) — pin wins
-    expect(store.fileList[root.uiStore.firstItem].id).toBe('f1');
   });
 });
