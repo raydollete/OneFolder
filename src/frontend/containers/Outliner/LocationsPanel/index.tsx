@@ -1,8 +1,7 @@
-import { shell } from 'electron';
 import { action, runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import SysPath from 'path';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import platform from 'src/frontend/platform';
 
 import { IconSet, Tree } from 'widgets';
 import MultiSplitPane, { MultiSplitPaneProps } from 'widgets/MultiSplit/MultiSplitPane';
@@ -10,7 +9,6 @@ import { Menu, MenuDivider, MenuItem, useContextMenu } from 'widgets/menus';
 import { Callout } from 'widgets/notifications';
 import { Toolbar, ToolbarButton } from 'widgets/toolbar';
 import { ITreeItem, createBranchOnKeyDown } from 'widgets/tree';
-import { RendererMessenger } from '../../../../ipc/renderer';
 import { LocationRemoval, SubLocationExclusion } from '../../../components/RemovalAlert';
 import { AppToaster } from '../../../components/Toaster';
 import DropContext from '../../../contexts/DropContext';
@@ -57,7 +55,7 @@ export class LocationTreeItemRevealer extends TreeItemRevealer {
       loc: ClientSubLocation | ClientLocation,
     ): ClientSubLocation[] => {
       const match = loc.subLocations.find((child) =>
-        absolutePath.startsWith(`${child.path}${SysPath.sep}`),
+        absolutePath.startsWith(`${child.path}${platform.path.sep}`),
       );
       if (loc instanceof ClientLocation) {
         return match ? getSubLocationsToFile(match) : [];
@@ -95,7 +93,7 @@ const isExpanded = (nodeData: ClientLocation | ClientSubLocation, treeData: ITre
   !!treeData.expansion[nodeData instanceof ClientLocation ? nodeData.id : nodeData.path];
 
 /** Add an additional / or \ in order to enforce files only in the specific directory are found, not in those starting with same name */
-const pathAsSearchPath = (path: string) => `${path}${SysPath.sep}`;
+const pathAsSearchPath = (path: string) => `${path}${platform.path.sep}`;
 
 const pathCriteria = (path: string) =>
   new ClientStringSearchCriteria('absolutePath', pathAsSearchPath(path), 'startsWith');
@@ -146,7 +144,10 @@ const DirectoryMenu = observer(
 
     const path = location instanceof ClientLocation ? location.path : location.path;
 
-    const handleOpenFileExplorer = useCallback(() => shell.showItemInFolder(path), [path]);
+    const handleOpenFileExplorer = useCallback(
+      () => platform.desktop.showItemInFolder(path),
+      [path],
+    );
 
     const handleAddToSearch = useCallback(
       () => uiStore.addSearchCriteria(pathCriteria(path)),
@@ -511,7 +512,7 @@ const LocationsPanel = observer((props: Partial<MultiSplitPaneProps>) => {
   const handleChooseWatchedDir = useCallback(async () => {
     let path: string;
     try {
-      const { filePaths } = await RendererMessenger.showOpenDialog({
+      const { filePaths } = await platform.desktop.showOpenDialog({
         properties: ['openDirectory'],
       });
       // multi-selection is disabled which means there can be at most 1 folder
@@ -535,7 +536,8 @@ const LocationsPanel = observer((props: Partial<MultiSplitPaneProps>) => {
       return;
     }
 
-    const addSeparator = (path: string) => (path.endsWith(SysPath.sep) ? path : path + SysPath.sep);
+    const addSeparator = (path: string) =>
+      path.endsWith(platform.path.sep) ? path : path + platform.path.sep;
 
     // Check if the new location is a sub-directory of an existing location
     // add separator to prevent /foo/bar2 from being detected as parent directory of /foo/bar

@@ -6,21 +6,12 @@
 // in the HTML file
 import './style.scss';
 
-import fse from 'fs-extra';
 import { autorun, reaction, runInAction } from 'mobx';
-import path from 'path';
 import React from 'react';
 import { Root, createRoot } from 'react-dom/client';
 
 import { IS_DEV } from 'common/process';
 import { IS_PREVIEW_WINDOW, WINDOW_STORAGE_KEY } from 'common/window';
-import { getSqliteDbPath } from 'common/library-registry';
-import { RendererMessenger } from 'src/ipc/renderer';
-import SQLiteBackend from './backend/sqlite-backend';
-import SQLiteBackupScheduler from './backend/sqlite-backup-scheduler';
-import { sqliteInit, SQLITE_DB_FILENAME } from './backend/sqlite-config';
-import { migrateIfNeeded } from './backend/migration-indexeddb-to-sqlite';
-import { migrateToMultiLibraryLayout } from './renderer-migration';
 import App from './frontend/App';
 import LibrarySelector from './frontend/containers/LibrarySelector';
 import SplashScreen from './frontend/containers/SplashScreen';
@@ -30,6 +21,30 @@ import PreviewApp from './frontend/Preview';
 import { getFileStorageKey } from './frontend/stores/FileStore';
 import RootStore from './frontend/stores/RootStore';
 import { getPreferencesStorageKey } from './frontend/stores/UiStore';
+
+// ---------------------------------------------------------------------------
+// Web-mode imports (always safe — no Node deps)
+// ---------------------------------------------------------------------------
+import { HttpBackend } from './backend/http-backend';
+import type { DataBackup } from './api/data-backup';
+
+// ---------------------------------------------------------------------------
+// Electron-only imports — only reachable when IS_WEB_BUILD is false.
+// These are static imports so they are always included in the module graph;
+// TASK-130's web webpack config will redirect them to empty stubs via
+// NormalModuleReplacementPlugin so they are excluded from the web bundle.
+// IS_WEB_BUILD=false in the electron webpack configs, so the web branch in
+// main() is dead-code-eliminated from the Electron build.
+// ---------------------------------------------------------------------------
+import fse from 'fs-extra';
+import path from 'path';
+import { getSqliteDbPath } from 'common/library-registry';
+import { RendererMessenger } from 'src/ipc/renderer';
+import SQLiteBackend from './backend/sqlite-backend';
+import SQLiteBackupScheduler from './backend/sqlite-backup-scheduler';
+import { sqliteInit, SQLITE_DB_FILENAME } from './backend/sqlite-config';
+import { migrateIfNeeded } from './backend/migration-indexeddb-to-sqlite';
+import { migrateToMultiLibraryLayout } from './renderer-migration';
 
 async function main(): Promise<void> {
   console.groupCollapsed('Initializing OneFolder');
@@ -43,6 +58,49 @@ async function main(): Promise<void> {
   const root = createRoot(container);
 
   root.render(<SplashScreen />);
+
+  // ---------------------------------------------------------------------------
+  // Web mode (IS_WEB_BUILD=true): construct HttpBackend; skip all SQLite/IPC setup.
+  // IS_WEB_BUILD is replaced with a literal by webpack DefinePlugin — the dead
+  // branch is eliminated from the bundle at build time (TASK-127 / TASK-130).
+  // ---------------------------------------------------------------------------
+  if (IS_WEB_BUILD) {
+    // The sidecar server is always same-origin (served by the same Express process
+    // that serves the SPA). An empty base URL means all fetch() calls use the
+    // current origin, which is correct for both dev and production.
+    const backend = new HttpBackend('');
+
+    // No-op backup: read-only web build has no backup concept.
+    const noOpBackup: DataBackup = {
+      schedule() {
+        /* no-op */
+      },
+      backupToFile() {
+        return Promise.reject(
+          new Error('[web] backupToFile: not supported in the read-only web build'),
+        );
+      },
+      restoreFromFile() {
+        return Promise.reject(
+          new Error('[web] restoreFromFile: not supported in the read-only web build'),
+        );
+      },
+      peekFile() {
+        return Promise.reject(
+          new Error('[web] peekFile: not supported in the read-only web build'),
+        );
+      },
+    };
+
+    // In web mode there is no library selector or preview window — just the main app.
+    await runWebMainApp(backend, noOpBackup, root);
+    console.groupEnd();
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Electron mode (IS_WEB_BUILD=false): original SQLite/IPC path — unchanged.
+  // ---------------------------------------------------------------------------
 
   // Show the library selector when multiple libraries exist and no library has
   // been chosen yet for this load. A single-library user always proceeds without
@@ -109,6 +167,48 @@ async function main(): Promise<void> {
   }
   console.groupEnd();
 }
+
+// ---------------------------------------------------------------------------
+// Web mode main app (read-only, HttpBackend)
+// ---------------------------------------------------------------------------
+
+async function runWebMainApp(backend: HttpBackend, backup: DataBackup, root: Root): Promise<void> {
+  const rootStore = await RootStore.main(backend, backup);
+
+  // Web build: no IPC initialized() call, no fullscreen/preferences from IPC.
+  // Preferences are still saved to localStorage so a page reload restores them.
+
+  reaction(
+    () => rootStore.fileStore.getPersistentPreferences(),
+    (preferences) => {
+      localStorage.setItem(getFileStorageKey(undefined), JSON.stringify(preferences));
+    },
+    { delay: 200 },
+  );
+
+  reaction(
+    () => rootStore.uiStore.getPersistentPreferences(),
+    (preferences) => {
+      localStorage.setItem(getPreferencesStorageKey(undefined), JSON.stringify(preferences));
+    },
+    { delay: 200 },
+  );
+
+  autorun(() => {
+    document.title = rootStore.getWindowTitle();
+  });
+
+  root.render(
+    <StoreProvider value={rootStore}>
+      <App />
+      <Overlay />
+    </StoreProvider>,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Electron mode main app (SQLiteBackend)
+// ---------------------------------------------------------------------------
 
 async function runMainApp(
   db: import('better-sqlite3').Database,

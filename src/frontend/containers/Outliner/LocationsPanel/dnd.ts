@@ -1,17 +1,14 @@
-import { webUtils } from 'electron';
-import fse from 'fs-extra';
 import { action } from 'mobx';
-import path from 'path';
 
 import { retainArray } from 'common/core';
 import { timeoutPromise } from 'common/timeout';
 import { IMG_EXTENSIONS } from '../../../../api/file';
 import { StoreFileMessage } from '../../../../ipc/messages';
-import { RendererMessenger } from '../../../../ipc/renderer';
 import { ALLOWED_DROP_TYPES } from '../../../contexts/DropContext';
 import { DnDAttribute } from '../../../contexts/TagDnDContext';
 import { ClientFile } from '../../../entities/File';
 import FileStore from '../../../stores/FileStore';
+import platform from 'src/frontend/platform';
 
 const ALLOWED_FILE_DROP_TYPES = IMG_EXTENSIONS.map((ext) => `image/${ext}`);
 
@@ -81,11 +78,12 @@ export async function storeDroppedImage(dropData: (string | DroppedFile)[], dire
 
     // Store file -> detected by watching the directory -> automatically imported
     if (typeof dataItem !== 'string') {
-      const buffer = dataItem.path ? await fse.readFile(dataItem.path) : dataItem.file;
+      const buffer = dataItem.path ? await platform.fs.readFile(dataItem.path) : dataItem.file;
       fileData = {
         directory,
-        filenameWithExt: path.basename(dataItem.path) || dataItem.file.name,
-        imgBase64: buffer.toString('base64'),
+        filenameWithExt: platform.path.basename(dataItem.path) || dataItem.file.name,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        imgBase64: (buffer as any).toString('base64'),
       };
     } else if (typeof dataItem === 'string') {
       // It's probably a URL, so we can download it to get the image data
@@ -104,7 +102,7 @@ export async function storeDroppedImage(dropData: (string | DroppedFile)[], dire
       // So it can be tagged immediately
       // Filename will be incremented if file already exists, e.g. `image.jpg -> image 1.jpg`
       try {
-        const reply = await RendererMessenger.storeFile({ directory, filenameWithExt, imgBase64 });
+        const reply = await platform.desktop.storeFile({ directory, filenameWithExt, imgBase64 });
         console.log('Imported dropped file', reply.downloadPath);
       } catch (e) {
         console.error('Could not import file', e);
@@ -160,7 +158,7 @@ export async function getDropData(e: React.DragEvent): Promise<Array<DroppedFile
       if (ALLOWED_FILE_DROP_TYPES.includes(file.type)) {
         // Resolve the filesystem path NOW, while the DataTransfer File is live —
         // File.path no longer exists (removed in Electron 32).
-        dropItems.add({ file, path: webUtils.getPathForFile(file) });
+        dropItems.add({ file, path: platform.desktop.getPathForFile(file) });
       }
     }
   }

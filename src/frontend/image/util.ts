@@ -1,6 +1,6 @@
 import { clamp } from 'common/core';
-import fse from 'fs-extra';
 import { thumbnailFormat } from 'common/config';
+import platform from 'src/frontend/platform';
 
 export interface Loader extends Decoder {
   init: () => Promise<void>;
@@ -12,7 +12,7 @@ export interface Decoder {
 
 /** Returns a string that can be used as img src attribute */
 export async function getBlob(decoder: Decoder, path: string): Promise<string> {
-  const buf = await fse.readFile(path);
+  const buf = await platform.fs.readFile(path);
   const data = await decoder.decode(buf);
   const blob = await new Promise<Blob>((resolve, reject) =>
     dataToCanvas(data).toBlob(
@@ -31,7 +31,7 @@ export async function generateThumbnail(
   thumbnailSize: number,
 ): Promise<void> {
   // TODO: merge this functionality with the thumbnail worker: it's basically duplicate code
-  const buffer = await fse.readFile(inputPath);
+  const buffer = await platform.fs.readFile(inputPath);
   const data = await decoder.decode(buffer);
   const sampledCanvas = getSampledCanvas(dataToCanvas(data), thumbnailSize);
   const quality = computeQuality(sampledCanvas, thumbnailSize);
@@ -42,7 +42,7 @@ export async function generateThumbnail(
       quality, // Allows to further compress image
     ),
   );
-  return fse.writeFile(outputPath, Buffer.from(blobBuffer));
+  return platform.fs.writeFile(outputPath, Buffer.from(blobBuffer));
 }
 
 function dataToCanvas(data: ImageData): HTMLCanvasElement {

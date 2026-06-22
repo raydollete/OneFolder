@@ -1,11 +1,9 @@
 import React, { useCallback, useContext, useEffect, useState } from 'react';
-import fse from 'fs-extra';
-import path from 'path';
 
 import useLocalStorage from './useLocalStorage';
-import { RendererMessenger } from 'src/ipc/renderer';
 import { AppToaster } from '../components/Toaster';
 import { getExtraResourcePath } from '../../../common/fs';
+import platform from 'src/frontend/platform';
 
 type CustomThemeContextType = {
   theme: string;
@@ -27,9 +25,9 @@ const CustomThemeContext = React.createContext<CustomThemeContextType>({
 async function copyPresets(themeDir: string) {
   try {
     const presetDir = getExtraResourcePath('themes');
-    const files = await fse.readdir(presetDir);
+    const files = await platform.fs.readdir(presetDir);
     for (const file of files) {
-      await fse.copy(`${presetDir}/${file}`, `${themeDir}/${file}`);
+      await platform.fs.copy(`${presetDir}/${file}`, `${themeDir}/${file}`);
     }
   } catch (e) {
     console.error(e);
@@ -38,12 +36,12 @@ async function copyPresets(themeDir: string) {
 
 async function loadThemeFiles(themeDir: string): Promise<string[]> {
   try {
-    await fse.ensureDir(themeDir);
+    await platform.fs.ensureDir(themeDir);
 
     // Place default custom themes from resources/themes in the theme directory
     await copyPresets(themeDir);
 
-    const files = await fse.readdir(themeDir);
+    const files = await platform.fs.readdir(themeDir);
     return files.filter((f) => f.endsWith('.css'));
   } catch (e) {
     console.error(e);
@@ -62,13 +60,13 @@ function applyTheme(themeDir: string, filename: string) {
     link.id = customThemeLinkId;
     link.rel = 'stylesheet';
     link.type = 'text/css';
-    link.href = `file:///${path.join(themeDir, filename)}`;
+    link.href = `file:///${platform.path.join(themeDir, filename)}`;
 
     link.onerror = () =>
       AppToaster.show({
         message: 'Could not load theme',
         timeout: 5000,
-        clickAction: { onClick: RendererMessenger.toggleDevTools, label: 'Toggle DevTools' },
+        clickAction: { onClick: platform.desktop.toggleDevTools, label: 'Toggle DevTools' },
       });
 
     // The style of the settings panel doesn't automatically update, since it's a separate window
@@ -88,7 +86,7 @@ export const CustomThemeProvider = ({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     // Load options and previously selected theme on startup
-    RendererMessenger.getThemesDirectory().then((dir) => {
+    platform.desktop.getThemesDirectory().then((dir) => {
       setThemeDir(dir);
       loadThemeFiles(dir).then(setOptions);
       if (theme) {

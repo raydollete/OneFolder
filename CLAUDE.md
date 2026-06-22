@@ -38,6 +38,22 @@ yarn build         # Production build
 yarn package       # Build + electron-builder for platform
 ```
 
+# Platform Seam / Web Build
+
+Frontend code must import platform capabilities (filesystem, path, shell, RendererMessenger, ExifIO) from **`src/frontend/platform`** — never directly from `fs-extra`, `electron`, `path` (Node), or `common/ExifIO`. Violating this invariant breaks the web bundle at compile time.
+
+A webpack alias selects `platform.electron.ts` (faithful pass-through) or `platform.web.ts` (HTTP-backed stubs + loud rejects for writes) at bundle time. The Electron desktop build is unaffected.
+
+Additional build targets for the headless sidecar web build (see `docs/headless-web-build.md`):
+
+```bash
+yarn dev:web            # webpack --watch, web SPA (output: dist-web/)
+yarn dev:server         # ts-node src/server/index.ts (server from source)
+yarn build:web          # production web SPA build
+yarn build:server       # production Node server bundle
+yarn package:headless   # build both + produce dist-headless/ SEA binary
+```
+
 # Documentation
 
 Project documentation lives in `docs/` — read relevant docs before making changes to understand design decisions and system behavior.

@@ -8,8 +8,6 @@ import SavedSearchesPanel from './SavedSearchesPanel';
 import TagsPanel, { OutlinerActionBar } from './TagsPanel';
 import NavigationPanel from './NavigationPanel';
 import GenericButtonNavigation from './GenericButtonNavigation';
-import { shell } from 'electron';
-
 const Outliner = () => {
   const { uiStore } = useStore();
 

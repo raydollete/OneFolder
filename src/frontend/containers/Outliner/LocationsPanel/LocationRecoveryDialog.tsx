@@ -1,16 +1,14 @@
-import fse from 'fs-extra';
 import { observer } from 'mobx-react-lite';
-import Path from 'path';
 import React, { useState } from 'react';
 
 import { Button, IconSet } from 'widgets';
 import { Dialog } from 'widgets/popovers';
 import { IMG_EXTENSIONS } from '../../../../api/file';
-import { RendererMessenger } from '../../../../ipc/renderer';
 import { AppToaster } from '../../../components/Toaster';
 import { useStore } from '../../../contexts/StoreContext';
 import { ClientLocation } from '../../../entities/Location';
 import LocationStore from '../../../stores/LocationStore';
+import platform from 'src/frontend/platform';
 
 interface IMatch {
   locationImageCount: number;
@@ -21,9 +19,9 @@ interface IMatch {
 async function findImagesRecursively(path: string): Promise<string[]> {
   try {
     const imgs: string[] = [];
-    for (const file of await fse.readdir(path)) {
-      const fullPath = Path.join(path, file);
-      if ((await fse.stat(fullPath)).isDirectory()) {
+    for (const file of await platform.fs.readdir(path)) {
+      const fullPath = platform.path.join(path, file);
+      if ((await platform.fs.stat(fullPath)).isDirectory()) {
         imgs.push(...(await findImagesRecursively(fullPath)));
       } else if (IMG_EXTENSIONS.some((ext) => file.toLowerCase().endsWith(ext))) {
         imgs.push(fullPath);
@@ -223,7 +221,7 @@ const LocationRecoveryDialog = () => {
   };
 
   const handleLocate = async () => {
-    const { filePaths: dirs } = await RendererMessenger.showOpenDialog({
+    const { filePaths: dirs } = await platform.desktop.showOpenDialog({
       properties: ['openDirectory'],
       defaultPath: location.path, // TODO: Maybe pick the parent dir of the original location by default?
     });
@@ -245,7 +243,7 @@ const LocationRecoveryDialog = () => {
   };
 
   const handleRescan = async () => {
-    const exists = await fse.pathExists(location.path);
+    const exists = await platform.fs.pathExists(location.path);
 
     if (exists) {
       uiStore.closeLocationRecovery();

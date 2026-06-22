@@ -1,9 +1,8 @@
-import fse from 'fs-extra';
 import React, { ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { formatDateTime } from 'common/fmt';
-import { RendererMessenger } from '../../ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
+import platform from 'src/frontend/platform';
 import { ClientFile } from '../entities/File';
 import { usePromise } from '../hooks/usePromise';
 import { AppToaster } from './Toaster';
@@ -45,7 +44,7 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [exifStats, setExifStats] = useState<Record<string, string>>({});
 
   const modified = usePromise(file.absolutePath, async (filePath) => {
-    const stats = await fse.stat(filePath);
+    const stats = await platform.fs.stat(filePath);
     return formatDateTime(stats.ctime);
   });
 
@@ -110,7 +109,7 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
         .catch((err) => {
           AppToaster.show({
             message: 'Could not save image file',
-            clickAction: { label: 'View', onClick: RendererMessenger.toggleDevTools },
+            clickAction: { label: 'View', onClick: platform.desktop.toggleDevTools },
             timeout: 6000,
           });
           console.error('Could not update file', err);

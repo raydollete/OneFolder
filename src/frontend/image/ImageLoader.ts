@@ -1,6 +1,5 @@
-import fse from 'fs-extra';
 import { action } from 'mobx';
-import StreamZip from 'node-stream-zip';
+import platform from 'src/frontend/platform';
 
 import ExifIO from 'common/ExifIO';
 import { thumbnailMaxSize } from 'common/config';
@@ -103,6 +102,14 @@ class ImageLoader {
    * @throws When a thumbnail does not exist and cannot be generated
    */
   async ensureThumbnail(file: ClientFile): Promise<boolean> {
+    // In the web build, thumbnail generation is handled server-side by the
+    // sidecar's /api/thumb/:id endpoint.  The renderer has no local filesystem
+    // access and cannot generate thumbnails itself.  Signal "already exists"
+    // so callers don't attempt local generation.  TASK-131.
+    if (platform.isWebBuild) {
+      return false;
+    }
+
     const { extension, absolutePath, thumbnailPath } = {
       extension: file.extension,
       absolutePath: file.absolutePath,
@@ -110,10 +117,10 @@ class ImageLoader {
       thumbnailPath: file.thumbnailPath.split('?v=1')[0],
     };
 
-    if (await fse.pathExists(thumbnailPath)) {
+    if (await platform.fs.pathExists(thumbnailPath)) {
       // Files like PSDs have a tendency to change: Check if thumbnail needs an update
-      const fileStats = await fse.stat(absolutePath);
-      const thumbStats = await fse.stat(thumbnailPath);
+      const fileStats = await platform.fs.stat(absolutePath);
+      const thumbStats = await platform.fs.stat(thumbnailPath);
       if (fileStats.mtime < thumbStats.ctime) {
         return false; // if file mod date is before thumbnail creation date, keep using the same thumbnail
       }
@@ -170,6 +177,24 @@ class ImageLoader {
 
   async getImageSrc(file: ClientFile): Promise<string | undefined> {
     const handlerType = FormatHandlers[file.extension];
+
+    // In the web build, image bytes live on the server — the renderer cannot
+    // read local files.  Route all formats to the sidecar's HTTP endpoints:
+    //   web formats    → /api/preview/:id falls through to stream the original
+    //   non-web formats → /api/preview/:id decodes HEIC/PSD/TIFF/EXR server-side
+    // TASK-131.
+    if (platform.isWebBuild) {
+      switch (handlerType) {
+        case 'extractEmbeddedThumbnailOnly':
+        case 'none':
+          return undefined;
+        default:
+          // Return a /api/preview/:id URL — encodeFilePath passes it through
+          // unchanged since it already starts with '/'.
+          return platform.encodePreviewPath(file.id);
+      }
+    }
+
     switch (handlerType) {
       case 'web':
         return file.absolutePath;
@@ -222,7 +247,7 @@ class ImageLoader {
       (dimensions.width === 0 || dimensions.height === 0)
     ) {
       try {
-        const psdData = await this.psdLoader.decode(await fse.readFile(absolutePath));
+        const psdData = await this.psdLoader.decode(await platform.fs.readFile(absolutePath));
         dimensions.width = psdData.width;
         dimensions.height = psdData.height;
       } catch (e) {}
@@ -247,7 +272,7 @@ class ImageLoader {
       (result.dimensions.width === 0 || result.dimensions.height === 0)
     ) {
       try {
-        const psdData = await this.psdLoader.decode(await fse.readFile(absolutePath));
+        const psdData = await this.psdLoader.decode(await platform.fs.readFile(absolutePath));
         result.dimensions.width = psdData.width;
         result.dimensions.height = psdData.height;
       } catch (e) {}
@@ -257,18 +282,8 @@ class ImageLoader {
   }
 
   private async extractKritaThumbnail(absolutePath: string, outputPath: string) {
-    const zip = new StreamZip.async({ file: absolutePath });
-    let success = false;
     console.debug('Extracting thumbnail from', absolutePath);
-    try {
-      const count = await zip.extract('preview.png', outputPath);
-      success = count === 1;
-    } catch (e) {
-      console.error('Could not extract thumbnail from .kra file', absolutePath, e);
-    } finally {
-      zip.close().catch(console.warn);
-    }
-    return success;
+    return platform.fs.extractZipEntry(absolutePath, 'preview.png', outputPath);
   }
 
   private updateCache(file: ClientFile, src: ObjectURL) {

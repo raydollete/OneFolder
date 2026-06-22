@@ -8,7 +8,7 @@ import {
   computed,
   runInAction,
 } from 'mobx';
-import Path from 'path';
+import platform from 'src/frontend/platform';
 
 import { FileDTO, IMG_EXTENSIONS_TYPE } from '../../api/file';
 import { ID } from '../../api/id';
@@ -95,9 +95,9 @@ export class ClientFile {
     this.extension = fileProps.extension;
 
     const location = store.getLocation(this.locationId);
-    this.absolutePath = Path.join(location.path, this.relativePath);
+    this.absolutePath = platform.path.join(location.path, this.relativePath);
 
-    const base = Path.basename(this.relativePath);
+    const base = platform.path.basename(this.relativePath);
     this.filename = base.slice(0, base.lastIndexOf('.'));
 
     this.tags = observable(this.store.getTags(fileProps.tags));
@@ -296,8 +296,8 @@ export async function getMetaData(stats: FileStats, imageLoader: ImageLoader): P
   const dimensions = await imageLoader.getImageResolution(stats.absolutePath);
 
   return {
-    name: Path.basename(path),
-    extension: Path.extname(path).slice(1).toLowerCase() as IMG_EXTENSIONS_TYPE,
+    name: platform.path.basename(path),
+    extension: platform.path.extname(path).slice(1).toLowerCase() as IMG_EXTENSIONS_TYPE,
     size: stats.size,
     width: dimensions.width,
     height: dimensions.height,
@@ -326,8 +326,8 @@ export async function getMetaDataWithTags(
   const { dimensions, tags } = await imageLoader.getImageResolutionAndTags(stats.absolutePath);
 
   return {
-    name: Path.basename(path),
-    extension: Path.extname(path).slice(1).toLowerCase() as IMG_EXTENSIONS_TYPE,
+    name: platform.path.basename(path),
+    extension: platform.path.extname(path).slice(1).toLowerCase() as IMG_EXTENSIONS_TYPE,
     size: stats.size,
     width: dimensions.width,
     height: dimensions.height,

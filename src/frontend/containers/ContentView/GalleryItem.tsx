@@ -1,10 +1,10 @@
-import fse from 'fs-extra';
 import { action, when } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ellipsize, humanFileSize } from 'common/fmt';
-import { encodeFilePath, isFileExtensionVideo } from 'common/fs';
+import { isFileExtensionVideo } from 'common/fs';
+import platform from 'src/frontend/platform';
 import { IconButton, IconSet, Tag } from 'widgets';
 import { useStore } from '../../contexts/StoreContext';
 import { ClientFile } from '../../entities/File';
@@ -139,7 +139,7 @@ export const Thumbnail = observer(
       async (file, isBroken, mounted, thumbnailPath, useThumbnail) => {
         // If it is broken, only show thumbnail if it exists.
         if (!mounted || isBroken === true) {
-          if (await fse.pathExists(thumbnailPath)) {
+          if (await platform.fs.pathExists(thumbnailPath)) {
             return thumbnailPath;
           } else {
             throw new Error('No thumbnail available.');
@@ -272,7 +272,7 @@ export const Thumbnail = observer(
         // TODO: add thumbnails to video for performance in gallery view
         if (isFileExtensionVideo(file.extension)) {
           const videoProps = {
-            src: encodeFilePath(imageSource.value.ok),
+            src: platform.encodeFilePath(imageSource.value.ok),
             'data-file-id': file.id,
             onError: handleImageError,
             muted: true,
@@ -288,7 +288,7 @@ export const Thumbnail = observer(
 
         return (
           <img
-            src={encodeFilePath(imageSource.value.ok)}
+            src={platform.encodeFilePath(imageSource.value.ok)}
             alt=""
             data-file-id={file.id}
             onError={handleImageError}

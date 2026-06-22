@@ -1,11 +1,9 @@
 import { getFilenameFriendlyFormattedDateTime } from 'common/fmt';
-import { shell } from 'electron';
 import { observer } from 'mobx-react-lite';
-import SysPath from 'path';
 import React, { useEffect, useState } from 'react';
 import { AppToaster } from 'src/frontend/components/Toaster';
-import { RendererMessenger } from 'src/ipc/renderer';
 import { Button, ButtonGroup, IconSet } from 'widgets';
+import platform from 'src/frontend/platform';
 import { Callout } from 'widgets/notifications';
 import { Alert, DialogButton } from 'widgets/popovers';
 import { useStore } from '../../contexts/StoreContext';
@@ -22,7 +20,7 @@ export const ImportExport = observer(() => {
   }>();
   const [backupDir, setBackupDir] = useState('');
   useEffect(() => {
-    RendererMessenger.getDefaultBackupDirectory().then(setBackupDir);
+    platform.desktop.getDefaultBackupDirectory().then(setBackupDir);
   }, []);
 
   const handleChooseImportDir = async ([path]: [string, ...string[]]) => {
@@ -41,19 +39,19 @@ export const ImportExport = observer(() => {
   const handleCreateExport = async () => {
     const formattedDateTime = getFilenameFriendlyFormattedDateTime(new Date());
     const filename = `backup_${formattedDateTime}.db`.replaceAll(':', '-');
-    const filepath = SysPath.join(backupDir, filename);
+    const filepath = platform.path.join(backupDir, filename);
     try {
       await rootStore.backupDatabaseToFile(filepath);
       AppToaster.show({
         message: 'Backup created successfully!',
-        clickAction: { label: 'View', onClick: () => shell.showItemInFolder(filepath) },
+        clickAction: { label: 'View', onClick: () => platform.desktop.showItemInFolder(filepath) },
         timeout: 5000,
       });
     } catch (e) {
       console.error(e);
       AppToaster.show({
         message: 'Could not create backup, open DevTools for more details',
-        clickAction: { label: 'View', onClick: RendererMessenger.toggleDevTools },
+        clickAction: { label: 'View', onClick: platform.desktop.toggleDevTools },
         timeout: 5000,
       });
     }
@@ -161,7 +159,7 @@ export const ImportExport = observer(() => {
               });
               try {
                 await rootStore.restoreDatabaseFromFile(isConfirmingFileImport.path);
-                RendererMessenger.reload();
+                platform.desktop.reload();
               } catch (e) {
                 console.error('Could not restore backup', e);
                 AppToaster.show({

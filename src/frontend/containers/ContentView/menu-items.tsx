@@ -1,7 +1,6 @@
-import { shell } from 'electron';
 import { observer } from 'mobx-react-lite';
-import SysPath from 'path';
 import React from 'react';
+import platform from 'src/frontend/platform';
 
 import { IconSet } from 'widgets';
 import { MenuItem, MenuRadioItem, MenuSubItem } from 'widgets/menus';
@@ -101,7 +100,7 @@ export const FileViewerMenuItems = ({ file }: { file: ClientFile }) => {
               e,
               new ClientStringSearchCriteria(
                 'absolutePath',
-                SysPath.dirname(file.absolutePath) + SysPath.sep,
+                platform.path.dirname(file.absolutePath) + platform.path.sep,
                 'startsWith',
               ),
             )
@@ -115,7 +114,7 @@ export const FileViewerMenuItems = ({ file }: { file: ClientFile }) => {
               e,
               new ClientStringSearchCriteria(
                 'absolutePath',
-                locationStore.get(file.locationId)!.path + SysPath.sep,
+                locationStore.get(file.locationId)!.path + platform.path.sep,
                 'startsWith',
               ),
             )
@@ -223,7 +222,7 @@ export const ExternalAppMenuItems = observer(({ file }: { file: ClientFile }) =>
         icon={IconSet.TREE_LIST}
       />
       <MenuItem
-        onClick={() => shell.showItemInFolder(file.absolutePath)}
+        onClick={() => platform.desktop.showItemInFolder(file.absolutePath)}
         text="Reveal in File Browser"
         icon={IconSet.FOLDER_CLOSE}
       />

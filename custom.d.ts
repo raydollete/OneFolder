@@ -1,4 +1,17 @@
 declare module '*.scss';
+
+/**
+ * Build-time constant injected by webpack DefinePlugin.
+ * - Electron renderer builds: `false` (set in webpack.dev.js / webpack.prod.js).
+ * - Web SPA build: `true` (set in the web webpack config added in TASK-130).
+ *
+ * Use this flag to gate web-only code paths. When `false`, dead-code elimination
+ * removes the web branch from the electron bundle. When `true`, the electron
+ * (SQLite/IPC) branch is eliminated from the web bundle.
+ *
+ * See INV-034 / TASK-127.
+ */
+declare const IS_WEB_BUILD: boolean;
 declare module '*.svg' {
   import React = require('react');
   export const ReactComponent: React.FunctionComponent<React.SVGProps<SVGSVGElement>>;

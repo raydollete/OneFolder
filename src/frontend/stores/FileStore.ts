@@ -1,4 +1,3 @@
-import fse from 'fs-extra';
 import {
   action,
   computed,
@@ -18,12 +17,12 @@ import { ConditionDTO, OrderBy, OrderDirection } from '../../api/data-storage-se
 import { FileDTO, IMG_EXTENSIONS_TYPE } from '../../api/file';
 import { ID } from '../../api/id';
 import { AppToaster } from '../components/Toaster';
-import { RendererMessenger } from '../../ipc/renderer';
 import { ClientFile, mergeMovedFile } from '../entities/File';
 import { ClientLocation } from '../entities/Location';
 import { ClientStringSearchCriteria, ClientTagSearchCriteria } from '../entities/SearchCriteria';
 import { ClientTag } from '../entities/Tag';
 import RootStore from './RootStore';
+import platform from 'src/frontend/platform';
 
 /**
  * Dev-build regressions this file watches for:
@@ -454,7 +453,7 @@ class FileStore {
       // Check if any locations exist on disk before starting
       const locationChecks = await Promise.allSettled(
         locations.map(async (location) => {
-          const exists = await fse.pathExists(location.path);
+          const exists = await platform.fs.pathExists(location.path);
           return { location, exists };
         }),
       );
@@ -689,7 +688,7 @@ class FileStore {
       const { thumbnailDirectory } = this.rootStore.uiStore; // TODO: make a config store for this?
       const oldThumbnailPath = file.thumbnailPath.replace('?v=1', '');
       const newThumbPath = getThumbnailPath(newData.absolutePath, thumbnailDirectory);
-      fse.move(oldThumbnailPath, newThumbPath).catch(() => {});
+      platform.fs.move(oldThumbnailPath, newThumbPath).catch(() => {});
 
       const newClientFile = new ClientFile(this, newIFile, this.rootStore.exifTool);
       newClientFile.thumbnailPath = newThumbPath;
@@ -1065,7 +1064,7 @@ class FileStore {
       // We don't store whether files are missing (since they might change at any time)
       // So we have to check all files and check their existence them here
       const existenceCheckPromises = newClientFiles.map((clientFile) => async () => {
-        clientFile.setBroken(!(await fse.pathExists(clientFile.absolutePath)));
+        clientFile.setBroken(!(await platform.fs.pathExists(clientFile.absolutePath)));
       });
 
       const N = 50; // TODO: same here as in fetchFromBackend: number of concurrent checks should be system dependent
@@ -1468,7 +1467,11 @@ class FileStore {
     }
 
     const outputFile = new ClientFile(this, dto, this.rootStore.exifTool);
-    outputFile.thumbnailPath = this.rootStore.imageLoader.needsThumbnail(dto)
+    // In the web build thumbnailDirectory is '' — use the file ID as the
+    // thumbnail path so encodeFilePath routes it to /api/thumb/:id.
+    outputFile.thumbnailPath = !uiStore.thumbnailDirectory
+      ? dto.id
+      : this.rootStore.imageLoader.needsThumbnail(dto)
       ? getThumbnailPath(dto.absolutePath, uiStore.thumbnailDirectory)
       : dto.absolutePath;
 
@@ -1529,7 +1532,7 @@ class FileStore {
       // B. Place temp → final (single move on the main side).
       let outputPath: string;
       try {
-        const result = await RendererMessenger.commitMediaJob(jobId);
+        const result = await platform.desktop.commitMediaJob(jobId);
         outputPath = result.outputPath;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -1569,8 +1572,8 @@ class FileStore {
   @action private async removeThumbnail(path: string) {
     const thumbnailPath = getThumbnailPath(path, this.rootStore.uiStore.thumbnailDirectory);
     try {
-      if (await fse.pathExists(thumbnailPath)) {
-        return fse.remove(thumbnailPath);
+      if (await platform.fs.pathExists(thumbnailPath)) {
+        return platform.fs.remove(thumbnailPath);
       }
     } catch (error) {
       // TODO: Show a notification that not all thumbnails could be removed?
@@ -1636,7 +1639,7 @@ class FileStore {
     // we can simply check whether they exist after they start rendering
     // TODO: We can already get this from chokidar (folder watching), pretty much for free
     const existenceCheckPromises = newClientFiles.map((clientFile) => async () => {
-      clientFile.setBroken(!(await fse.pathExists(clientFile.absolutePath)));
+      clientFile.setBroken(!(await platform.fs.pathExists(clientFile.absolutePath)));
     });
 
     // Run the existence check with at most N checks in parallel
@@ -1823,9 +1826,14 @@ class FileStore {
 
       const file = new ClientFile(this, f, this.rootStore.exifTool);
       // Initialize the thumbnail path so the image can be loaded immediately when it mounts.
-      // To ensure the thumbnail actually exists, the `ensureThumbnail` function should be called
-      file.thumbnailPath = this.rootStore.imageLoader.needsThumbnail(f)
-        ? getThumbnailPath(f.absolutePath, this.rootStore.uiStore.thumbnailDirectory)
+      // To ensure the thumbnail actually exists, the `ensureThumbnail` function should be called.
+      // In the web build thumbnailDirectory is '' — use the file ID as the thumbnail path
+      // so encodeFilePath routes it to /api/thumb/:id on the sidecar server.
+      const td = this.rootStore.uiStore.thumbnailDirectory;
+      file.thumbnailPath = !td
+        ? f.id
+        : this.rootStore.imageLoader.needsThumbnail(f)
+        ? getThumbnailPath(f.absolutePath, td)
         : f.absolutePath;
       return file;
     });

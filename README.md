@@ -87,6 +87,59 @@ Then run the following commands to get started:
 An installable executable can be built using `yarn package` for your platform in the `/dist` folder. The building is performed using the [electron-builder](https://www.electron.build/) package, and is configured by a section in the `package.json` file.
 Builds are automatically published to Github Releases when a tag is created in GitHub.
 
+> This fork ships **portable-only** on Windows. Use `yarn package:portable` to produce the portable `.exe` (`yarn package:appimage` for the Linux AppImage). Nothing about the desktop build changed when the headless build below was added — the two are entirely separate build paths from the same codebase.
+
+### Build Options
+
+OneFolder builds from a single codebase to two different targets, selected at build time by a webpack "platform seam" (`src/frontend/platform`). The MobX store/component tree is identical in both; only the platform implementation and the backend differ.
+
+| Target | What it is | Build command(s) |
+| --- | --- | --- |
+| **Desktop (Electron)** | The full read/write app. `nodeIntegration` renderer talks to SQLite, the filesystem, and exiftool directly. | `yarn package` / `yarn package:portable` |
+| **Headless (web sidecar)** | A **read-only**, single-user Node server that serves a browser SPA so you can browse one library from another device. | `yarn package:headless` |
+
+The headless target is **additive and experimental** — it does not affect the desktop app. It is read-only by design (no edits, tagging writeback, deletes, or media jobs). See [`docs/headless-web-build.md`](docs/headless-web-build.md) for the full architecture (seam, endpoints, packaging, security boundary).
+
+### Running Headless
+
+The headless build is a Node server (the "sidecar") that opens a library's SQLite database **read-only**, serves the SPA, and streams images/metadata over HTTP. It serves on **port `8666`** by default (`http://localhost:8666`).
+
+**From source (development):**
+
+```bash
+yarn dev:web                              # build the browser SPA into dist-web/ (watch mode)
+ONEFOLDER_AUTH_SECRET=changeme yarn dev:server   # run the server from source via ts-node
+```
+
+**Bundled build:**
+
+```bash
+yarn build:web        # production SPA  -> dist-web/
+yarn build:server     # Node server     -> dist-server/server.bundle.js
+ONEFOLDER_AUTH_SECRET=changeme node dist-server/server.bundle.js
+```
+
+**Single self-contained binary (no Node install required on the target machine):**
+
+```bash
+yarn package:headless     # -> dist-headless/onefolder-server.exe (+ dist-web/, native deps, exiftool)
+cd dist-headless && ONEFOLDER_AUTH_SECRET=changeme ./onefolder-server.exe
+```
+
+Then open `http://localhost:8666` from any device on the network.
+
+**Configuration (environment variables):**
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8666` | HTTP/HTTPS listening port |
+| `ONEFOLDER_AUTH_SECRET` | — | Shared secret used as both basic-auth username and password (required for the auth gate) |
+| `ONEFOLDER_AUTH_USER` / `ONEFOLDER_AUTH_PASSWORD` | — | Explicit basic-auth credentials (take precedence over `ONEFOLDER_AUTH_SECRET`) |
+| `ONEFOLDER_TLS` | `0` | Set to `1` to serve HTTPS instead of HTTP |
+| `ONEFOLDER_TLS_CERT` / `ONEFOLDER_TLS_KEY` | — | Paths to the PEM cert/key when `ONEFOLDER_TLS=1` |
+
+The server serves real local files, so it requires the auth gate and only serves paths resolved from the library's registered locations (a path-traversal guard rejects anything outside). Run it behind TLS (or a reverse proxy / Tailscale) for remote access.
+
 ### Migrating from pre-SQLite backups
 
 Starting with the SQLite data layer (introduced with INV-002), backup files are produced as SQLite `.db` files. Older OneFolder versions produced `.json` backups via `dexie-export-import`. The in-app restore flow only accepts `.db` files, so a legacy `.json` backup must be converted first.

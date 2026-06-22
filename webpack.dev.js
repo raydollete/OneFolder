@@ -5,6 +5,7 @@
 // Based on https://taraksharma.com/setting-up-electron-typescript-react-webpack/
 
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const webpack = require('webpack');
 const path = require('path');
 
 let mainConfig = {
@@ -72,6 +73,13 @@ let rendererConfig = {
       resources: path.resolve(__dirname, 'resources/'),
       src: path.resolve(__dirname, 'src/'),
       wasm: path.resolve(__dirname, 'wasm/'),
+      // Platform seam: resolves to the Electron implementation for the desktop
+      // bundle. The web SPA target (TASK-130) will override this alias to point
+      // at platform.web.ts. See INV-034 / TASK-126.
+      'src/frontend/platform': path.resolve(
+        __dirname,
+        'src/frontend/platform/platform.electron.ts',
+      ),
     },
   },
   externals: {
@@ -126,6 +134,10 @@ let rendererConfig = {
     new HtmlWebpackPlugin({
       template: path.resolve(__dirname, './src/index.html'),
     }),
+    // IS_WEB_BUILD is false in the Electron renderer bundle; this lets the
+    // web-mode branch in renderer.tsx be dead-code-eliminated.
+    // The web SPA webpack config (TASK-130) sets this to true.
+    new webpack.DefinePlugin({ IS_WEB_BUILD: JSON.stringify(false) }),
   ],
 };
 

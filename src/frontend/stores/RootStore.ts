@@ -9,6 +9,7 @@ import UiStore from './UiStore';
 import LocationStore from './LocationStore';
 import ExifIO from 'common/ExifIO';
 import ImageLoader from '../image/ImageLoader';
+import platform from 'src/frontend/platform';
 
 import { RendererMessenger } from 'src/ipc/renderer';
 import SearchStore from './SearchStore';
@@ -67,7 +68,10 @@ class RootStore {
     const separatorKey = libraryId
       ? `${libraryId}:hierarchical-separator`
       : 'hierarchical-separator';
-    this.exifTool = new ExifIO(localStorage.getItem(separatorKey) || undefined);
+    // Route ExifIO construction through the platform seam:
+    //   - Electron build: platform.exif.getExifIO() → new ExifIO(separator) (native, unchanged)
+    //   - Web build:      platform.exif.getExifIO() → HTTP shim (fetches /api/metadata/*)
+    this.exifTool = platform.exif.getExifIO(localStorage.getItem(separatorKey) || undefined);
     this.imageLoader = new ImageLoader(this.exifTool);
     this.mediaReleaseCoordinator = new MediaReleaseCoordinator();
     this.getWindowTitle = () => formatWindowTitle(this.fileStore, this.uiStore);

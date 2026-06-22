@@ -1,16 +1,14 @@
 import { Remote, wrap } from 'comlink';
-import fse from 'fs-extra';
 import { IObservableArray, action, makeObservable, observable, runInAction } from 'mobx';
-import SysPath from 'path';
 
 import { retainArray } from 'common/core';
 import { IMG_EXTENSIONS_TYPE } from '../../api/file';
 import { ID } from '../../api/id';
 import { LocationDTO, SubLocationDTO } from '../../api/location';
-import { RendererMessenger } from '../../ipc/renderer';
 import { AppToaster } from '../components/Toaster';
 import LocationStore, { FileStats } from '../stores/LocationStore';
 import { FolderWatcherWorker } from '../workers/folderWatcher.worker';
+import platform from 'src/frontend/platform';
 
 /** Sorts alphanumerically, "natural" sort */
 const sort = (a: SubLocationDTO, b: SubLocationDTO) =>
@@ -39,7 +37,7 @@ export class ClientSubLocation {
           (subLoc) =>
             new ClientSubLocation(
               this.location,
-              SysPath.join(path, subLoc.name),
+              platform.path.join(path, subLoc.name),
               subLoc.name,
               subLoc.isExcluded,
               subLoc.subLocations,
@@ -116,7 +114,7 @@ export class ClientLocation {
           (subLoc) =>
             new ClientSubLocation(
               this,
-              SysPath.join(this.path, subLoc.name),
+              platform.path.join(this.path, subLoc.name),
               subLoc.name,
               subLoc.isExcluded,
               subLoc.subLocations,
@@ -128,7 +126,7 @@ export class ClientLocation {
   }
 
   get name(): string {
-    return SysPath.basename(this.path);
+    return platform.path.basename(this.path);
   }
 
   @action async init(): Promise<FileStats[] | undefined> {
@@ -150,7 +148,7 @@ export class ClientLocation {
       this.excludedPaths.push(...getExcludedSubLocsRecursively(this.subLocations));
     });
 
-    if (await fse.pathExists(this.path)) {
+    if (await platform.fs.pathExists(this.path)) {
       this.setBroken(false);
       return this.watch(this.path);
     } else {
@@ -199,7 +197,7 @@ export class ClientLocation {
           message: 'Restart OneFolder to re-detect any images',
           timeout: 8000,
           clickAction: {
-            onClick: RendererMessenger.reload,
+            onClick: platform.desktop.reload,
             label: 'Restart',
           },
         });
@@ -337,11 +335,11 @@ async function getDirectoryTree(path: string): Promise<IDirectoryTreeItem[]> {
   try {
     const NULL = { name: '', fullPath: '', children: [] };
     const dirs = await Promise.all(
-      Array.from(await fse.readdir(path), async (file) => {
-        const fullPath = SysPath.join(path, file);
-        if ((await fse.stat(fullPath)).isDirectory()) {
+      Array.from(await platform.fs.readdir(path), async (file) => {
+        const fullPath = platform.path.join(path, file);
+        if ((await platform.fs.stat(fullPath)).isDirectory()) {
           return {
-            name: SysPath.basename(fullPath),
+            name: platform.path.basename(fullPath),
             fullPath,
             children: await getDirectoryTree(fullPath),
           };

@@ -1,6 +1,5 @@
-import path from 'path';
-
 import { IS_DEV } from 'common/process';
+import platform from 'src/frontend/platform';
 
 /**
  * MediaReleaseCoordinator
@@ -41,7 +40,7 @@ import { IS_DEV } from 'common/process';
 
 /** Normalize an absolute path for map key comparisons. */
 function normalizePath(p: string): string {
-  return path.normalize(p).toLowerCase();
+  return platform.path.normalize(p).toLowerCase();
 }
 
 /**

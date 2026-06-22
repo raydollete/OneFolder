@@ -1,6 +1,4 @@
-import fse from 'fs-extra';
 import { action, makeObservable, observable, runInAction } from 'mobx';
-import SysPath from 'path';
 
 import { getThumbnailPath } from 'common/fs';
 import { promiseAllLimit } from 'common/promise';
@@ -9,8 +7,8 @@ import { OrderDirection } from '../../api/data-storage-search';
 import { FileDTO, IMG_EXTENSIONS, IMG_EXTENSIONS_TYPE } from '../../api/file';
 import { ID, generateId } from '../../api/id';
 import { LocationDTO } from '../../api/location';
-import { RendererMessenger } from '../../ipc/renderer';
 import { AppToaster } from '../components/Toaster';
+import platform from 'src/frontend/platform';
 import { getMetaData, getMetaDataWithTags, mergeMovedFile } from '../entities/File';
 import { ClientLocation, ClientSubLocation } from '../entities/Location';
 import { ClientStringSearchCriteria } from '../entities/SearchCriteria';
@@ -156,7 +154,7 @@ class LocationStore {
             message: 'This appears to be taking longer than usual.',
             timeout: 0,
             clickAction: {
-              onClick: RendererMessenger.reload,
+              onClick: platform.desktop.reload,
               label: 'Retry?',
             },
           },
@@ -308,7 +306,7 @@ class LocationStore {
 
           // Delete thumbnail if size has changed, will be re-created automatically when needed
           const thumbPath = getThumbnailPath(dbFile.absolutePath, thumbnailDirectory);
-          fse.remove(thumbPath).catch(console.error);
+          platform.fs.remove(thumbPath).catch(console.error);
 
           updatedFiles.push(newFile);
         }
@@ -345,7 +343,7 @@ class LocationStore {
     const locFiles = await this.findLocationFiles(location.id);
     const files: FileDTO[] = locFiles.map((f) => ({
       ...f,
-      absolutePath: SysPath.join(newPath, f.relativePath),
+      absolutePath: platform.path.join(newPath, f.relativePath),
     }));
     await this.backend.saveFiles(files);
 
@@ -556,7 +554,7 @@ class LocationStore {
       if (location === undefined) {
         throw new Error(`ingestFile: location ${locationId} not found for "${absolutePath}"`);
       }
-      const stat = await fse.stat(absolutePath).catch((e: unknown) => {
+      const stat = await platform.fs.stat(absolutePath).catch((e: unknown) => {
         throw new Error(`ingestFile: "${absolutePath}" is missing on disk — ${String(e)}`);
       });
       const newDto = await pathToIFile(
@@ -718,7 +716,7 @@ function relativePathFromLocation(absolutePath: string, locationPath: string): s
   }
   // Not a prefix (unreconcilable separator/case/drive mismatch): use the basename so
   // Path.join(location.path, relativePath) stays inside the location and never doubles the drive.
-  return '/' + SysPath.basename(absFwd);
+  return '/' + platform.path.basename(absFwd);
 }
 
 export async function pathToIFile(

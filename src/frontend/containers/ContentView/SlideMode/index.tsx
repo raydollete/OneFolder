@@ -1,13 +1,12 @@
-import { shell } from 'electron';
 import { autorun, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
-import SysPath from 'path';
 import React, { useCallback, useEffect, useMemo, useRef, useState, RefObject } from 'react';
 import { ClientFile } from 'src/frontend/entities/File';
 import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';
+import platform from 'src/frontend/platform';
 import { usePromise } from 'src/frontend/hooks/usePromise';
-import { encodeFilePath, isFileExtensionVideo } from 'common/fs';
+import { isFileExtensionVideo } from 'common/fs';
 import { attachVideoFreezeRecovery } from 'src/frontend/image/videoFreezeRecovery';
 import { Button, IconSet, Split } from 'widgets';
 import { UpscaleMode } from '../../../stores/UiStore';
@@ -170,13 +169,13 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
             preloadVideosRef.current.set(nextFile.absolutePath, { el, unregister });
             imageLoader
               .getImageSrc(nextFile)
-              .then((src) => isEffectRunning && src && (el.src = encodeFilePath(src)));
+              .then((src) => isEffectRunning && src && (el.src = platform.encodeFilePath(src)));
           }
         } else {
           const nextImg = new Image();
           imageLoader
             .getImageSrc(nextFile)
-            .then((src) => isEffectRunning && src && (nextImg.src = encodeFilePath(src)));
+            .then((src) => isEffectRunning && src && (nextImg.src = platform.encodeFilePath(src)));
         }
       }
       if (!isFirst.get() && fileStore.fileList.length > 0) {
@@ -188,13 +187,13 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
             preloadVideosRef.current.set(prevFile.absolutePath, { el, unregister });
             imageLoader
               .getImageSrc(prevFile)
-              .then((src) => isEffectRunning && src && (el.src = encodeFilePath(src)));
+              .then((src) => isEffectRunning && src && (el.src = platform.encodeFilePath(src)));
           }
         } else {
           const prevImg = new Image();
           imageLoader
             .getImageSrc(prevFile)
-            .then((src) => isEffectRunning && src && (prevImg.src = encodeFilePath(src)));
+            .then((src) => isEffectRunning && src && (prevImg.src = platform.encodeFilePath(src)));
         }
       }
     });
@@ -302,7 +301,7 @@ const AnnotoriousImage = ({ file, src }: AnnotoriousImageProps) => {
 
   return (
     <div className="image_preview__wrapper">
-      <img src={encodeFilePath(src)} alt="" ref={imgEl} className="image_preview" />
+      <img src={platform.encodeFilePath(src)} alt="" ref={imgEl} className="image_preview" />
     </div>
   );
 };
@@ -428,7 +427,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
                   img.onerror = reject;
                 }
 
-                img.src = encodeFilePath(src);
+                img.src = platform.encodeFilePath(src);
               },
             );
             return dimension;
@@ -553,7 +552,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
                 // original. Remounting guarantees a fresh load of the new file. (INV-026 follow-up)
                 key={file.absolutePath}
                 ref={setSlideVideoRef}
-                src={encodeFilePath(src)}
+                src={platform.encodeFilePath(src)}
                 width={dimension[0]}
                 height={dimension[1]}
                 controls
@@ -588,7 +587,7 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
           {(props) => (
             <img
               {...props}
-              src={encodeFilePath(src)}
+              src={platform.encodeFilePath(src)}
               width={dimension[0]}
               height={dimension[1]}
               alt=""
@@ -642,7 +641,7 @@ interface ImageFallbackProps {
 }
 
 const ImageFallback = ({ error, absolutePath, isVideo, customMessage }: ImageFallbackProps) => {
-  const fileExtension = SysPath.extname(absolutePath).toLowerCase();
+  const fileExtension = platform.path.extname(absolutePath).toLowerCase();
   const isVideoFile = isVideo || isFileExtensionVideo(fileExtension.slice(1));
 
   const getErrorMessage = () => {
@@ -674,15 +673,15 @@ const ImageFallback = ({ error, absolutePath, isVideo, customMessage }: ImageFal
         title={absolutePath}
         style={{ maxWidth: '40ch', overflow: 'hidden', textOverflow: 'ellipsis' }}
       >
-        {SysPath.basename(absolutePath)}
+        {platform.path.basename(absolutePath)}
       </pre>
       <p style={{ fontSize: '0.9em', color: '#888', maxWidth: '50ch', textAlign: 'center' }}>
         {getHelpText()}
       </p>
       <Button
         onClick={() =>
-          shell
-            .openExternal(encodeFilePath(absolutePath))
+          platform.desktop
+            .openExternal(platform.encodeFilePath(absolutePath))
             .catch((e) => console.error(e, absolutePath))
         }
         text={isVideoFile ? 'Open in external video player' : 'Open in external application'}

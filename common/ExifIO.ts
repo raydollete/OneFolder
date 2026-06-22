@@ -54,6 +54,7 @@ const exiftoolRunnable = IS_WIN ? 'exiftool.exe' : 'exiftool.pl';
 const EXIF_TOOL_PATH = getExtraResourcePath(`exiftool/${exiftoolRunnable}`);
 
 console.log('Exif tool path: ', EXIF_TOOL_PATH);
+// Module-level singleton used by the Electron desktop app (no custom path).
 const ep = new exiftool.ExiftoolProcess(EXIF_TOOL_PATH);
 
 const defaultWriteArgs = [
@@ -76,6 +77,18 @@ class ExifIO {
   extraArgs = IS_WIN ? ['charset filename=utf8'] : [];
 
   /**
+   * The ExiftoolProcess instance used by this ExifIO object.
+   *
+   * The Electron desktop build uses the module-level `ep` singleton (default).
+   * The headless server (Node SEA / packaged binary) passes an explicit
+   * exiftoolPath so it can re-derive the path relative to the binary rather
+   * than using getExtraResourcePath (whose __dirname is virtualized in a SEA).
+   *
+   * INV-034 / TASK-133: headless packaging requires SEA-safe path resolution.
+   */
+  private readonly _ep: exiftool.ExiftoolProcess;
+
+  /**
    * Helper method to determine if a file is a video based on its path
    * @param filepath The file path to check
    * @returns true if the file is a video file
@@ -94,47 +107,59 @@ class ExifIO {
       // Metadata sync warnings
       'IPTCDigest',
       'XMP may be out of sync',
-      
+
       // Video-specific warnings
       'ExtractEmbedded option may find more tags',
       'media data',
-      
+
       // General ExifTool warnings
       '[minor]', // General minor warnings
       'Warning:', // General warnings that don't prevent metadata reading
-      
+
       // Additional common warnings
       'Unknown maker note',
       'Bad format',
       'Invalid',
       'Corrupted',
     ];
-    
-    return ignorableWarnings.some(warning => errorMessage.includes(warning));
+
+    return ignorableWarnings.some((warning) => errorMessage.includes(warning));
   }
 
-  constructor(hierarchicalSeparator: string = '|') {
+  /**
+   * @param hierarchicalSeparator  - Tag hierarchy separator (default '|').
+   * @param exiftoolPath           - Optional override path to the exiftool binary.
+   *   When omitted, the module-level singleton (using getExtraResourcePath) is
+   *   used — this is the Electron desktop path.
+   *   When provided (e.g. by the headless server on startup), a new
+   *   ExiftoolProcess is created with the given path, enabling SEA-safe
+   *   path resolution relative to process.execPath.
+   */
+  constructor(hierarchicalSeparator: string = '|', exiftoolPath?: string) {
     this.hierarchicalSeparator = hierarchicalSeparator;
+    // Use the provided path for a dedicated process, or fall back to the
+    // module-level singleton shared by the Electron desktop build.
+    this._ep = exiftoolPath ? new exiftool.ExiftoolProcess(exiftoolPath) : ep;
 
     makeObservable(this);
   }
 
   isOpen(): boolean {
-    return ep._open || false;
+    return this._ep._open || false;
   }
 
   async initialize(): Promise<ExifIO> {
-    if (ep._open) {
+    if (this._ep._open) {
       return this;
     }
     if (!this.isOpening) {
       this.isOpening = true;
-      const pid = await ep.open();
+      const pid = await this._ep.open();
       console.log('Started exiftool process %s', pid);
     } else {
       await new Promise<void>((resolve) =>
         setInterval(() => {
-          if (ep._open) {
+          if (this._ep._open) {
             resolve();
           }
         }, 50),
@@ -144,9 +169,9 @@ class ExifIO {
   }
 
   async close(): Promise<void> {
-    if (ep._open) {
+    if (this._ep._open) {
       console.log('Closing Exiftool...');
-      await ep.close();
+      await this._ep.close();
       console.log('Closed Exiftool');
     }
   }
@@ -159,7 +184,7 @@ class ExifIO {
   // ------------------
 
   async readTags(filepath: string): Promise<string[][]> {
-    const metadata = await ep.readMetadata(filepath, [
+    const metadata = await this._ep.readMetadata(filepath, [
       'HierarchicalSubject',
       'Subject',
       'Keywords',
@@ -195,12 +220,12 @@ class ExifIO {
    * @throws An error if there is an error reading the metadata or if no metadata entry is found.
    */
   async readFacesAnnotations(filepath: string): Promise<MWGRegionInfo | undefined> {
-    const metadata = await ep.readMetadata(filepath, [
+    const metadata = await this._ep.readMetadata(filepath, [
       'struct',
       'XMP:regionInfo',
       ...this.extraArgs,
     ]);
-    
+
     // Handle warnings vs actual errors
     if (metadata.error) {
       // Silently ignore common warnings that don't affect functionality
@@ -212,11 +237,11 @@ class ExifIO {
         throw new Error(metadata.error);
       }
     }
-    
+
     if (!metadata.data?.[0]) {
       return undefined; // No face annotations found, not an error
     }
-    
+
     const entry = metadata.data[0];
     if (!entry.RegionInfo) {
       return undefined;
@@ -225,8 +250,8 @@ class ExifIO {
   }
 
   async readExifTags(filepath: string, tags: string[]): Promise<(string | undefined)[]> {
-    const metadata = await ep.readMetadata(filepath, [...tags, ...this.extraArgs]);
-    
+    const metadata = await this._ep.readMetadata(filepath, [...tags, ...this.extraArgs]);
+
     // Handle warnings vs actual errors
     if (metadata.error) {
       // Silently ignore common warnings that don't affect functionality
@@ -238,17 +263,17 @@ class ExifIO {
         throw new Error(metadata.error);
       }
     }
-    
+
     if (!metadata.data?.[0]) {
       throw new Error('No metadata entry');
     }
-    
+
     const entry = metadata.data[0];
     return tags.map((t) => entry[t]?.toString() || undefined);
   }
 
   async readDescription(filepath: string): Promise<string | undefined> {
-    const metadata = await ep.readMetadata(filepath, ['MWG:Description', ...this.extraArgs]);
+    const metadata = await this._ep.readMetadata(filepath, ['MWG:Description', ...this.extraArgs]);
 
     // Handle warnings vs actual errors
     if (metadata.error) {
@@ -271,8 +296,8 @@ class ExifIO {
   }
 
   async readParameters(filepath: string): Promise<string | undefined> {
-    const metadata = await ep.readMetadata(filepath, ['Parameters', ...this.extraArgs]);
-    
+    const metadata = await this._ep.readMetadata(filepath, ['Parameters', ...this.extraArgs]);
+
     // Handle warnings vs actual errors
     if (metadata.error) {
       // Silently ignore common warnings that don't affect functionality
@@ -284,18 +309,18 @@ class ExifIO {
         throw new Error(metadata.error);
       }
     }
-    
+
     if (!metadata.data?.[0]) {
       return undefined; // No parameters found, not an error
     }
-    
+
     const entry = metadata.data[0];
     return entry.Parameters?.toString();
   }
 
   async readPrompt(filepath: string): Promise<string | undefined> {
-    const metadata = await ep.readMetadata(filepath, ['Prompt', ...this.extraArgs]);
-    
+    const metadata = await this._ep.readMetadata(filepath, ['Prompt', ...this.extraArgs]);
+
     // Handle warnings vs actual errors
     if (metadata.error) {
       // Silently ignore common warnings that don't affect functionality
@@ -307,11 +332,11 @@ class ExifIO {
         throw new Error(metadata.error);
       }
     }
-    
+
     if (!metadata.data?.[0]) {
       return undefined; // No prompt found, not an error
     }
-    
+
     const entry = metadata.data[0];
     return entry.Prompt?.toString();
   }
@@ -322,19 +347,24 @@ class ExifIO {
    * @returns The width and height of the image, or width and height as 0 if the resolution could not be determined.
    */
   async getDimensions(filepath: string): Promise<{ width: number; height: number }> {
-    let metadata: Awaited<ReturnType<typeof ep.readMetadata>> | undefined = undefined;
+    let metadata: Awaited<ReturnType<typeof this._ep.readMetadata>> | undefined = undefined;
     try {
       // Check if this is a video file to use appropriate metadata fields
       const isVideo = this.isVideoFile(filepath);
-      const fields = isVideo 
-        ? ['s3', 'ImageWidth', 'ImageHeight', 'VideoWidth', 'VideoHeight', 'SourceImageWidth', 'SourceImageHeight']
+      const fields = isVideo
+        ? [
+            's3',
+            'ImageWidth',
+            'ImageHeight',
+            'VideoWidth',
+            'VideoHeight',
+            'SourceImageWidth',
+            'SourceImageHeight',
+          ]
         : ['s3', 'ImageWidth', 'ImageHeight'];
-        
-      metadata = await ep.readMetadata(filepath, [
-        ...fields,
-        ...this.extraArgs,
-      ]);
-      
+
+      metadata = await this._ep.readMetadata(filepath, [...fields, ...this.extraArgs]);
+
       // Handle warnings vs actual errors (consistent with other methods)
       if (metadata.error) {
         // Silently ignore common warnings that don't affect functionality
@@ -346,20 +376,20 @@ class ExifIO {
           throw new Error(metadata.error);
         }
       }
-      
+
       if (!metadata.data?.[0]) {
         throw new Error('No metadata entry');
       }
-      
+
       const entry = metadata.data[0];
       // Try multiple dimension field names, prioritizing video-specific fields for video files
-      const width = isVideo 
-        ? (entry.VideoWidth || entry.SourceImageWidth || entry.ImageWidth || 0)
-        : (entry.ImageWidth || 0);
-      const height = isVideo 
-        ? (entry.VideoHeight || entry.SourceImageHeight || entry.ImageHeight || 0)
-        : (entry.ImageHeight || 0);
-        
+      const width = isVideo
+        ? entry.VideoWidth || entry.SourceImageWidth || entry.ImageWidth || 0
+        : entry.ImageWidth || 0;
+      const height = isVideo
+        ? entry.VideoHeight || entry.SourceImageHeight || entry.ImageHeight || 0
+        : entry.ImageHeight || 0;
+
       return { width, height };
     } catch (e) {
       console.error('Could not read image dimensions from ', filepath, e, metadata);
@@ -375,15 +405,23 @@ class ExifIO {
     dimensions: { width: number; height: number };
     tags: string[][];
   }> {
-    let metadata: Awaited<ReturnType<typeof ep.readMetadata>> | undefined = undefined;
+    let metadata: Awaited<ReturnType<typeof this._ep.readMetadata>> | undefined = undefined;
     try {
       // Check if this is a video file to use appropriate metadata fields
       const isVideo = this.isVideoFile(filepath);
-      const dimensionFields = isVideo 
-        ? ['s3', 'ImageWidth', 'ImageHeight', 'VideoWidth', 'VideoHeight', 'SourceImageWidth', 'SourceImageHeight']
+      const dimensionFields = isVideo
+        ? [
+            's3',
+            'ImageWidth',
+            'ImageHeight',
+            'VideoWidth',
+            'VideoHeight',
+            'SourceImageWidth',
+            'SourceImageHeight',
+          ]
         : ['s3', 'ImageWidth', 'ImageHeight'];
-        
-      metadata = await ep.readMetadata(filepath, [
+
+      metadata = await this._ep.readMetadata(filepath, [
         ...dimensionFields,
         'HierarchicalSubject',
         'Subject',
@@ -410,12 +448,12 @@ class ExifIO {
       const entry = metadata.data[0];
 
       // Extract dimensions with video-aware field selection
-      const width = isVideo 
-        ? (entry.VideoWidth || entry.SourceImageWidth || entry.ImageWidth || 0)
-        : (entry.ImageWidth || 0);
-      const height = isVideo 
-        ? (entry.VideoHeight || entry.SourceImageHeight || entry.ImageHeight || 0)
-        : (entry.ImageHeight || 0);
+      const width = isVideo
+        ? entry.VideoWidth || entry.SourceImageWidth || entry.ImageWidth || 0
+        : entry.ImageWidth || 0;
+      const height = isVideo
+        ? entry.VideoHeight || entry.SourceImageHeight || entry.ImageHeight || 0
+        : entry.ImageHeight || 0;
 
       const dimensions = { width, height };
 
@@ -437,8 +475,8 @@ class ExifIO {
   }
 
   async readAllExifTags(filepath: string): Promise<exiftool.IMetadata> {
-    const metadata = await ep.readMetadata(filepath, ['-File:all']);
-    
+    const metadata = await this._ep.readMetadata(filepath, ['-File:all']);
+
     // Handle warnings vs actual errors
     if (metadata.error) {
       // Silently ignore common warnings that don't affect functionality
@@ -450,11 +488,11 @@ class ExifIO {
         throw new Error(metadata.error);
       }
     }
-    
+
     if (!metadata.data?.[0]) {
       throw new Error('No metadata entry');
     }
-    
+
     return metadata.data[0];
   }
 
@@ -519,7 +557,7 @@ class ExifIO {
       };
     }
 
-    const res = await ep.writeMetadata(filepath, metadata, [
+    const res = await this._ep.writeMetadata(filepath, metadata, [
       ...defaultWriteArgs,
       ...this.extraArgs,
     ]);
@@ -545,7 +583,7 @@ class ExifIO {
     regionInfo: MWGRegionInfo | null,
   ): Promise<void> {
     if (regionInfo) {
-      const res = await ep.writeMetadata(
+      const res = await this._ep.writeMetadata(
         filepath,
         {
           RegionInfo: JSON.stringify(regionInfo).replace(/"/g, '').replace(/:/g, '='),
@@ -557,7 +595,7 @@ class ExifIO {
         throw new Error(res.error || 'Unknown error');
       }
     } else {
-      const res = await ep.writeMetadata(
+      const res = await this._ep.writeMetadata(
         filepath,
         {
           RegionInfo: '',
@@ -608,7 +646,7 @@ class ExifIO {
       });
     }
 
-    const res = await ep.writeMetadata(filepath, finalData, args);
+    const res = await this._ep.writeMetadata(filepath, finalData, args);
 
     if (!res.error?.endsWith('1 image files updated')) {
       console.error('Could not update file metadata', res);
@@ -697,7 +735,7 @@ class ExifIO {
       return false;
     }
 
-    const res = await ep.readMetadata(input, ['ThumbnailImage', 'PhotoshopThumbnail', 'b']);
+    const res = await this._ep.readMetadata(input, ['ThumbnailImage', 'PhotoshopThumbnail', 'b']);
 
     // Handle warnings vs actual errors (but don't throw - this method returns boolean)
     if (res.error && !this.isIgnorableWarning(res.error)) {

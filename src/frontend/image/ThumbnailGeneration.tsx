@@ -1,7 +1,6 @@
-import fse from 'fs-extra';
 import { action } from 'mobx';
-import path from 'path';
 import { useEffect } from 'react';
+import platform from 'src/frontend/platform';
 
 import { thumbnailFormat } from 'common/config';
 import { ID } from '../../api/id';
@@ -124,19 +123,19 @@ export const useWorkerListener = () => {
 
 // Moves all thumbnail files from one directory to another
 export const moveThumbnailDir = async (sourceDir: string, targetDir: string) => {
-  if (!(await fse.pathExists(sourceDir)) || !(await fse.pathExists(targetDir))) {
+  if (!(await platform.fs.pathExists(sourceDir)) || !(await platform.fs.pathExists(targetDir))) {
     console.log('Source or target directory does not exist for moving thumbnails');
     return;
   }
 
   console.log('Moving thumbnails from ', sourceDir, ' to ', targetDir);
 
-  const files = await fse.readdir(sourceDir);
+  const files = await platform.fs.readdir(sourceDir);
   for (const file of files) {
     if (file.endsWith(thumbnailFormat)) {
-      const oldPath = path.join(sourceDir, file);
-      const newPath = path.join(targetDir, file);
-      await fse.move(oldPath, newPath);
+      const oldPath = platform.path.join(sourceDir, file);
+      const newPath = platform.path.join(targetDir, file);
+      await platform.fs.move(oldPath, newPath);
     }
   }
 };

@@ -1,9 +1,6 @@
 import { humanFileSize } from 'common/fmt';
-import fse from 'fs-extra';
-import path from 'path';
 import { useCallback, useState } from 'react';
-
-import { RendererMessenger } from '../../../../ipc/renderer';
+import platform from 'src/frontend/platform';
 import { AppToaster } from '../../../components/Toaster';
 import { useStore } from '../../../contexts/StoreContext';
 import { DnDAttribute } from '../../../contexts/TagDnDContext';
@@ -45,22 +42,22 @@ const handleMove = async (
 
   // If it's a file being dropped that's already in OneFolder, move it
   for (const file of matches) {
-    const src = path.normalize(file.absolutePath);
-    const dst = path.normalize(path.join(dir, file.name));
+    const src = platform.path.normalize(file.absolutePath);
+    const dst = platform.path.normalize(platform.path.join(dir, file.name));
     if (src !== dst) {
-      const alreadyExists = await fse.pathExists(dst);
+      const alreadyExists = await platform.fs.pathExists(dst);
 
       if (alreadyExists && !isReplaceAllActive) {
-        const srcStats = await fse.stat(src);
-        const dstStats = await fse.stat(dst);
+        const srcStats = await platform.fs.stat(src);
+        const dstStats = await platform.fs.stat(dst);
 
         // if the file is already in the target location, prompt the user to confirm the move
         // TODO: could also add option to rename with a number suffix?
-        const res = await RendererMessenger.showMessageBox({
+        const res = await platform.desktop.showMessageBox({
           type: 'question',
           title: 'Replace or skip file?',
           message: `"${file.name}" already exists in this folder. Replace or skip?`,
-          detail: `From "${path.dirname(file.absolutePath)}" (${humanFileSize(
+          detail: `From "${platform.path.dirname(file.absolutePath)}" (${humanFileSize(
             srcStats.size,
           )}) \nTo      "${dir}" (${humanFileSize(
             dstStats.size,
@@ -89,7 +86,7 @@ const handleMove = async (
       // The target file needs to be removed from disk and the DB first
       if (alreadyExists) {
         // - Remove the target file from disk
-        await fse.remove(dst);
+        await platform.fs.remove(dst);
 
         // - Remove the target file from the store
         // TODO: This removes the target file and its tags. Could merge them, but that's a bit more work
@@ -106,7 +103,7 @@ const handleMove = async (
       } else {
         // Else, the file watcher process will detect the changes and update the File entity accordingly
       }
-      await fse.move(src, dst, { overwrite: true });
+      await platform.fs.move(src, dst);
     }
   }
 };

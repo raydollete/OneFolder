@@ -1,12 +1,10 @@
-import { shell } from 'electron';
-import fse from 'fs-extra';
 import { action, computed, makeObservable, observable } from 'mobx';
 
 import { maxNumberOfExternalFilesBeforeWarning } from 'common/config';
 import { clamp, notEmpty } from 'common/core';
 import { ID } from '../../api/id';
 import { SearchCriteria } from '../../api/search-criteria';
-import { RendererMessenger } from '../../ipc/renderer';
+import platform from 'src/frontend/platform';
 import { ClientFile } from '../entities/File';
 import { ClientFileSearchCriteria, ClientTagSearchCriteria } from '../entities/SearchCriteria';
 import { ClientTag } from '../entities/Tag';
@@ -558,7 +556,7 @@ class UiStore {
     //   ? this.rootStore.fileStore.fileList
     //   : Array.from(this.fileSelection);
 
-    RendererMessenger.sendPreviewFiles({
+    platform.desktop.sendPreviewFiles({
       ids: Array.from(this.fileSelection, (file) => file.id),
       activeImgId: this.getFirstSelectedFileId(),
       thumbnailDirectory: this.thumbnailDirectory,
@@ -585,7 +583,9 @@ class UiStore {
     }
 
     const absolutePaths = Array.from(this.fileSelection, (file) => file.absolutePath);
-    absolutePaths.forEach((path) => shell.openExternal(`file://${path}`).catch(console.error));
+    absolutePaths.forEach((path) =>
+      platform.desktop.openExternal(`file://${path}`).catch(console.error),
+    );
   }
 
   @action.bound toggleInspector(): void {
@@ -785,7 +785,7 @@ class UiStore {
 
   @action.bound setTheme(theme: 'light' | 'dark' = 'dark'): void {
     this.theme = theme;
-    RendererMessenger.setTheme({ theme });
+    platform.desktop.setTheme({ theme });
   }
 
   @action.bound toggleAdvancedSearch(): void {
@@ -1282,7 +1282,7 @@ class UiStore {
     // on a fresh install (no prefsString) the main process still needs to be
     // told the theme so the native window chrome matches the React UI.
     // See INV-011 Defect A.
-    RendererMessenger.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
+    platform.desktop.setTheme({ theme: this.theme === 'dark' ? 'dark' : 'light' });
 
     // Always re-derive the thumbnail directory from the current executable
     // location on launch. This fork is portable-only, so the directory lives
@@ -1293,12 +1293,12 @@ class UiStore {
     // invalid location. Re-deriving here (overriding any stale persisted value)
     // keeps thumbnails relative to the executable. Pass the library ID so each
     // library gets its own thumbnail subdirectory.
-    RendererMessenger.getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined).then(
-      (defaultThumbDir) => {
+    platform.desktop
+      .getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined)
+      .then((defaultThumbDir) => {
         this.setThumbnailDirectory(defaultThumbDir);
-        fse.ensureDirSync(this.thumbnailDirectory);
-      },
-    );
+        platform.fs.ensureDirSync(this.thumbnailDirectory);
+      });
   }
 
   getPersistentPreferences(): Partial<Record<keyof UiStore, unknown>> {
