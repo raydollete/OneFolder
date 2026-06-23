@@ -1,4 +1,4 @@
-import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
 
 import { MediaJobType } from '../../ipc/messages';
 import { RendererMessenger } from '../../ipc/renderer';
@@ -15,6 +15,17 @@ import RootStore from './RootStore';
  *   - `dismissed`     → failed job dismissed         (filename → source, status = text)
  */
 export type ResolutionKind = 'kept-new' | 'kept-original' | 'kept-both' | 'dismissed';
+
+/**
+ * The four counts that appear in the media-queue drawer header, used for the
+ * seen-vs-live comparison that drives the unseen badge (INV-037).
+ */
+export interface MediaQueueCounts {
+  queued: number;
+  processing: number;
+  done: number;
+  resolved: number;
+}
 
 // ---------------------------------------------------------------------------
 // QueueItem
@@ -106,6 +117,18 @@ class MediaQueueStore {
   @observable items: QueueItem[] = [];
   @observable isDrawerOpen: boolean = false;
 
+  /**
+   * Snapshot of the four header counts as of the last time the drawer was open.
+   * Initialized to all-zero (matching construction-time live counts for an empty
+   * queue) so no badges appear on first load.  Updated continuously while the
+   * drawer is open (via a reaction) so it equals exactly what the user last saw
+   * when the drawer closes.  INV-037.
+   */
+  @observable seenCounts: MediaQueueCounts = { queued: 0, processing: 0, done: 0, resolved: 0 };
+
+  /** Disposer for the open-clears-unseen reaction; stored for cleanliness. */
+  private disposeSeenReaction: () => void;
+
   // ----- computeds -----
 
   @computed get runningItem(): QueueItem | undefined {
@@ -128,14 +151,74 @@ class MediaQueueStore {
     return this.items.length > 0;
   }
 
+  /** The four live header counts, computed from the underlying observables (INV-037). */
+  @computed get liveCounts(): MediaQueueCounts {
+    return {
+      queued: this.pendingCount,
+      processing: this.runningItem !== undefined ? 1 : 0,
+      done: this.completedCount,
+      resolved: this.resolvedCount,
+    };
+  }
+
+  /**
+   * Per-count "has changed since the drawer was last open" flags.
+   * Only meaningful to display while the drawer is collapsed; the view gates
+   * badge rendering on `!isDrawerOpen` as well (INV-037).
+   */
+  @computed get unseenCounts(): {
+    queued: boolean;
+    processing: boolean;
+    done: boolean;
+    resolved: boolean;
+  } {
+    return {
+      queued: this.liveCounts.queued !== this.seenCounts.queued,
+      processing: this.liveCounts.processing !== this.seenCounts.processing,
+      done: this.liveCounts.done !== this.seenCounts.done,
+      resolved: this.liveCounts.resolved !== this.seenCounts.resolved,
+    };
+  }
+
+  /** True if any of the four counts is unseen (convenience for conditional rendering). */
+  @computed get hasUnseen(): boolean {
+    const u = this.unseenCounts;
+    return u.queued || u.processing || u.done || u.resolved;
+  }
+
   // ----- constructor -----
 
   constructor(rootStore: RootStore) {
     this.rootStore = rootStore;
     makeObservable(this);
+
+    // Keep seenCounts equal to liveCounts while the drawer is open so that when
+    // the drawer later closes, the snapshot equals exactly what was last on screen.
+    // Tracking liveCounts in the expression means every count change while open
+    // re-runs the effect and re-syncs the snapshot.  fireImmediately handles the
+    // case where the store is constructed with isDrawerOpen already true (INV-037).
+    this.disposeSeenReaction = reaction(
+      () => ({ open: this.isDrawerOpen, live: this.liveCounts }),
+      ({ open }) => {
+        if (open) {
+          this.markSeen();
+        }
+      },
+      { fireImmediately: true },
+    );
   }
 
   // ----- actions -----
+
+  /**
+   * Copy the current live counts into the seen snapshot, clearing all unseen
+   * flags.  Called by the open-reaction while the drawer is open, and also
+   * directly by the toggle handler when opening, so the clear is immediate and
+   * deterministic in tests (INV-037).
+   */
+  @action.bound markSeen(): void {
+    this.seenCounts = { ...this.liveCounts };
+  }
 
   /**
    * Enqueue a new media job.  The job is added to the end of the list

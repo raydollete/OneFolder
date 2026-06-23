@@ -552,6 +552,98 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     expect(store.items[0].id).toBe('p1');
   });
 
+  // ---------- unseen badge while collapsed (INV-037) ----------
+
+  it('badge appears on the "done" count span (and only that span) when completedCount changes while collapsed', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Drawer starts collapsed (default); add a completed item so completedCount
+    // rises from 0 (the seenCounts baseline) to 1 while collapsed.
+    await act(async () => {
+      runInAction(() => {
+        const item = new QueueItem('badge1', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+        item.status = 'completed';
+        item.output = { id: 'out', absolutePath: '/photos/out.mp4', name: 'out.mp4' } as any;
+        store.items.push(item);
+      });
+      await Promise.resolve();
+    });
+
+    // Exactly one badge must be present (on "done").
+    const allBadges = container.querySelectorAll('.media-queue__badge');
+    expect(allBadges).toHaveLength(1);
+
+    // The badge must be a descendant of the "done" count span.
+    const countSpans = Array.from(container.querySelectorAll('.media-queue__count'));
+    const doneSpan = countSpans.find((s) => s.textContent?.includes('done'));
+    expect(doneSpan).toBeTruthy();
+    expect(doneSpan!.querySelector('.media-queue__badge')).toBeTruthy();
+
+    // The other count spans must NOT have a badge.
+    const otherSpans = countSpans.filter((s) => !s.textContent?.includes('done'));
+    otherSpans.forEach((span) => {
+      expect(span.querySelector('.media-queue__badge')).toBeNull();
+    });
+  });
+
+  it('no badges render while the drawer is open', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Open the drawer and add a completed item — badge must NOT appear because
+    // unseenCounts are kept in sync while open.
+    await act(async () => {
+      runInAction(() => {
+        store.isDrawerOpen = true;
+        store.markSeen();
+        const item = new QueueItem('badge2', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+        item.status = 'completed';
+        item.output = { id: 'out2', absolutePath: '/photos/out2.mp4', name: 'out2.mp4' } as any;
+        store.items.push(item);
+        store.markSeen(); // sync the snapshot so done=1 is "seen"
+      });
+      await Promise.resolve();
+    });
+
+    expect(container.querySelectorAll('.media-queue__badge')).toHaveLength(0);
+  });
+
+  it('badges disappear after opening the drawer (toggle button calls markSeen)', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Start collapsed, cause a badge.
+    await act(async () => {
+      runInAction(() => {
+        const item = new QueueItem('badge3', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+        item.status = 'completed';
+        item.output = { id: 'out3', absolutePath: '/photos/out3.mp4', name: 'out3.mp4' } as any;
+        store.items.push(item);
+      });
+      await Promise.resolve();
+    });
+
+    // Confirm badge is present before opening.
+    expect(container.querySelectorAll('.media-queue__badge').length).toBeGreaterThan(0);
+
+    // Open via the toggle button — the handler calls markSeen(), clearing badges.
+    const toggleBtn = container.querySelector('.media-queue__toggle') as HTMLButtonElement | null;
+    expect(toggleBtn).toBeTruthy();
+    await act(async () => {
+      toggleBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelectorAll('.media-queue__badge')).toHaveLength(0);
+  });
+
   // ---------- Retry re-enqueues ----------
 
   it('"Retry" re-enqueues the same job and removes the failed row', async () => {

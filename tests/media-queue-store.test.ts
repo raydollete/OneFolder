@@ -557,6 +557,85 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(item.resolution).toBe('dismissed');
   });
 
+  // ---------- seen-counts / unseen-badge (INV-037) ----------
+
+  it('unseenCounts are all false and seenCounts all zero initially', async () => {
+    const { store } = await makeStore();
+
+    expect(store.seenCounts).toEqual({ queued: 0, processing: 0, done: 0, resolved: 0 });
+    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.hasUnseen).toBe(false);
+  });
+
+  it('unseenCounts stay all-false while the drawer is open even as counts change', async () => {
+    const { store, srcFile } = await makeStore();
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Open the drawer — seenCounts should track liveCounts via the reaction.
+    store.isDrawerOpen = true;
+
+    // Enqueue a pending item so pendingCount rises to 1.
+    const item = new QueueItem('seen1', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    runInAction(() => {
+      item.status = 'pending';
+      store.items.push(item);
+    });
+
+    // While open the reaction fires synchronously on the next tick; call markSeen
+    // explicitly (the drawer's toggle handler does this too — belt-and-suspenders).
+    store.markSeen();
+
+    // seenCounts must now reflect the live counts and unseenCounts must be all-false.
+    expect(store.seenCounts.queued).toBe(store.liveCounts.queued);
+    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.hasUnseen).toBe(false);
+  });
+
+  it('unseenCounts.done becomes true after the drawer is closed and completedCount rises', async () => {
+    const { store, srcFile } = await makeStore();
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Open, sync the snapshot, then close.
+    store.isDrawerOpen = true;
+    store.markSeen();
+    store.isDrawerOpen = false;
+
+    // Add a completed item while collapsed → completedCount rises.
+    const item = new QueueItem('seen2', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    runInAction(() => {
+      item.status = 'completed';
+      store.items.push(item);
+    });
+
+    expect(store.unseenCounts.done).toBe(true);
+    expect(store.unseenCounts.queued).toBe(false);
+    expect(store.unseenCounts.processing).toBe(false);
+    expect(store.unseenCounts.resolved).toBe(false);
+    expect(store.hasUnseen).toBe(true);
+  });
+
+  it('reopening the drawer (markSeen) clears all unseenCounts flags', async () => {
+    const { store, srcFile } = await makeStore();
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // Close, cause an unseen change, then reopen.
+    store.isDrawerOpen = false;
+    const item = new QueueItem('seen3', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    runInAction(() => {
+      item.status = 'completed';
+      store.items.push(item);
+    });
+
+    expect(store.hasUnseen).toBe(true);
+
+    // Simulate opening the drawer (calls markSeen as the toggle handler does).
+    store.isDrawerOpen = true;
+    store.markSeen();
+
+    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.hasUnseen).toBe(false);
+  });
+
   it('clearResolved removes only resolved rows, leaving active ones', async () => {
     const { store, srcFile } = await makeStore();
 

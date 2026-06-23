@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { IconSet } from 'widgets';
 import { Collapse } from 'src/frontend/components/Collapse';
@@ -205,6 +205,14 @@ const QueueRow = observer(({ item, trashFile }: QueueRowProps) => {
 });
 
 // ---------------------------------------------------------------------------
+// Badge: a small decorative red dot overlaid on the top-trailing corner of a
+// count span to signal unseen activity while the drawer is collapsed (INV-037).
+// aria-hidden because the count text itself conveys the value to screen readers.
+// ---------------------------------------------------------------------------
+
+const MediaQueueBadge = () => <span className="media-queue__badge" aria-hidden="true" />;
+
+// ---------------------------------------------------------------------------
 // Main drawer component
 // ---------------------------------------------------------------------------
 
@@ -226,17 +234,60 @@ const MediaQueueDrawer = observer(() => {
   const trashFile = useTrashFile();
 
   // Wrap the toggle in an action so MobX strict-mode does not complain about
-  // mutating an observable outside a tracked action context.
+  // mutating an observable outside a tracked action context.  Also call
+  // markSeen() immediately when opening (belt-and-suspenders with the store
+  // reaction) so DOM tests are deterministic — badges disappear on open (INV-037).
   const handleToggle = useAction(() => {
-    mediaQueueStore.isDrawerOpen = !mediaQueueStore.isDrawerOpen;
+    const opening = !mediaQueueStore.isDrawerOpen;
+    mediaQueueStore.isDrawerOpen = opening;
+    if (opening) {
+      mediaQueueStore.markSeen();
+    }
   });
 
-  const { pendingCount, runningItem, completedCount, resolvedCount, isDrawerOpen, items } =
-    mediaQueueStore;
+  // Collapse the drawer (no markSeen — collapsing freezes the seen snapshot so
+  // subsequent background changes can badge; see INV-037).
+  const collapse = useAction(() => {
+    mediaQueueStore.isDrawerOpen = false;
+  });
 
-  const summary = `${pendingCount} queued · ${
-    runningItem !== undefined ? '1 processing' : '0 processing'
-  } · ${completedCount} done · ${resolvedCount} resolved`;
+  const {
+    pendingCount,
+    runningItem,
+    completedCount,
+    resolvedCount,
+    isDrawerOpen,
+    items,
+    unseenCounts,
+  } = mediaQueueStore;
+
+  // Click-outside-to-collapse: while the drawer is open, a mousedown anywhere
+  // outside the drawer collapses it. Mirrors the dropdown pattern in
+  // CalendarGallery — defer the listener attach by a tick so the click that
+  // opened the drawer is not itself caught as an outside click.
+  const drawerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isDrawerOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (drawerRef.current && !drawerRef.current.contains(target)) {
+        collapse();
+      }
+    };
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handlePointerDown);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [isDrawerOpen, collapse]);
+
+  // processing is derived from runningItem; compute once for use in the header
+  // spans and for comparison consistency with liveCounts.processing (INV-037).
+  const processing = runningItem !== undefined ? 1 : 0;
 
   // Render-time ordering (INV-036): two segments — unresolved rows on top,
   // resolved history below. WITHIN each segment rows are NEWEST-first by
@@ -254,11 +305,31 @@ const MediaQueueDrawer = observer(() => {
   });
 
   return (
-    <div className="media-queue">
+    <div className="media-queue" ref={drawerRef}>
       {/* Always-visible header bar */}
       <div className="media-queue__header">
         <span className="media-queue__title">Media queue</span>
-        <span className="media-queue__summary">{summary}</span>
+        <span className="media-queue__summary">
+          <span className="media-queue__count">
+            {pendingCount} queued
+            {!isDrawerOpen && unseenCounts.queued && <MediaQueueBadge />}
+          </span>
+          {' · '}
+          <span className="media-queue__count">
+            {processing} processing
+            {!isDrawerOpen && unseenCounts.processing && <MediaQueueBadge />}
+          </span>
+          {' · '}
+          <span className="media-queue__count">
+            {completedCount} done
+            {!isDrawerOpen && unseenCounts.done && <MediaQueueBadge />}
+          </span>
+          {' · '}
+          <span className="media-queue__count">
+            {resolvedCount} resolved
+            {!isDrawerOpen && unseenCounts.resolved && <MediaQueueBadge />}
+          </span>
+        </span>
         {resolvedCount > 0 && (
           <button
             className="btn-minimal media-queue__clear-resolved"
