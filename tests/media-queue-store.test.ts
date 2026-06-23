@@ -393,7 +393,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     // Row is NOT removed — it is resolved and kept at the bottom as history (INV-036).
     expect(store.items).toHaveLength(1);
     expect(item.status).toBe('resolved');
-    expect(item.resolution).toBe('Kept both');
+    expect(item.resolution).toBe('kept-both');
     expect(store.resolvedCount).toBe(1);
   });
 
@@ -416,7 +416,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(trashFile).toHaveBeenCalledWith(srcFile);
     expect(store.items).toHaveLength(1);
     expect(item.status).toBe('resolved');
-    expect(item.resolution).toBe('Kept new');
+    expect(item.resolution).toBe('kept-new');
   });
 
   // ---------- keepOriginal ----------
@@ -438,7 +438,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(trashFile).toHaveBeenCalledWith(outFile);
     expect(store.items).toHaveLength(1);
     expect(item.status).toBe('resolved');
-    expect(item.resolution).toBe('Kept original');
+    expect(item.resolution).toBe('kept-original');
   });
 
   it('keepOriginal focuses the source when the viewer is currently on the output', async () => {
@@ -554,7 +554,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     store.dismiss(item);
     expect(store.items).toHaveLength(1);
     expect(item.status).toBe('resolved');
-    expect(item.resolution).toBe('Dismissed');
+    expect(item.resolution).toBe('dismissed');
   });
 
   it('clearResolved removes only resolved rows, leaving active ones', async () => {
@@ -565,7 +565,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', Date.now());
     runInAction(() => {
       resolved.status = 'resolved';
-      resolved.resolution = 'Kept both';
+      resolved.resolution = 'kept-both';
       pending.status = 'pending';
       store.items.push(resolved, pending);
     });

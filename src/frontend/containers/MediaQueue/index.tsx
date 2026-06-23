@@ -7,7 +7,15 @@ import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction } from 'src/frontend/hooks/mobx';
 import { useTrashFile } from 'src/frontend/components/RemovalAlert';
 import { ClientFile } from 'src/frontend/entities/File';
-import { QueueItem } from 'src/frontend/stores/MediaQueueStore';
+import { QueueItem, ResolutionKind } from 'src/frontend/stores/MediaQueueStore';
+
+// Human-readable labels for the resolved-row status cell.
+const RESOLUTION_LABELS: Record<ResolutionKind, string> = {
+  'kept-new': 'Kept new',
+  'kept-original': 'Kept original',
+  'kept-both': 'Kept both',
+  dismissed: 'Dismissed',
+};
 
 // ---------------------------------------------------------------------------
 // Per-row sub-component: isolates useState for error-reveal so only the
@@ -23,16 +31,25 @@ const QueueRow = observer(({ item, trashFile }: QueueRowProps) => {
   const { mediaQueueStore } = useStore();
   const [errorRevealed, setErrorRevealed] = useState(false);
 
+  // After "Keep New" the original source file is trashed — show its name as plain
+  // text rather than a dead link (INV-036). All other states keep the link.
+  const sourceTrashed = item.status === 'resolved' && item.resolution === 'kept-new';
   const filenameCell = (
     <td className="media-queue__col-filename">
-      <button
-        className="btn-minimal media-queue__filename-btn"
-        type="button"
-        onClick={() => mediaQueueStore.focusFileInViewer(item.source)}
-        title={item.source.absolutePath}
-      >
-        {item.source.name}
-      </button>
+      {sourceTrashed ? (
+        <span className="media-queue__filename-text" title={item.source.absolutePath}>
+          {item.source.name}
+        </span>
+      ) : (
+        <button
+          className="btn-minimal media-queue__filename-btn"
+          type="button"
+          onClick={() => mediaQueueStore.focusFileInViewer(item.source)}
+          title={item.source.absolutePath}
+        >
+          {item.source.name}
+        </button>
+      )}
     </td>
   );
 
@@ -150,10 +167,29 @@ const QueueRow = observer(({ item, trashFile }: QueueRowProps) => {
     );
   } else {
     // resolved — a settled job kept as history at the bottom of the list. The
-    // status cell shows the resolution label; there are no actions (the
-    // filename button still re-opens the source).
+    // status cell shows the resolution label; when the NEW file still exists
+    // (Keep New / Keep Both) the label is a link that opens it in the viewer
+    // (INV-036). There are no row actions.
+    const label = item.resolution !== null ? RESOLUTION_LABELS[item.resolution] : '';
+    const outputKept = item.resolution === 'kept-new' || item.resolution === 'kept-both';
     statusCell = (
-      <td className="media-queue__col-status media-queue__status--resolved">{item.resolution}</td>
+      <td className="media-queue__col-status media-queue__status--resolved">
+        {outputKept && item.output !== null ? (
+          <button
+            className="btn-minimal media-queue__resolved-link"
+            type="button"
+            onClick={() => {
+              if (item.output !== null) {
+                mediaQueueStore.focusFileInViewer(item.output);
+              }
+            }}
+          >
+            {label}
+          </button>
+        ) : (
+          label
+        )}
+      </td>
     );
     actionsCell = <td className="media-queue__col-actions" />;
   }
@@ -202,17 +238,19 @@ const MediaQueueDrawer = observer(() => {
     runningItem !== undefined ? '1 processing' : '0 processing'
   } · ${completedCount} done · ${resolvedCount} resolved`;
 
-  // Render-time ordering: unresolved rows first (oldest on top), then resolved
-  // rows at the bottom (also oldest on top). The underlying items array keeps
-  // insertion order; only the view reorders, so a newly enqueued job appears
-  // above older resolved rows (INV-036).
+  // Render-time ordering (INV-036): two segments — unresolved rows on top,
+  // resolved history below. WITHIN each segment rows are NEWEST-first by
+  // requestedAt, so the most recent activity (processing / just-completed, and
+  // most-recently-resolved) is at the top of its segment. The underlying items
+  // array keeps insertion order, so FIFO processing is unaffected; only the view
+  // reorders.
   const sortedItems = [...items].sort((a, b) => {
     const aResolved = a.status === 'resolved' ? 1 : 0;
     const bResolved = b.status === 'resolved' ? 1 : 0;
     if (aResolved !== bResolved) {
       return aResolved - bResolved;
     }
-    return a.requestedAt - b.requestedAt;
+    return b.requestedAt - a.requestedAt;
   });
 
   return (

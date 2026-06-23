@@ -93,9 +93,15 @@ that creates the row, and no race.
 
    A Keep choice does NOT remove the row: the item becomes **`Resolved`** (labelled "Kept new" /
    "Kept original" / "Kept both") and sinks to the bottom of the list as history. Resolved rows
-   accumulate until the user clicks **`Clear resolved`** in the header (INV-036). The render order
-   is unresolved-first (oldest on top), then resolved (oldest on top), so a newly enqueued job
-   always appears above older resolved rows.
+   accumulate until the user clicks **`Clear resolved`** in the header (INV-036). The render order is
+   **two segments** — unresolved rows on top, resolved history below — and **within each segment rows
+   are newest-first** by timestamp (so a processing / newly completed job tops the active segment,
+   and the most recently resolved tops the history segment). The `items` array keeps insertion order,
+   so FIFO *processing* is unaffected — only the view reorders.
+   On a resolved row the link targets reflect which files
+   still exist: the **filename** stays a link to the original unless it was trashed (Keep New), in
+   which case it is plain text; the **status label** becomes a link to the new file when the output
+   survives (Keep New / Keep Both) and is plain text otherwise (Keep Original / Dismissed).
 6. If the job fails, the row transitions to `Failed`: the status shows "Failed" (ffmpeg error
    detail revealed on click); actions become `[Retry] [Dismiss]`. `Dismiss` resolves the row as
    "Dismissed" (kept as history at the bottom, cleared via `Clear resolved`). No blocking modal.

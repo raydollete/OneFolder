@@ -6,6 +6,16 @@ import { ClientFile } from '../entities/File';
 import { mediaJobLabel } from '../data/mediaJobLabels';
 import RootStore from './RootStore';
 
+/**
+ * How the user settled a completed/failed job. Drives both the resolved-row
+ * label and which files still exist (and are therefore link-able) in the drawer:
+ *   - `kept-new`      → source trashed, output kept  (filename = text, status → new file)
+ *   - `kept-original` → output trashed, source kept  (filename → source, status = text)
+ *   - `kept-both`     → both kept                    (filename → source, status → new file)
+ *   - `dismissed`     → failed job dismissed         (filename → source, status = text)
+ */
+export type ResolutionKind = 'kept-new' | 'kept-original' | 'kept-both' | 'dismissed';
+
 // ---------------------------------------------------------------------------
 // QueueItem
 // ---------------------------------------------------------------------------
@@ -22,8 +32,7 @@ import RootStore from './RootStore';
  * returns the committed `ClientFile`.
  *
  * `resolution` is `null` until the user settles a completed/failed job with a
- * Keep / Dismiss choice; it then holds the human-readable resolution label
- * ("Kept new" / "Kept original" / "Kept both" / "Dismissed") and the item's
+ * Keep / Dismiss choice; it then holds the {@link ResolutionKind} and the item's
  * status becomes `'resolved'` so it sinks to the bottom of the drawer as
  * history instead of being removed (INV-036).
  */
@@ -38,7 +47,7 @@ export class QueueItem {
   @observable jobId: string | null;
   @observable output: ClientFile | null;
   @observable errorMessage: string | null;
-  @observable resolution: string | null;
+  @observable resolution: ResolutionKind | null;
   @observable requestedAt: number;
 
   constructor(
@@ -303,7 +312,7 @@ class MediaQueueStore {
    * removed — they stay in `items` (rendered at the bottom of the drawer as
    * history) until the user clicks "Clear resolved" (INV-036).
    */
-  @action.bound private resolve(item: QueueItem, resolution: string): void {
+  @action.bound private resolve(item: QueueItem, resolution: ResolutionKind): void {
     item.status = 'resolved';
     item.resolution = resolution;
   }
@@ -321,7 +330,7 @@ class MediaQueueStore {
     trashFile: (file: ClientFile) => Promise<{ ok: boolean; isPermanent: boolean }>,
   ): Promise<void> {
     await trashFile(item.source);
-    runInAction(() => this.resolve(item, 'Kept new'));
+    runInAction(() => this.resolve(item, 'kept-new'));
   }
 
   /**
@@ -349,14 +358,14 @@ class MediaQueueStore {
 
     await trashFile(item.output);
 
-    runInAction(() => this.resolve(item, 'Kept original'));
+    runInAction(() => this.resolve(item, 'kept-original'));
   }
 
   /**
    * Keep both files: resolve the row (both files stay on disk).
    */
   @action.bound keepBoth(item: QueueItem): void {
-    this.resolve(item, 'Kept both');
+    this.resolve(item, 'kept-both');
   }
 
   /**
@@ -364,7 +373,7 @@ class MediaQueueStore {
    * bottom as history rather than being removed).
    */
   @action.bound dismiss(item: QueueItem): void {
-    this.resolve(item, 'Dismissed');
+    this.resolve(item, 'dismissed');
   }
 
   /**

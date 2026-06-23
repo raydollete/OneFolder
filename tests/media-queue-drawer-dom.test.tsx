@@ -226,15 +226,15 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     expect(container.querySelector('.media-queue__empty')).toBeTruthy();
   });
 
-  // ---------- rows oldest-on-top with four columns ----------
+  // ---------- active rows newest-on-top with four columns ----------
 
-  it('renders rows oldest-on-top with four columns (filename, operation, status, actions)', async () => {
+  it('renders active rows newest-on-top with four columns (filename, operation, status, actions)', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
     const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
 
-    // Seed two completed rows: older one first.
+    // Two completed rows: the newer one (item1) must render ABOVE the older (item0).
     const item0 = new QueueItem('id0', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
     const item1 = new QueueItem('id1', srcFile, 'normalize-audio', undefined, 'Compress & normalize audio', 2000);
 
@@ -253,10 +253,9 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     const rows = container.querySelectorAll('tbody tr');
     expect(rows).toHaveLength(2);
 
-    // First row (oldest) shows item0's filename.
-    expect(rows[0].querySelector('.media-queue__col-filename')?.textContent).toContain('src.mp4');
-    // Second row shows item1's label.
-    expect(rows[1].querySelector('.media-queue__col-operation')?.textContent).toContain('Compress');
+    // Newest active row (item1) on top; older (item0) below (INV-036).
+    expect(rows[0].querySelector('.media-queue__col-operation')?.textContent).toContain('Compress');
+    expect(rows[1].querySelector('.media-queue__col-operation')?.textContent).toContain('Re-encode');
 
     // Each row has four cells.
     rows.forEach((row) => {
@@ -266,6 +265,40 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     // Header also has four columns.
     const headerCells = container.querySelectorAll('thead th');
     expect(headerCells).toHaveLength(4);
+  });
+
+  // ---------- processing / newly completed shows above older completed ----------
+
+  it('shows a processing row and a newer completed row above an older completed row', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+    const oldDone = new QueueItem('old', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
+    const running = new QueueItem('run', srcFile, 'rotate-cw', undefined, 'Rotate CW', 2000);
+    const newDone = new QueueItem('new', srcFile, 'create-clip', undefined, 'Create clip', 3000);
+
+    await act(async () => {
+      runInAction(() => {
+        oldDone.status = 'completed';
+        oldDone.output = { id: 'o' } as any;
+        running.status = 'running';
+        running.percent = 40;
+        newDone.status = 'completed';
+        newDone.output = { id: 'n' } as any;
+        store.isDrawerOpen = true;
+        store.items.push(oldDone, running, newDone);
+      });
+      await Promise.resolve();
+    });
+
+    const ops = Array.from(container.querySelectorAll('tbody tr .media-queue__col-operation')).map(
+      (el) => el.textContent,
+    );
+    // Newest-first: Create clip (3000), Rotate CW (2000, processing), Re-encode (1000, older completed).
+    expect(ops[0]).toContain('Create clip');
+    expect(ops[1]).toContain('Rotate CW');
+    expect(ops[2]).toContain('Re-encode');
   });
 
   // ---------- running row ----------
@@ -473,37 +506,41 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
 
   // ---------- resolved rows sink to the bottom + Clear resolved ----------
 
-  it('sorts resolved rows below unresolved rows and "Clear resolved" removes them', async () => {
+  it('two segments: unresolved above resolved, each newest-first; "Clear resolved" removes resolved', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
     const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
-    // The resolved item has an EARLIER requestedAt than the pending one, proving the
-    // sort puts resolved last regardless of request time (INV-036).
-    const resolved = new QueueItem('r1', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
-    const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', 2000);
+    // Two resolved rows (the EARLIER one despite being resolved-newer proves the
+    // resolved segment is also newest-first) and a pending row that must stay on top.
+    const resolvedOld = new QueueItem('rOld', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
+    const resolvedNew = new QueueItem('rNew', srcFile, 'normalize-audio', undefined, 'Compress & normalize audio', 2000);
+    const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', 3000);
 
     await act(async () => {
       runInAction(() => {
-        resolved.status = 'resolved';
-        resolved.resolution = 'Kept both';
+        resolvedOld.status = 'resolved';
+        resolvedOld.resolution = 'kept-both';
+        resolvedNew.status = 'resolved';
+        resolvedNew.resolution = 'kept-both';
         pending.status = 'pending';
         store.isDrawerOpen = true;
-        store.items.push(resolved, pending);
+        store.items.push(resolvedOld, resolvedNew, pending);
       });
       await Promise.resolve();
     });
 
     const rows = container.querySelectorAll('tbody tr');
-    expect(rows).toHaveLength(2);
-    // Unresolved (pending) on top; resolved at the bottom.
+    expect(rows).toHaveLength(3);
+    // Segment 1 (unresolved) on top: pending.
     expect(rows[0].className).toContain('media-queue__row--pending');
+    // Segment 2 (resolved) below, newest-first: resolvedNew (2000) then resolvedOld (1000).
     expect(rows[1].className).toContain('media-queue__row--resolved');
-    expect(rows[1].querySelector('.media-queue__status--resolved')?.textContent).toContain(
-      'Kept both',
-    );
+    expect(rows[1].querySelector('.media-queue__col-operation')?.textContent).toContain('Compress');
+    expect(rows[2].className).toContain('media-queue__row--resolved');
+    expect(rows[2].querySelector('.media-queue__col-operation')?.textContent).toContain('Re-encode');
 
-    // "Clear resolved" removes only the resolved row.
+    // "Clear resolved" removes only the resolved rows.
     const clearBtn = queryButton(/Clear resolved/);
     expect(clearBtn).toBeTruthy();
     await act(async () => {
@@ -547,5 +584,63 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     // The old failed row is gone; a new running row is present.
     expect(store.items.every((it: any) => it.id !== 'id-ret')).toBe(true);
     expect(store.items.some((it: any) => it.status === 'running')).toBe(true);
+  });
+
+  // ---------- resolved-row links reflect which files survive (INV-036) ----------
+
+  it('Keep New: filename becomes plain text + status links to the new file; Keep Original: status is plain text', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+    const outN: any = { id: 'outN', absolutePath: '/photos/outN.mp4', name: 'outN.mp4' };
+    const outO: any = { id: 'outO', absolutePath: '/photos/outO.mp4', name: 'outO.mp4' };
+    // itemNew is the newer of the two resolved rows, so newest-first puts it on top.
+    const itemNew = new QueueItem('id-new', srcFile, 'reencode-x264', undefined, 'Re-encode', 2000);
+    const itemOrig = new QueueItem('id-orig', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
+
+    await act(async () => {
+      runInAction(() => {
+        itemNew.status = 'resolved';
+        itemNew.resolution = 'kept-new';
+        itemNew.output = outN;
+        itemOrig.status = 'resolved';
+        itemOrig.resolution = 'kept-original';
+        itemOrig.output = outO;
+        store.isDrawerOpen = true;
+        store.items.push(itemNew, itemOrig);
+      });
+      await Promise.resolve();
+    });
+
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(2);
+    const [rowNew, rowOrig] = Array.from(rows);
+
+    // Keep New: original was trashed → filename is plain text, NOT a link.
+    expect(rowNew.querySelector('.media-queue__filename-text')).toBeTruthy();
+    expect(rowNew.querySelector('.media-queue__filename-btn')).toBeNull();
+    // Keep New: the status IS a link to the new (kept) file.
+    const newLink = rowNew.querySelector('.media-queue__resolved-link') as HTMLButtonElement | null;
+    expect(newLink).toBeTruthy();
+    expect(newLink?.textContent).toContain('Kept new');
+
+    // Keep Original: source survives → filename is still a link; status is NOT a link.
+    expect(rowOrig.querySelector('.media-queue__filename-btn')).toBeTruthy();
+    expect(rowOrig.querySelector('.media-queue__resolved-link')).toBeNull();
+    expect(rowOrig.querySelector('.media-queue__status--resolved')?.textContent).toContain(
+      'Kept original',
+    );
+
+    // Clicking the Keep New status link opens the new output file in the viewer.
+    rootStore.uiStore.selectFile.mockClear();
+    rootStore.uiStore.enableSlideMode.mockClear();
+    await act(async () => {
+      newLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(rootStore.uiStore.enableSlideMode).toHaveBeenCalled();
+    const [focused] = rootStore.uiStore.selectFile.mock.calls[0];
+    expect(focused).toMatchObject({ id: 'outN' });
   });
 });

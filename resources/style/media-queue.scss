@@ -149,6 +149,25 @@
     }
   }
 
+  // Plain (non-link) filename text — shown for the trashed original after Keep New.
+  &__filename-text {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    color: var(--text-color-muted);
+  }
+
+  // Resolved status rendered as a link to the kept NEW file (Keep New / Keep Both).
+  &__resolved-link {
+    color: var(--accent-color-green);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
   // ---- Running status with spinner ----
   &__running-status {
     display: flex;
