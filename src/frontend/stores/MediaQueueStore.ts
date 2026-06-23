@@ -1,4 +1,4 @@
-import { action, computed, makeObservable, observable, runInAction } from 'mobx';
+import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';
 
 import { MediaJobType } from '../../ipc/messages';
 import { RendererMessenger } from '../../ipc/renderer';
@@ -20,6 +20,12 @@ import RootStore from './RootStore';
  *
  * `output` is `null` until the job completes and `finalizeEncodedOutput`
  * returns the committed `ClientFile`.
+ *
+ * `resolution` is `null` until the user settles a completed/failed job with a
+ * Keep / Dismiss choice; it then holds the human-readable resolution label
+ * ("Kept new" / "Kept original" / "Kept both" / "Dismissed") and the item's
+ * status becomes `'resolved'` so it sinks to the bottom of the drawer as
+ * history instead of being removed (INV-036).
  */
 export class QueueItem {
   @observable id: string;
@@ -27,11 +33,12 @@ export class QueueItem {
   @observable jobType: MediaJobType;
   @observable clip: { start?: string; end?: string } | undefined;
   @observable label: string;
-  @observable status: 'pending' | 'running' | 'completed' | 'failed';
+  @observable status: 'pending' | 'running' | 'completed' | 'failed' | 'resolved';
   @observable percent: number | null;
   @observable jobId: string | null;
   @observable output: ClientFile | null;
   @observable errorMessage: string | null;
+  @observable resolution: string | null;
   @observable requestedAt: number;
 
   constructor(
@@ -52,6 +59,7 @@ export class QueueItem {
     this.jobId = null;
     this.output = null;
     this.errorMessage = null;
+    this.resolution = null;
     this.requestedAt = requestedAt;
     makeObservable(this);
   }
@@ -103,6 +111,10 @@ class MediaQueueStore {
     return this.items.filter((it) => it.status === 'completed').length;
   }
 
+  @computed get resolvedCount(): number {
+    return this.items.filter((it) => it.status === 'resolved').length;
+  }
+
   @computed get hasItems(): boolean {
     return this.items.length > 0;
   }
@@ -118,7 +130,9 @@ class MediaQueueStore {
 
   /**
    * Enqueue a new media job.  The job is added to the end of the list
-   * (FIFO), the drawer is opened, and the queue is drained if idle.
+   * (FIFO) and the queue is drained if idle.  The drawer is NOT auto-opened —
+   * it is always present (default collapsed) at the bottom of the window, and
+   * the user controls its expanded state (INV-036).
    */
   @action.bound enqueue(
     source: ClientFile,
@@ -134,7 +148,6 @@ class MediaQueueStore {
       Date.now(),
     );
     this.items.push(item);
-    this.isDrawerOpen = true;
     this.processNext();
   }
 
@@ -189,10 +202,14 @@ class MediaQueueStore {
     // @action body.  All post-await mutations are wrapped in runInAction.
     (async () => {
       try {
+        // toJS() converts the @observable clip into a plain object — a MobX
+        // proxy cannot be structured-cloned across the ipcRenderer.invoke
+        // boundary ("An object could not be cloned"), which broke create-clip /
+        // subtract-clip jobs (INV-036). undefined passes through unchanged.
         const { jobId, tempPath, finalPath } = await RendererMessenger.startMediaJob(
           item.jobType,
           item.source.absolutePath,
-          item.clip,
+          toJS(item.clip),
         );
 
         // Tear down the progress subscription — ffmpeg is done.
@@ -282,7 +299,17 @@ class MediaQueueStore {
   }
 
   /**
-   * Keep the new output: trash the original source file, then remove the row.
+   * Mark an item resolved with a human-readable label.  Resolved items are NOT
+   * removed — they stay in `items` (rendered at the bottom of the drawer as
+   * history) until the user clicks "Clear resolved" (INV-036).
+   */
+  @action.bound private resolve(item: QueueItem, resolution: string): void {
+    item.status = 'resolved';
+    item.resolution = resolution;
+  }
+
+  /**
+   * Keep the new output: trash the original source file, then resolve the row.
    *
    * @param item - A completed queue item (item.output must be non-null).
    * @param trashFile - The function returned by `useTrashFile()` (hook).
@@ -294,16 +321,11 @@ class MediaQueueStore {
     trashFile: (file: ClientFile) => Promise<{ ok: boolean; isPermanent: boolean }>,
   ): Promise<void> {
     await trashFile(item.source);
-    runInAction(() => {
-      const idx = this.items.indexOf(item);
-      if (idx !== -1) {
-        this.items.splice(idx, 1);
-      }
-    });
+    runInAction(() => this.resolve(item, 'Kept new'));
   }
 
   /**
-   * Keep the original source: trash the committed output file, then remove the row.
+   * Keep the original source: trash the committed output file, then resolve the row.
    *
    * If the viewer is currently showing the output, focus the source first so
    * the user does not see a blank/missing file in SlideMode after the output
@@ -327,22 +349,29 @@ class MediaQueueStore {
 
     await trashFile(item.output);
 
-    runInAction(() => {
-      const idx = this.items.indexOf(item);
-      if (idx !== -1) {
-        this.items.splice(idx, 1);
-      }
-    });
+    runInAction(() => this.resolve(item, 'Kept original'));
   }
 
   /**
-   * Keep both files: just remove the row (both files stay on disk).
+   * Keep both files: resolve the row (both files stay on disk).
    */
   @action.bound keepBoth(item: QueueItem): void {
-    const idx = this.items.indexOf(item);
-    if (idx !== -1) {
-      this.items.splice(idx, 1);
-    }
+    this.resolve(item, 'Kept both');
+  }
+
+  /**
+   * Dismiss a failed job: resolve the row as "Dismissed" (the row sinks to the
+   * bottom as history rather than being removed).
+   */
+  @action.bound dismiss(item: QueueItem): void {
+    this.resolve(item, 'Dismissed');
+  }
+
+  /**
+   * Remove all resolved rows from the queue at once.
+   */
+  @action.bound clearResolved(): void {
+    this.items = this.items.filter((it) => it.status !== 'resolved');
   }
 
   /**

@@ -73,7 +73,6 @@ const Main = () => {
             <main id="main" onKeyDown={handleShortcuts}>
               <AppToolbar />
               <ContentView />
-              <MediaQueueDrawer />
             </main>
           }
           axis="vertical"
@@ -82,6 +81,10 @@ const Main = () => {
           isExpanded={uiStore.isOutlinerOpen}
           onMove={uiStore.moveOutlinerSplitter}
         />
+        {/* Rendered as a sibling of the Split (not inside #main) so the queue
+            drawer spans the FULL window width, including under the Outliner
+            sidebar (INV-036). */}
+        <MediaQueueDrawer />
       </TagDnDProvider>
     </ContextMenuLayer>
   );

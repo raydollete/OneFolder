@@ -204,13 +204,26 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     return rootStore.mediaQueueStore;
   }
 
-  // ---------- renders nothing when queue is empty ----------
+  // ---------- always renders, even when the queue is empty (INV-036) ----------
 
-  it('renders nothing when the queue is empty', async () => {
+  it('always renders the bar with an empty-state body when the queue is empty (INV-036)', async () => {
     const { rootStore } = await makeStoreForComponent();
-    await renderDrawer(rootStore);
+    const store = await renderDrawer(rootStore);
 
-    expect(container.querySelector('.media-queue')).toBeNull();
+    // The bar is always present and default-collapsed (no auto-open).
+    expect(container.querySelector('.media-queue')).toBeTruthy();
+    expect(store.isDrawerOpen).toBe(false);
+    expect(container.querySelector('.media-queue__summary')?.textContent).toContain('0 queued');
+    expect(container.querySelector('tbody')).toBeNull();
+
+    // Expanding shows the empty placeholder rather than a table.
+    await act(async () => {
+      runInAction(() => {
+        store.isDrawerOpen = true;
+      });
+      await Promise.resolve();
+    });
+    expect(container.querySelector('.media-queue__empty')).toBeTruthy();
   });
 
   // ---------- rows oldest-on-top with four columns ----------
@@ -421,9 +434,9 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     expect(errorEl?.textContent).toContain(errMsg);
   });
 
-  // ---------- Dismiss splices the failed row ----------
+  // ---------- Dismiss resolves the failed row (kept as history) ----------
 
-  it('"Dismiss" (keepBoth) removes the failed row', async () => {
+  it('"Dismiss" resolves the failed row as "Dismissed" (kept as history, not removed)', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
@@ -449,8 +462,57 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
       await Promise.resolve();
     });
 
-    // After Dismiss the drawer is empty → renders null.
-    expect(container.querySelector('.media-queue')).toBeNull();
+    // The row is NOT removed — it is resolved and shows "Dismissed" with no actions.
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].status).toBe('resolved');
+    const resolvedCell = container.querySelector('.media-queue__status--resolved');
+    expect(resolvedCell?.textContent).toContain('Dismissed');
+    expect(queryButton(/Retry/)).toBeFalsy();
+    expect(queryButton(/Dismiss/)).toBeFalsy();
+  });
+
+  // ---------- resolved rows sink to the bottom + Clear resolved ----------
+
+  it('sorts resolved rows below unresolved rows and "Clear resolved" removes them', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+    // The resolved item has an EARLIER requestedAt than the pending one, proving the
+    // sort puts resolved last regardless of request time (INV-036).
+    const resolved = new QueueItem('r1', srcFile, 'reencode-x264', undefined, 'Re-encode', 1000);
+    const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', 2000);
+
+    await act(async () => {
+      runInAction(() => {
+        resolved.status = 'resolved';
+        resolved.resolution = 'Kept both';
+        pending.status = 'pending';
+        store.isDrawerOpen = true;
+        store.items.push(resolved, pending);
+      });
+      await Promise.resolve();
+    });
+
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(2);
+    // Unresolved (pending) on top; resolved at the bottom.
+    expect(rows[0].className).toContain('media-queue__row--pending');
+    expect(rows[1].className).toContain('media-queue__row--resolved');
+    expect(rows[1].querySelector('.media-queue__status--resolved')?.textContent).toContain(
+      'Kept both',
+    );
+
+    // "Clear resolved" removes only the resolved row.
+    const clearBtn = queryButton(/Clear resolved/);
+    expect(clearBtn).toBeTruthy();
+    await act(async () => {
+      clearBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].id).toBe('p1');
   });
 
   // ---------- Retry re-enqueues ----------

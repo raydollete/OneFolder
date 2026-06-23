@@ -37,7 +37,7 @@ takes more than ~1 second, or mutates the watched filesystem needs the full
 | 4. IPC channels | `src/ipc/{messages,renderer,main}.ts` | invoke (start) + push stream (progress) + send (cancel) + invoke (commit/place) |
 | 5. Queue store | `MediaQueueStore` (enqueue / processNext / runItem / keep actions) | Session-scoped FIFO queue that serializes execution and surfaces job state to the drawer |
 | 6. Post-job finalization | `FileStore.finalizeEncodedOutput` | tag temp → suppress watcher + place → deterministic ingest → refetch (no viewer anchor — `focusViewer: false`) |
-| 7. Bottom drawer | `src/frontend/containers/MediaQueue/index.tsx` | Persistent, collapsible FIFO list; rows for Queued / Processing / Completed / Failed |
+| 7. Bottom drawer | `src/frontend/containers/MediaQueue/index.tsx` | Always-present, full-window collapsible FIFO list; rows for Queued / Processing / Completed / Failed; settled rows become Resolved history at the bottom |
 | 8. Button + orchestration | `ImageTools.tsx` | Gating, `mediaQueueStore.enqueue(file, jobType, clip)` call, returns immediately |
 
 Layers 3–6 are **reusable** — a new tool that produces a sibling file should
@@ -55,7 +55,10 @@ that creates the row, and no race.
 
 1. `mediaQueueStore.enqueue(file, jobType, clip)` — adds the job to the FIFO queue and returns
    immediately. The tool button is not disabled; no navigation or input freeze occurs. The drawer
-   auto-opens if this is the first job in the queue (INV-035).
+   is **always present** at the bottom of the window (full width, default collapsed); enqueuing does
+   NOT auto-open it — the user controls its expanded state (INV-035; refined by INV-036). `clip` is
+   converted to a plain object (`toJS`) before crossing the IPC boundary — a MobX observable proxy
+   cannot be structured-cloned (INV-036).
 2. `MediaQueueStore.processNext` picks up the job when the queue is idle and calls
    `MediaJobService.start()` (via IPC), which computes a collision-free **final** path beside
    the source (`getUniqueSiblingPath`) AND a **temp** path in the application staging dir (a
@@ -86,9 +89,16 @@ that creates the row, and no race.
    - **Keep New** — trashes the source via the shared recyclable-check trash flow.
    - **Keep Original** — trashes the committed output; if the viewer is on the output, focuses
      the source instead.
-   - **Keep Both** — removes the row with no file deletion.
+   - **Keep Both** — keeps both files (no deletion).
+
+   A Keep choice does NOT remove the row: the item becomes **`Resolved`** (labelled "Kept new" /
+   "Kept original" / "Kept both") and sinks to the bottom of the list as history. Resolved rows
+   accumulate until the user clicks **`Clear resolved`** in the header (INV-036). The render order
+   is unresolved-first (oldest on top), then resolved (oldest on top), so a newly enqueued job
+   always appears above older resolved rows.
 6. If the job fails, the row transitions to `Failed`: the status shows "Failed" (ffmpeg error
-   detail revealed on click); actions become `[Retry] [Dismiss]`. No blocking modal.
+   detail revealed on click); actions become `[Retry] [Dismiss]`. `Dismiss` resolves the row as
+   "Dismissed" (kept as history at the bottom, cleared via `Clear resolved`). No blocking modal.
 7. Cancel: a Pending row is spliced immediately (no ffmpeg starts); a Running row calls
    `cancelMediaJob` and the row is removed when the in-flight promise rejects with
    `MEDIA_JOB_CANCELLED`.

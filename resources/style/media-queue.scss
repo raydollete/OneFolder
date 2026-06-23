@@ -1,18 +1,21 @@
 // ---------------------------------------------------------------------------
 // Media Queue bottom drawer
-// Persistent collapsible drawer fixed to the bottom of #main (the content
-// area). Shows all media-job queue items oldest-on-top in a four-column table.
+// Persistent collapsible bar pinned (position: fixed) to the bottom of the
+// WHOLE window — rendered as a sibling of #window-splitter (Main.tsx), so it
+// spans the full width including under the Outliner sidebar (INV-036).
+// Shows all media-job queue items in a four-column table; unresolved oldest on
+// top, resolved (kept/dismissed) rows sink to the bottom as history.
 // ---------------------------------------------------------------------------
 
-#main {
-  // Reserve space at the bottom for the drawer so ContentView scrollbar
-  // does not overlap it.  The drawer itself is position: absolute so it
-  // overlays the content rather than displacing it; #content-view already
-  // fills absolute from toolbar to bottom.
+// Reserve the collapsed bar height at the bottom of the splitter so the Outliner
+// and content panes never hide their last row behind the always-present bar.
+// The expanded body overlays content above this reserved strip (acceptable).
+#window-splitter {
+  bottom: 2rem; // = .media-queue__header height
 }
 
 .media-queue {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
@@ -43,6 +46,22 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  &__clear-resolved {
+    flex-shrink: 0;
+    color: var(--text-color-muted);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  // Empty-state placeholder shown in the body when the queue has no jobs.
+  &__empty {
+    padding: 0.75rem;
+    color: var(--text-color-muted);
+    text-align: center;
   }
 
   &__toggle {
@@ -163,6 +182,10 @@
 
   &__status--failed {
     color: var(--accent-color-red);
+  }
+
+  &__status--resolved {
+    color: var(--text-color-muted);
   }
 
   // ---- View Completed button ----

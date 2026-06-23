@@ -6,7 +6,7 @@
  * — all with IPC and finalizeEncodedOutput mocked (no real ffmpeg).
  */
 
-import { configure, runInAction } from 'mobx';
+import { configure, isObservable, runInAction } from 'mobx';
 import { FileDTO } from '../src/api/file';
 
 configure({ enforceActions: 'never' });
@@ -188,16 +188,33 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     progressCallbacks.length = 0;
   });
 
-  // ---------- drawer auto-open ----------
+  // ---------- drawer NOT auto-opened (INV-036) ----------
 
-  it('opens the drawer automatically when the first job is enqueued', async () => {
+  it('does NOT auto-open the drawer on enqueue (always-visible bar, default collapsed)', async () => {
     const { store, srcFile } = await makeStore();
     // Default startMediaJob — just hold open so we can check isDrawerOpen.
     startMediaJobMock.mockReturnValue(new Promise(() => {}));
 
     expect(store.isDrawerOpen).toBe(false);
     store.enqueue(srcFile, 'reencode-x264');
-    expect(store.isDrawerOpen).toBe(true);
+    expect(store.isDrawerOpen).toBe(false);
+  });
+
+  // ---------- clip passed to IPC is a plain (cloneable) object (INV-036) ----------
+
+  it('passes a plain, non-observable clip to startMediaJob (structured-clone safe)', async () => {
+    const { store, srcFile } = await makeStore();
+    startMediaJobMock.mockReturnValue(new Promise(() => {}));
+
+    const clip = { start: '00:00:01', end: '00:00:05' };
+    store.enqueue(srcFile, 'create-clip', clip);
+    await Promise.resolve();
+
+    const [, , clipArg] = startMediaJobMock.mock.calls[0];
+    expect(clipArg).toEqual(clip);
+    // The QueueItem stores clip as @observable; the value handed to IPC must be a
+    // plain object (toJS), since a MobX proxy cannot be structured-cloned.
+    expect(isObservable(clipArg)).toBe(false);
   });
 
   // ---------- FIFO single-at-a-time ----------
@@ -360,7 +377,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
 
   // ---------- keepBoth ----------
 
-  it('keepBoth removes the row without trashing anything', async () => {
+  it('keepBoth resolves the row (kept as history) without trashing anything', async () => {
     const { store, srcFile } = await makeStore();
 
     // Manufacture a completed item directly in the store (bypassing async runItem).
@@ -373,7 +390,11 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
 
     expect(store.items).toHaveLength(1);
     store.keepBoth(item);
-    expect(store.items).toHaveLength(0);
+    // Row is NOT removed — it is resolved and kept at the bottom as history (INV-036).
+    expect(store.items).toHaveLength(1);
+    expect(item.status).toBe('resolved');
+    expect(item.resolution).toBe('Kept both');
+    expect(store.resolvedCount).toBe(1);
   });
 
   // ---------- keepNew ----------
@@ -393,7 +414,9 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     await store.keepNew(item, trashFile);
 
     expect(trashFile).toHaveBeenCalledWith(srcFile);
-    expect(store.items).toHaveLength(0);
+    expect(store.items).toHaveLength(1);
+    expect(item.status).toBe('resolved');
+    expect(item.resolution).toBe('Kept new');
   });
 
   // ---------- keepOriginal ----------
@@ -413,7 +436,9 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     await store.keepOriginal(item, trashFile);
 
     expect(trashFile).toHaveBeenCalledWith(outFile);
-    expect(store.items).toHaveLength(0);
+    expect(store.items).toHaveLength(1);
+    expect(item.status).toBe('resolved');
+    expect(item.resolution).toBe('Kept original');
   });
 
   it('keepOriginal focuses the source when the viewer is currently on the output', async () => {
@@ -511,5 +536,45 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(newItem.clip).toEqual(clip);
     // The retry enqueue calls startMediaJob again.
     expect(startMediaJobMock).toHaveBeenCalledTimes(2);
+  });
+
+  // ---------- dismiss + clearResolved (INV-036) ----------
+
+  it('dismiss resolves a failed row as "Dismissed" (kept as history, not removed)', async () => {
+    const { store, srcFile } = await makeStore();
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+    const item = new QueueItem('idF', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    runInAction(() => {
+      item.status = 'failed';
+      item.errorMessage = 'boom';
+      store.items.push(item);
+    });
+
+    store.dismiss(item);
+    expect(store.items).toHaveLength(1);
+    expect(item.status).toBe('resolved');
+    expect(item.resolution).toBe('Dismissed');
+  });
+
+  it('clearResolved removes only resolved rows, leaving active ones', async () => {
+    const { store, srcFile } = await makeStore();
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+    const resolved = new QueueItem('r1', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', Date.now());
+    runInAction(() => {
+      resolved.status = 'resolved';
+      resolved.resolution = 'Kept both';
+      pending.status = 'pending';
+      store.items.push(resolved, pending);
+    });
+
+    expect(store.resolvedCount).toBe(1);
+    store.clearResolved();
+
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].id).toBe('p1');
+    expect(store.resolvedCount).toBe(0);
   });
 });
