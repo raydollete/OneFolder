@@ -55,8 +55,9 @@ review and keep the result.
    - Both empty: **disabled**.
 
 4. **Create Clip clicked.** The job is enqueued and the button returns immediately.
-   The media queue drawer at the bottom of the window auto-opens (if not already
-   open) with the new row showing status `Queued`.  Navigation, tagging, and all
+   The media queue drawer — always present at the bottom of the window and
+   default-collapsed (it does **not** auto-open) — gains a new row showing status
+   `Queued`; expand the drawer to watch progress.  Navigation, tagging, and all
    other input remain fully available.
 
 5. The main process re-validates the `HH:MM:SS` strings and the start < end

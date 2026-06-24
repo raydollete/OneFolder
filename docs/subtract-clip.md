@@ -32,9 +32,9 @@ a row to the media queue drawer where the user can review and keep the result.
    - start ≥ 1s (the cross-fade is 1s and must fit inside clip A; `offset = start − 1` must be ≥ 0).
    Otherwise it stays disabled (the same "End must be after start." hint as Create Clip covers the
    backwards-range case).
-3. Clicking it enqueues the job and returns immediately.  The media queue drawer auto-opens (if not
-   already open) with the new row showing `Queued`.  Navigation, tagging, and all other input remain
-   fully available.
+3. Clicking it enqueues the job and returns immediately.  The media queue drawer — always present at
+   the bottom of the window and default-collapsed (it does **not** auto-open) — gains a new row
+   showing `Queued`.  Navigation, tagging, and all other input remain fully available.
 4. When the queue picks up the job, the drawer row updates to **"Subtracting clip… N%"** (or
    "Subtracting clip…" if duration probing fails). A **Cancel** button is shown in the row; clicking
    it kills ffmpeg, removes any partial output, and removes the row.

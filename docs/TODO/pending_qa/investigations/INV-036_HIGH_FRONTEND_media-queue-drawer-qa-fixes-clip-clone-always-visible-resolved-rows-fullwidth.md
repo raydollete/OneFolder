@@ -3,7 +3,7 @@ id: INV-036
 title: 'Media queue drawer QA fixes: clip structured-clone crash, always-visible/default-collapsed drawer, resolved rows to the bottom + Clear resolved, and full-window-width drawer'
 reported_bug: "Manual QA of the INV-035 non-blocking media-job queue drawer surfaced four issues. (1) Create Clip / Subtract Clip jobs crash at the IPC boundary with 'An object could not be cloned' because the MobX observable clip object cannot be structured-cloned across ipcRenderer.invoke; no-clip jobs (rotate/re-encode/normalize) work. (2) The drawer auto-opens on the first enqueue and disappears entirely when the queue is empty, so there is no stable, predictable surface — the user wants it always present, default-collapsed, and never auto-opening. (3) Completed/dismissed rows stay interleaved in chronological order and there is no way to clear them, so the queue clutters with resolved work and new jobs are hard to find. (4) The drawer only spans the content area (#main) and stops at the left Outliner sidebar; the user wants it pinned across the FULL window width."
 date: 2026-06-23
-status: active
+status: pending_qa
 superseded_by:
 tasks_spawned: [TASK-146, TASK-147, TASK-148, TASK-149, TASK-150]
 root_cause_category: silent-failure
@@ -344,9 +344,33 @@ Five small, ordered edits to the four INV-035 critical files, in the approved or
 
 ## Documentation Updates
 
-- [ ] Updated: `docs/TOOLS.md` (always-present default-collapsed full-width drawer;
+- [x] Updated: `docs/TOOLS.md` (always-present default-collapsed full-width drawer;
       resolved rows + Clear resolved; clip jobs fixed)
-- [ ] Updated: `docs/create-clip.md`, `docs/subtract-clip.md` (clip jobs now enqueue/run
-      without the structured-clone error)
-- [ ] Updated: any INV-035 drawer screenshots/wording describing the auto-open or
-      content-only width
+- [x] Updated: `docs/create-clip.md`, `docs/subtract-clip.md` (clip jobs now enqueue/run
+      without the structured-clone error; **stale "drawer auto-opens" wording corrected
+      2026-06-24** to the always-present, default-collapsed, no-auto-open behavior)
+- [x] Updated: INV-035 drawer wording describing the auto-open / content-only width
+      (corrected in the clip docs above; `docs/TOOLS.md` reflects the full-width surface)
+
+## Close-out (2026-06-24)
+
+Implementation verified in code and promoted to `pending_qa`:
+
+- **Change 2 (TASK-146):** `toJS(item.clip)` at the `startMediaJob` boundary
+  (`MediaQueueStore.ts:407`). ✓
+- **Change 1 (TASK-147):** no `isDrawerOpen=true` in `enqueue`; no empty-state early
+  return; `media-queue__empty` placeholder. ✓
+- **Change 3 (TASK-148):** `resolved` status + `resolution`, `resolve`/`dismiss`/
+  `resolvedCount`/`clearResolved`, render-time sort, resolved-row branch, "Clear resolved"
+  control, `· {n} resolved` summary, `&__status--resolved`. ✓
+- **Change 4 (TASK-149):** drawer relocated to a `<Split>` sibling (`Main.tsx:87`);
+  `position: fixed` full-width; both scroll owners' last-row strip reserved via
+  `#window-splitter { bottom: 2rem; }`. Code ✓; **runtime visual QA outstanding** —
+  full-width appearance, modal/toast stacking (drawer `z-index:10` vs toaster `z-index:1`),
+  and `#window-splitter` drag-handle usability.
+- **TASK-150 (tests + docs):** 2 jsdom suites / 42 tests pass; tool docs updated. ✓
+
+Verified `yarn build` compiles and `yarn test --testPathPattern media-queue` passes
+(42 tests). `yarn lint` fails only on 45 pre-existing errors in unrelated files — none in
+the INV-036 files. Lands in `pending_qa/` (not `completed/`) because the TASK-149 runtime
+visual/interaction checks `REQUIRE MANUAL EXECUTION` per `QA-DISCIPLINE.md`.

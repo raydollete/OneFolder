@@ -2,11 +2,11 @@
 id: TASK-146
 title: "Fix 'An object could not be cloned' on Create/Subtract Clip: convert the MobX clip proxy with toJS() at the startMediaJob IPC boundary in runItem"
 investigation: INV-036
-status: planned
+status: done
 priority: high
 blocked_by: []
 date_created: 2026-06-23
-date_completed:
+date_completed: 2026-06-24
 files:
   - 'src/frontend/stores/MediaQueueStore.ts'
 ---
@@ -32,9 +32,9 @@ See [INV-036](../investigations/INV-036_HIGH_FRONTEND_media-queue-drawer-qa-fixe
 
 ## Implementation Steps
 
-- [ ] 1. In `src/frontend/stores/MediaQueueStore.ts`, add `toJS` to the existing MobX
+- [x] 1. In `src/frontend/stores/MediaQueueStore.ts`, add `toJS` to the existing MobX
       import: `import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';`.
-- [ ] 2. In `runItem`, change the `startMediaJob` call so the third argument is
+- [x] 2. In `runItem`, change the `startMediaJob` call so the third argument is
       `toJS(item.clip)` instead of `item.clip`:
       ```ts
       const { jobId, tempPath, finalPath } = await RendererMessenger.startMediaJob(
@@ -48,10 +48,11 @@ See [INV-036](../investigations/INV-036_HIGH_FRONTEND_media-queue-drawer-qa-fixe
 
 ## Done When
 
-- [ ] `runItem` passes `toJS(item.clip)` (a plain object or `undefined`) to
-      `startMediaJob`; no MobX proxy reaches the IPC boundary.
-- [ ] Manual/automated check: enqueuing a Create Clip and a Subtract Clip job no longer
-      throws `An object could not be cloned`; the job runs (verified via TASK-150's test
-      that asserts `startMediaJob` received a plain-object clip).
-- [ ] `yarn lint` / `yarn build` compile (batch test at end of investigation per project
-      convention).
+- [x] `runItem` passes `toJS(item.clip)` (a plain object or `undefined`) to
+      `startMediaJob`; no MobX proxy reaches the IPC boundary. (Verified: `MediaQueueStore.ts:407`.)
+- [x] Manual/automated check: enqueuing a Create Clip and a Subtract Clip job no longer
+      throws `An object could not be cloned`; the job runs (verified via the
+      `tests/media-queue-store.test.ts` assertion that `startMediaJob` received a
+      plain-object clip — 42 tests pass).
+- [x] `yarn build` compiles (verified 2026-06-24). NOTE: `yarn lint` fails on 45
+      pre-existing errors in unrelated files; none are in this task's files.
