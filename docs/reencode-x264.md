@@ -306,13 +306,79 @@ The row is removed from the queue regardless of which Keep action is chosen.
 
 ---
 
+## Stall & Cancellation (INV-038)
+
+Two self-healing mechanisms prevent a stuck job from permanently blocking the queue.
+
+### 60-second Stall Watchdog
+
+`MediaQueueStore.runItem` arms a 60-second timer the moment a job enters `running`.
+The primary liveness signal is ffmpeg's **`outTimeSec`** (encoded output timestamp):
+whenever `outTimeSec` advances the timer re-arms, so a long encode that makes steady
+encode-time progress is never killed — even if the rounded integer `percent` does not
+change for over a minute. The timer fires only when the process is genuinely frozen
+(no `out_time_ms` advance for 60s). On fire:
+
+1. `cancelMediaJob(jobId)` is sent to kill the wedged child.
+2. The queue row transitions to `Failed` with the message
+   `"Stalled: no progress for 60s (stuck at N%)."` — the frozen percent is shown
+   so the user can see where the encode stopped.
+3. `processNext()` runs and the next queued job starts.
+
+A separate inactivity timeout inside `FfmpegRunner.run()` (default 60s, resets on each
+`out_time_ms` advance) serves as a **main-process backstop**: even if the renderer-side
+watchdog is somehow bypassed, the main process kills the ffmpeg child and rejects the
+encode promise with a `FfmpegStallError`, which surfaces as a `Failed` row via the
+existing `onError` path.
+
+### Forcible Cancel
+
+Clicking Cancel on a `Running` row:
+
+1. Sends `cancelMediaJob(jobId)` to kill the ffmpeg child.
+2. **Immediately** splices the row from the queue and calls `processNext()` — without
+   waiting for the `MEDIA_JOB_CANCELLED` round-trip.
+
+Cancel works in every phase of a running job:
+
+- **Encoding** — ffmpeg child is killed; any partial output in the staging dir is
+  removed by the main-process catch block.
+- **Finalize** — once ffmpeg finishes, the renderer awaits `finalizeEncodedOutput`
+  (tag → commit/move → ingest). Cancel removes the row locally even though
+  `cancelMediaJob` may be a main-side no-op at this point; the orphaned finalize
+  work completes or fails harmlessly without affecting the queue.
+
+A late-arriving `MEDIA_JOB_CANCELLED` rejection (or natural completion) for a row
+that was already cancelled is a harmless no-op — the idempotent `settle()` latch in
+`runItem` ensures the row cannot be double-spliced and `processNext()` cannot be
+double-called.
+
+### Manual QA Checklist
+
+The following scenarios require a real ffmpeg encode and cannot be automated:
+
+- [ ] REQUIRES MANUAL EXECUTION: Start a long encode, then suspend the ffmpeg PID
+  (Task Manager → right-click → Suspend, or `SuspendThread` via Process Hacker) so
+  progress freezes. Confirm the queue row auto-fails after ~60s with a "Stalled" message
+  and the next queued job starts. Capture a screenshot or log.
+- [ ] REQUIRES MANUAL EXECUTION: With a job running, click Cancel. Confirm the ffmpeg
+  process is gone (Task Manager / `tasklist`) and the next queued job starts immediately.
+  Capture evidence.
+- [ ] REQUIRES MANUAL EXECUTION: Click Cancel during the brief finalize phase (after
+  progress hits ~100% but before the row resolves). Confirm the row is removed and the
+  queue advances. Capture evidence.
+
+---
+
 ## Error Handling Summary
 
 | Scenario | Behavior |
 |---|---|
 | ffmpeg exits non-zero | Staged partial deleted; queue row shows `Failed` with stderr tail; no Keep actions |
+| ffmpeg stalls (no `out_time_ms` advance for 60s) | Renderer watchdog fails the row with "Stalled: no progress for 60s (stuck at N%)" and advances queue; main-process FfmpegStallError backstop kills child independently |
 | User cancels (Queued) | Row removed immediately; no ffmpeg started |
-| User cancels (Running) | ffmpeg aborted (`AbortSignal`); staged partial deleted; row removed; quiet cancel toast |
+| User cancels (Running) | ffmpeg aborted; row spliced immediately; queue advanced without waiting for confirmation; late confirmation is a harmless no-op |
+| User cancels (Finalizing) | Row spliced immediately; orphaned finalize completes or fails harmlessly |
 | App quits mid-encode | `before-quit` handler calls `mediaJobService.killAll()`; staged partial deleted (best-effort); quit proceeds |
 | Place or ingest fails | `finalizeEncodedOutput` throws; watcher suppression released in `finally`; queue row shows `Failed`; source left on disk untouched |
 | Source already deleted before Keep action | Defensive guard in the Keep handler; no-ops if `source` is null |

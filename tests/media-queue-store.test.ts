@@ -1,9 +1,12 @@
 /**
- * Unit tests for MediaQueueStore (INV-035 / TASK-144).
+ * Unit tests for MediaQueueStore (INV-035 / TASK-144; stall/cancel INV-038 / TASK-156).
  *
  * Verifies FIFO single-at-a-time draining, drawer auto-open,
  * cancel / retry, the three Keep actions, and the failed-row path
  * — all with IPC and finalizeEncodedOutput mocked (no real ffmpeg).
+ *
+ * INV-038 / TASK-156 additions: stall watchdog, watchdog-reset-on-progress,
+ * forcible-cancel-frees-queue, and idempotent-settle tests use jest fake timers.
  */
 
 import { configure, isObservable, runInAction } from 'mobx';
@@ -49,8 +52,12 @@ jest.mock('../src/frontend/components/Toaster', () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Fire a synthetic progress event to all currently-registered listeners. */
-function fireProgress(msg: { jobId: string; percent?: number }): void {
+/**
+ * Fire a synthetic progress event to all currently-registered listeners.
+ * `outTimeSec` is the primary liveness signal for the stall watchdog (INV-038);
+ * `percent` is the fallback when `outTimeSec` is absent.
+ */
+function fireProgress(msg: { jobId: string; percent?: number; outTimeSec?: number }): void {
   for (const cb of [...progressCallbacks]) {
     cb(msg);
   }
@@ -228,9 +235,21 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     let resolve2!: (v: any) => void;
 
     startMediaJobMock
-      .mockReturnValueOnce(new Promise((r) => { resolve0 = r; }))
-      .mockReturnValueOnce(new Promise((r) => { resolve1 = r; }))
-      .mockReturnValueOnce(new Promise((r) => { resolve2 = r; }));
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolve0 = r;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolve1 = r;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolve2 = r;
+        }),
+      );
 
     // Enqueue three jobs.
     store.enqueue(srcFile, 'reencode-x264');
@@ -326,26 +345,49 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(cancelMediaJobMock).toHaveBeenCalledWith('job-abc');
   });
 
-  it('removes the running row when MEDIA_JOB_CANCELLED is received', async () => {
+  it('cancelling a running row splices it immediately and advances the queue (forcible cancel, INV-038)', async () => {
+    // Previously: cancel waited for MEDIA_JOB_CANCELLED rejection.
+    // Now: cancel splices immediately; late rejection is a harmless no-op.
     const { store, srcFile } = await makeStore();
 
     let rejectJob!: (err: Error) => void;
-    startMediaJobMock.mockReturnValue(new Promise((_res, rej) => { rejectJob = rej; }));
+    startMediaJobMock
+      .mockReturnValueOnce(
+        new Promise((_res, rej) => {
+          rejectJob = rej;
+        }),
+      )
+      .mockReturnValue(new Promise(() => {})); // second job holds open
 
-    store.enqueue(srcFile, 'reencode-x264');
+    store.enqueue(srcFile, 'reencode-x264'); // item0
+    store.enqueue(srcFile, 'normalize-audio'); // item1
     await Promise.resolve();
+
+    // item0 running, item1 pending.
+    expect(store.items[0].status).toBe('running');
+    expect(store.items[1].status).toBe('pending');
 
     // Stash jobId via a progress event.
     fireProgress({ jobId: 'job-xyz', percent: 10 });
     await Promise.resolve();
 
-    // Cancel triggers cancelMediaJob; we then simulate the rejection.
-    store.cancel(store.items[0].id);
+    const item0Id = store.items[0].id;
+    store.cancel(item0Id);
+
+    // Immediately after cancel (no rejection needed): item0 is gone, item1 is running.
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].status).toBe('running'); // item1 advanced
+    expect(cancelMediaJobMock).toHaveBeenCalledWith('job-xyz');
+
+    // Late MEDIA_JOB_CANCELLED rejection arrives — must be a harmless no-op.
     rejectJob(new Error('MEDIA_JOB_CANCELLED'));
     await flushAll();
 
-    // Row must be spliced.
-    expect(store.items).toHaveLength(0);
+    // List unchanged: still exactly 1 item, still running.
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].status).toBe('running');
+    // startMediaJob called twice: once for item0, once for item1 (processNext fired).
+    expect(startMediaJobMock).toHaveBeenCalledTimes(2);
   });
 
   // ---------- completion ----------
@@ -354,7 +396,11 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     const { store, srcFile, finalizeMock, outFile } = await makeStore();
 
     let resolveJob!: (v: any) => void;
-    startMediaJobMock.mockReturnValue(new Promise((r) => { resolveJob = r; }));
+    startMediaJobMock.mockReturnValue(
+      new Promise((r) => {
+        resolveJob = r;
+      }),
+    );
 
     store.enqueue(srcFile, 'reencode-x264');
     await Promise.resolve();
@@ -515,7 +561,7 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
 
     startMediaJobMock
       .mockRejectedValueOnce(new Error('ffmpeg error')) // first attempt fails
-      .mockReturnValue(new Promise(() => {}));          // retry holds open
+      .mockReturnValue(new Promise(() => {})); // retry holds open
 
     const clip = { start: '00:00:01', end: '00:00:05' };
     store.enqueue(srcFile, 'create-clip', clip);
@@ -563,7 +609,12 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     const { store } = await makeStore();
 
     expect(store.seenCounts).toEqual({ queued: 0, processing: 0, done: 0, resolved: 0 });
-    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.unseenCounts).toEqual({
+      queued: false,
+      processing: false,
+      done: false,
+      resolved: false,
+    });
     expect(store.hasUnseen).toBe(false);
   });
 
@@ -575,7 +626,14 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     store.isDrawerOpen = true;
 
     // Enqueue a pending item so pendingCount rises to 1.
-    const item = new QueueItem('seen1', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    const item = new QueueItem(
+      'seen1',
+      srcFile,
+      'reencode-x264',
+      undefined,
+      'Re-encode',
+      Date.now(),
+    );
     runInAction(() => {
       item.status = 'pending';
       store.items.push(item);
@@ -587,7 +645,12 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
 
     // seenCounts must now reflect the live counts and unseenCounts must be all-false.
     expect(store.seenCounts.queued).toBe(store.liveCounts.queued);
-    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.unseenCounts).toEqual({
+      queued: false,
+      processing: false,
+      done: false,
+      resolved: false,
+    });
     expect(store.hasUnseen).toBe(false);
   });
 
@@ -601,7 +664,14 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     store.isDrawerOpen = false;
 
     // Add a completed item while collapsed → completedCount rises.
-    const item = new QueueItem('seen2', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    const item = new QueueItem(
+      'seen2',
+      srcFile,
+      'reencode-x264',
+      undefined,
+      'Re-encode',
+      Date.now(),
+    );
     runInAction(() => {
       item.status = 'completed';
       store.items.push(item);
@@ -620,7 +690,14 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
 
     // Close, cause an unseen change, then reopen.
     store.isDrawerOpen = false;
-    const item = new QueueItem('seen3', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    const item = new QueueItem(
+      'seen3',
+      srcFile,
+      'reencode-x264',
+      undefined,
+      'Re-encode',
+      Date.now(),
+    );
     runInAction(() => {
       item.status = 'completed';
       store.items.push(item);
@@ -632,7 +709,12 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     store.isDrawerOpen = true;
     store.markSeen();
 
-    expect(store.unseenCounts).toEqual({ queued: false, processing: false, done: false, resolved: false });
+    expect(store.unseenCounts).toEqual({
+      queued: false,
+      processing: false,
+      done: false,
+      resolved: false,
+    });
     expect(store.hasUnseen).toBe(false);
   });
 
@@ -640,7 +722,14 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     const { store, srcFile } = await makeStore();
 
     const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
-    const resolved = new QueueItem('r1', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+    const resolved = new QueueItem(
+      'r1',
+      srcFile,
+      'reencode-x264',
+      undefined,
+      'Re-encode',
+      Date.now(),
+    );
     const pending = new QueueItem('p1', srcFile, 'rotate-cw', undefined, 'Rotate CW', Date.now());
     runInAction(() => {
       resolved.status = 'resolved';
@@ -655,5 +744,247 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     expect(store.items).toHaveLength(1);
     expect(store.items[0].id).toBe('p1');
     expect(store.resolvedCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stall watchdog + idempotent settle tests (INV-038 / TASK-156)
+// These use jest fake timers — real timers are restored in afterEach.
+// ---------------------------------------------------------------------------
+
+describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)', () => {
+  // Store and srcFile are built BEFORE fake timers are enabled so that makeStore()'s
+  // async helper work (FileStore.fetchAllFiles, setTimeout(r,0) in flushAll) runs with
+  // real timers and does not hang.  Each test then enables fake timers for the
+  // timer-driven portion of the test and restores them in afterEach.
+  let store: any;
+  let srcFile: any;
+
+  beforeEach(async () => {
+    startMediaJobMock.mockReset();
+    cancelMediaJobMock.mockReset();
+    onMediaJobProgressMock.mockClear();
+    progressCallbacks.length = 0;
+    // Build the store with real timers so async module imports and FileStore.fetchAllFiles work.
+    ({ store, srcFile } = await makeStore());
+    // Enable fake timers AFTER the store is ready.
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  // Flush helper that works under fake timers: only microtask-queue flushes (Promise.resolve),
+  // no real setTimeout. Use after advancing timers to let runInAction settle.
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 15; i++) {
+      await Promise.resolve();
+    }
+  };
+
+  // ---------- stall watchdog fires after 60s of no outTimeSec progress ----------
+
+  it('stall watchdog: auto-fails the item after 60s of no outTimeSec progress, calls cancelMediaJob, and starts next job (INV-038)', async () => {
+    // item0 holds open; item1 is a second pending job.
+    startMediaJobMock
+      .mockReturnValueOnce(new Promise(() => {})) // item0 — never resolves
+      .mockReturnValue(new Promise(() => {})); // item1
+
+    store.enqueue(srcFile, 'reencode-x264'); // item0
+    store.enqueue(srcFile, 'normalize-audio'); // item1
+    await flushMicrotasks();
+
+    expect(store.items[0].status).toBe('running');
+    expect(store.items[1].status).toBe('pending');
+
+    // Fire one progress event with an outTimeSec value to stash the jobId and re-arm the timer.
+    fireProgress({ jobId: 'stall-job', percent: 10, outTimeSec: 1.0 });
+    await flushMicrotasks();
+
+    expect(store.items[0].jobId).toBe('stall-job');
+    expect(store.items[0].percent).toBe(10);
+
+    // Advance 60s without any further outTimeSec advance — watchdog fires.
+    jest.advanceTimersByTime(60_000);
+    await flushMicrotasks(); // let the settle() runInAction flush
+
+    // item0 must be failed with a stall message.
+    expect(store.items[0].status).toBe('failed');
+    expect(store.items[0].errorMessage).toMatch(/stalled/i);
+    expect(store.items[0].errorMessage).toContain('10%');
+
+    // cancelMediaJob was called for the wedged job.
+    expect(cancelMediaJobMock).toHaveBeenCalledWith('stall-job');
+
+    // processNext ran: item1 is now running.
+    expect(store.items[1].status).toBe('running');
+    expect(startMediaJobMock).toHaveBeenCalledTimes(2);
+  });
+
+  // ---------- watchdog resets on outTimeSec advance ----------
+
+  it('watchdog does NOT fire while outTimeSec keeps advancing (a healthy long encode)', async () => {
+    startMediaJobMock.mockReturnValue(new Promise(() => {}));
+
+    store.enqueue(srcFile, 'reencode-x264');
+    await flushMicrotasks();
+
+    const item = store.items[0];
+    expect(item.status).toBe('running');
+
+    // Simulate steady forward progress: advance outTimeSec each time before 60s elapses.
+    // Three iterations at 59s gaps = 177s total, far past a single 60s window.
+    let outTime = 0.0;
+    for (let i = 0; i < 3; i++) {
+      outTime += 1.0;
+      fireProgress({ jobId: 'healthy-job', percent: 10 + i, outTimeSec: outTime });
+      await flushMicrotasks();
+      jest.advanceTimersByTime(59_000); // 59s gap — watchdog re-armed before it fires
+      await flushMicrotasks();
+    }
+
+    // Job must still be running — watchdog never fired.
+    expect(item.status).toBe('running');
+
+    // Now stop advancing and wait the full 60s — watchdog fires.
+    jest.advanceTimersByTime(60_000);
+    await flushMicrotasks();
+
+    expect(item.status).toBe('failed');
+    expect(item.errorMessage).toMatch(/stalled/i);
+  });
+
+  // ---------- percent-fallback liveness (no outTimeSec in message) ----------
+
+  it('watchdog resets on integer percent change when outTimeSec is absent (fallback path)', async () => {
+    startMediaJobMock.mockReturnValue(new Promise(() => {}));
+
+    store.enqueue(srcFile, 'reencode-x264');
+    await flushMicrotasks();
+
+    const item = store.items[0];
+
+    // Progress events with no outTimeSec field — watchdog should still re-arm on percent change.
+    fireProgress({ jobId: 'pct-job', percent: 10 }); // no outTimeSec
+    await flushMicrotasks();
+    jest.advanceTimersByTime(59_000);
+    await flushMicrotasks();
+
+    expect(item.status).toBe('running'); // still alive
+
+    fireProgress({ jobId: 'pct-job', percent: 11 }); // different percent, re-arms
+    await flushMicrotasks();
+    jest.advanceTimersByTime(59_000);
+    await flushMicrotasks();
+
+    expect(item.status).toBe('running'); // still alive
+
+    // Same percent repeated — watchdog does NOT re-arm; expires after 60s.
+    fireProgress({ jobId: 'pct-job', percent: 11 }); // same percent, no re-arm
+    await flushMicrotasks();
+    jest.advanceTimersByTime(60_000);
+    await flushMicrotasks();
+
+    expect(item.status).toBe('failed');
+    expect(item.errorMessage).toMatch(/stalled/i);
+  });
+
+  // ---------- forcible cancel frees the queue immediately ----------
+
+  it('forcible cancel: splices row and starts next job immediately, late rejection is no-op', async () => {
+    let rejectJob!: (err: Error) => void;
+    startMediaJobMock
+      .mockReturnValueOnce(
+        new Promise((_res, rej) => {
+          rejectJob = rej;
+        }),
+      )
+      .mockReturnValue(new Promise(() => {}));
+
+    store.enqueue(srcFile, 'reencode-x264'); // item0
+    store.enqueue(srcFile, 'normalize-audio'); // item1
+    await flushMicrotasks();
+
+    expect(store.items[0].status).toBe('running');
+    expect(store.items[1].status).toBe('pending');
+
+    fireProgress({ jobId: 'fc-job', percent: 10, outTimeSec: 2.0 });
+    await flushMicrotasks();
+
+    // Cancel item0 — must take effect immediately (no rejection needed).
+    store.cancel(store.items[0].id);
+
+    // Synchronously after cancel: item0 is gone, item1 is running.
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].status).toBe('running');
+    expect(cancelMediaJobMock).toHaveBeenCalledWith('fc-job');
+
+    // Fire late MEDIA_JOB_CANCELLED rejection — must be harmless.
+    rejectJob(new Error('MEDIA_JOB_CANCELLED'));
+    await flushMicrotasks();
+
+    // Still 1 item, still running — no double-splice, no crash.
+    expect(store.items).toHaveLength(1);
+    expect(store.items[0].status).toBe('running');
+    expect(startMediaJobMock).toHaveBeenCalledTimes(2);
+  });
+
+  // ---------- idempotent settle: completion races stall timer ----------
+
+  it('idempotent settle: stall timer does not fire after successful completion (timer was cleared)', async () => {
+    let resolveJob!: (v: any) => void;
+    startMediaJobMock.mockReturnValue(
+      new Promise((r) => {
+        resolveJob = r;
+      }),
+    );
+
+    store.enqueue(srcFile, 'reencode-x264');
+    await flushMicrotasks();
+
+    const item = store.items[0];
+
+    // Advance some time but less than 60s, then complete successfully.
+    jest.advanceTimersByTime(30_000);
+    resolveJob({ jobId: 'idem-job', tempPath: '/tmp/j.mp4', finalPath: '/photos/out.mp4' });
+    await flushMicrotasks();
+
+    expect(item.status).toBe('completed');
+
+    // Advance past the original 60s window — stall timer must NOT fire (already cleared).
+    jest.advanceTimersByTime(60_000);
+    await flushMicrotasks();
+
+    // Status must still be completed, not overwritten by a phantom stall.
+    expect(item.status).toBe('completed');
+    expect(cancelMediaJobMock).not.toHaveBeenCalled();
+  });
+
+  it('idempotent settle: late completion after a stall is a harmless no-op', async () => {
+    let resolveJob!: (v: any) => void;
+    startMediaJobMock.mockReturnValue(
+      new Promise((r) => {
+        resolveJob = r;
+      }),
+    );
+
+    store.enqueue(srcFile, 'reencode-x264');
+    await flushMicrotasks();
+
+    const item = store.items[0];
+
+    // Let the watchdog fire — item transitions to failed.
+    jest.advanceTimersByTime(60_000);
+    await flushMicrotasks();
+
+    expect(item.status).toBe('failed');
+
+    // Now resolve the (already-stalled) startMediaJob — must be a no-op.
+    resolveJob({ jobId: 'late-job', tempPath: '/tmp/j.mp4', finalPath: '/photos/out.mp4' });
+    await flushMicrotasks();
+
+    // Status must stay failed — settle idempotency latch blocked the late completion.
+    expect(item.status).toBe('failed');
   });
 });

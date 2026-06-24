@@ -205,12 +205,25 @@ const QueueRow = observer(({ item, trashFile }: QueueRowProps) => {
 });
 
 // ---------------------------------------------------------------------------
-// Badge: a small decorative red dot overlaid on the top-trailing corner of a
-// count span to signal unseen activity while the drawer is collapsed (INV-037).
-// aria-hidden because the count text itself conveys the value to screen readers.
+// Bubble: an Apple-style notification badge that REPLACES the plain count number
+// (INV-037). A red capsule with a white number when the count is > 0; a grey
+// "dormant" capsule when the count is 0. When `unseen` is true (the count has
+// changed since the drawer was last open AND the drawer is collapsed) the bubble
+// carries the `--unseen` modifier, which fires the pop/bounce animation once: the
+// class is added exactly on the seen→unseen transition and removed on open, so a
+// CSS animation on that class runs once and does not re-fire on later count ticks
+// while the bubble stays unseen.
 // ---------------------------------------------------------------------------
 
-const MediaQueueBadge = () => <span className="media-queue__badge" aria-hidden="true" />;
+const MediaQueueBubble = ({ value, unseen }: { value: number; unseen: boolean }) => {
+  const className =
+    'media-queue__bubble' +
+    (value === 0 ? ' media-queue__bubble--zero' : '') +
+    (unseen ? ' media-queue__bubble--unseen' : '');
+  // Apple caps the visible badge count at 99+; mirror that so the capsule never
+  // grows unbounded.
+  return <span className={className}>{value > 99 ? '99+' : value}</span>;
+};
 
 // ---------------------------------------------------------------------------
 // Main drawer component
@@ -311,23 +324,26 @@ const MediaQueueDrawer = observer(() => {
         <span className="media-queue__title">Media queue</span>
         <span className="media-queue__summary">
           <span className="media-queue__count">
-            {pendingCount} queued
-            {!isDrawerOpen && unseenCounts.queued && <MediaQueueBadge />}
+            <MediaQueueBubble value={pendingCount} unseen={!isDrawerOpen && unseenCounts.queued} />{' '}
+            queued
           </span>
-          {' · '}
           <span className="media-queue__count">
-            {processing} processing
-            {!isDrawerOpen && unseenCounts.processing && <MediaQueueBadge />}
+            <MediaQueueBubble
+              value={processing}
+              unseen={!isDrawerOpen && unseenCounts.processing}
+            />{' '}
+            processing
           </span>
-          {' · '}
           <span className="media-queue__count">
-            {completedCount} done
-            {!isDrawerOpen && unseenCounts.done && <MediaQueueBadge />}
+            <MediaQueueBubble value={completedCount} unseen={!isDrawerOpen && unseenCounts.done} />{' '}
+            done
           </span>
-          {' · '}
           <span className="media-queue__count">
-            {resolvedCount} resolved
-            {!isDrawerOpen && unseenCounts.resolved && <MediaQueueBadge />}
+            <MediaQueueBubble
+              value={resolvedCount}
+              unseen={!isDrawerOpen && unseenCounts.resolved}
+            />{' '}
+            resolved
           </span>
         </span>
         {resolvedCount > 0 && (

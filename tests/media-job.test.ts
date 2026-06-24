@@ -36,9 +36,7 @@ jest.mock('child_process', () => {
         // emit a codec name line on stdout so the { kind: 'codec' } path is exercised.
         // All other fake invocations emit close 0 with no stdout (probeDuration returns undefined).
         const isAudioProbe =
-          cmd === '/fake/ffprobe' &&
-          args.includes('-select_streams') &&
-          args.includes('a:0');
+          cmd === '/fake/ffprobe' && args.includes('-select_streams') && args.includes('a:0');
         setImmediate(() => {
           if (isAudioProbe) {
             proc.stdout.emit('data', Buffer.from('aac\n'));
@@ -123,7 +121,8 @@ describe('FfmpegRunner argv ordering', () => {
   });
 
   it('places preInputArgs BEFORE -i and args AFTER -i', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
     const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
 
     await runner.run({
@@ -148,7 +147,8 @@ describe('FfmpegRunner argv ordering', () => {
   });
 
   it('produces the legacy argv (no preInputArgs) when omitted', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
     const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
 
     await runner.run({
@@ -226,7 +226,8 @@ describe('FfmpegRunner probeFirstAudioCodec', () => {
   });
 
   it('spawns ffprobe with -select_streams a:0 -show_entries stream=codec_name argv', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
     const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
 
     const result = await runner.probeFirstAudioCodec('/videos/source.mp4');
@@ -270,15 +271,27 @@ describe('MediaJobService functional encode + place', () => {
   function generateTestVideo(outPath: string, durationSec = 1): void {
     execFileSync(
       ffmpegBin,
-      ['-y', '-f', 'lavfi', '-i', `testsrc=duration=${durationSec}:size=64x64:rate=10`,
-        '-c:v', 'libx264', '-t', String(durationSec), outPath],
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        `testsrc=duration=${durationSec}:size=64x64:rate=10`,
+        '-c:v',
+        'libx264',
+        '-t',
+        String(durationSec),
+        outPath,
+      ],
       { stdio: 'ignore' },
     );
   }
 
   function makeService(appTempDir: string) {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
-    const { MediaJobService } = require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { MediaJobService } =
+      require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
     const svc = new MediaJobService(new FfmpegRunner(ffmpegBin, ffprobeBin));
     svc.setTempBaseDir(appTempDir);
     return svc;
@@ -312,9 +325,19 @@ describe('MediaJobService functional encode + place', () => {
     expect(fse.existsSync(placed.outputPath)).toBe(true);
     expect(fse.existsSync(result.tempPath)).toBe(false); // moved out of staging
 
-    const codec = execFileSync(ffprobeBin, ['-v', 'error', '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_name', '-of', 'default=nokey=1:noprint_wrappers=1',
-      placed.outputPath]).toString().trim();
+    const codec = execFileSync(ffprobeBin, [
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=codec_name',
+      '-of',
+      'default=nokey=1:noprint_wrappers=1',
+      placed.outputPath,
+    ])
+      .toString()
+      .trim();
     expect(codec).toBe('h264');
   }, 60_000);
 
@@ -363,7 +386,9 @@ describe('MediaJobService functional encode + place', () => {
 
     expect(['cancelled', 'done', 'error']).toContain(outcome);
     if (outcome === 'cancelled' || outcome === 'error') {
-      expect((await fse.readdir(tmpDir)).filter((f) => f.endsWith('.mp4') && f !== 'long.mp4')).toHaveLength(0);
+      expect(
+        (await fse.readdir(tmpDir)).filter((f) => f.endsWith('.mp4') && f !== 'long.mp4'),
+      ).toHaveLength(0);
       if (fse.existsSync(appTempDir)) {
         expect(await fse.readdir(appTempDir)).toHaveLength(0);
       }
@@ -376,7 +401,8 @@ describe('MediaJobService functional encode + place', () => {
   // -------------------------------------------------------------------------
 
   it('probeFirstAudioCodec returns { kind: codec } for an AAC source', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
     const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
 
     // Create an H.264+AAC mp4 for this test.
@@ -385,10 +411,18 @@ describe('MediaJobService functional encode + place', () => {
       ffmpegBin,
       [
         '-y',
-        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
-        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
-        '-c:v', 'libx264',
-        '-c:a', 'aac',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=64x64:rate=10',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:v',
+        'libx264',
+        '-c:a',
+        'aac',
         inputPath,
       ],
       { stdio: 'ignore' },
@@ -402,7 +436,8 @@ describe('MediaJobService functional encode + place', () => {
   }, 30_000);
 
   it('probeFirstAudioCodec returns { kind: no-audio } for a video-only source', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
     const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
 
     const inputPath = path.join(tmpDir, 'no-audio.mp4');
@@ -413,8 +448,10 @@ describe('MediaJobService functional encode + place', () => {
   }, 30_000);
 
   it('decideAudioArgs returns [-c:a, copy] for an MP4-legal-audio source', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
-    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { decideAudioArgs } =
+      require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
     const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
 
     const inputPath = path.join(tmpDir, 'aac-source2.mp4');
@@ -422,10 +459,18 @@ describe('MediaJobService functional encode + place', () => {
       ffmpegBin,
       [
         '-y',
-        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
-        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
-        '-c:v', 'libx264',
-        '-c:a', 'aac',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc=duration=1:size=64x64:rate=10',
+        '-f',
+        'lavfi',
+        '-i',
+        'sine=frequency=440:duration=1',
+        '-c:v',
+        'libx264',
+        '-c:a',
+        'aac',
         inputPath,
       ],
       { stdio: 'ignore' },
@@ -436,8 +481,10 @@ describe('MediaJobService functional encode + place', () => {
   }, 30_000);
 
   it('decideAudioArgs returns [-an] for a video-only source', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
-    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { decideAudioArgs } =
+      require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
     const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
 
     const inputPath = path.join(tmpDir, 'no-audio2.mp4');
@@ -448,9 +495,12 @@ describe('MediaJobService functional encode + place', () => {
   }, 30_000);
 
   it('non-MP4-legal audio (vorbis) source yields aac output after decideAudioArgs encode', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
-    const { MediaJobService } = require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
-    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { MediaJobService } =
+      require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
+    const { decideAudioArgs } =
+      require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
 
     // Generate a vorbis-audio source in a .mkv container.
     const inputPath = path.join(tmpDir, 'vorbis-source.mkv');
@@ -459,17 +509,27 @@ describe('MediaJobService functional encode + place', () => {
         ffmpegBin,
         [
           '-y',
-          '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10',
-          '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
-          '-c:v', 'libx264',
-          '-c:a', 'libvorbis',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=1:size=64x64:rate=10',
+          '-f',
+          'lavfi',
+          '-i',
+          'sine=frequency=440:duration=1',
+          '-c:v',
+          'libx264',
+          '-c:a',
+          'libvorbis',
           inputPath,
         ],
         { stdio: 'ignore' },
       );
     } catch {
       // libvorbis may not be available in all ffmpeg builds; skip gracefully.
-      console.warn('[test] libvorbis not available in bundled ffmpeg — skipping non-MP4-legal audio functional test');
+      console.warn(
+        '[test] libvorbis not available in bundled ffmpeg — skipping non-MP4-legal audio functional test',
+      );
       return;
     }
 
@@ -501,19 +561,28 @@ describe('MediaJobService functional encode + place', () => {
 
     // Verify the output audio codec is aac.
     const audioCodec = execFileSync(ffprobeBin, [
-      '-v', 'error',
-      '-select_streams', 'a:0',
-      '-show_entries', 'stream=codec_name',
-      '-of', 'default=nokey=1:noprint_wrappers=1',
+      '-v',
+      'error',
+      '-select_streams',
+      'a:0',
+      '-show_entries',
+      'stream=codec_name',
+      '-of',
+      'default=nokey=1:noprint_wrappers=1',
       placed.outputPath,
-    ]).toString().trim();
+    ])
+      .toString()
+      .trim();
     expect(audioCodec).toBe('aac');
   }, 60_000);
 
   it('video-only source encoded with -an arg produces output with no audio stream', async () => {
-    const { FfmpegRunner } = require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
-    const { MediaJobService } = require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
-    const { decideAudioArgs } = require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const { MediaJobService } =
+      require('../src/media/MediaJobService') as typeof import('../src/media/MediaJobService');
+    const { decideAudioArgs } =
+      require('../src/media/audioArgs') as typeof import('../src/media/audioArgs');
 
     const inputPath = path.join(tmpDir, 'no-audio-src.mp4');
     generateTestVideo(inputPath, 1);
@@ -543,12 +612,191 @@ describe('MediaJobService functional encode + place', () => {
 
     // Verify the output has no audio stream (empty stdout from ffprobe).
     const audioCodec = execFileSync(ffprobeBin, [
-      '-v', 'error',
-      '-select_streams', 'a:0',
-      '-show_entries', 'stream=codec_name',
-      '-of', 'default=nokey=1:noprint_wrappers=1',
+      '-v',
+      'error',
+      '-select_streams',
+      'a:0',
+      '-show_entries',
+      'stream=codec_name',
+      '-of',
+      'default=nokey=1:noprint_wrappers=1',
       placed.outputPath,
-    ]).toString().trim();
+    ])
+      .toString()
+      .trim();
     expect(audioCodec).toBe(''); // empty = no audio stream
   }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// FfmpegRunner inactivity-timeout unit tests (INV-038 / TASK-155 / TASK-156)
+//
+// These tests use jest fake timers and controllable fake children (EventEmitters
+// with stdout/stderr). They do NOT spawn a real ffmpeg binary.
+// ---------------------------------------------------------------------------
+
+describe('FfmpegRunner inactivity timeout (INV-038 / TASK-155)', () => {
+  // Registry of one-shot factory functions, each consumed by the next spawn call
+  // that matches the '/fake/stall-ffmpeg' sentinel.
+  let fakeChildFactories: Array<() => any> = [];
+  let killCalls: Array<{ cmd: string; args: string[] }> = [];
+  let spawnSpy: jest.SpyInstance;
+
+  const { EventEmitter: EE } = require('events') as typeof import('events');
+
+  beforeEach(() => {
+    fakeChildFactories = [];
+    killCalls = [];
+    jest.useFakeTimers();
+
+    // Spy on the child_process module's spawn. jest.spyOn wraps the existing
+    // function (which comes from the jest.mock factory at the top of the file)
+    // and gives us .mockImplementation. We add handling for the stall-ffmpeg
+    // sentinel and taskkill; all other cmd values fall through to the original mock.
+    const cpModule = require('child_process');
+    const origSpawn = cpModule.spawn.bind(cpModule);
+    spawnSpy = jest.spyOn(cpModule, 'spawn').mockImplementation((...spawnArgs: unknown[]) => {
+      const [cmd, args, opts] = spawnArgs as [string, string[], object?];
+      if (cmd === '/fake/stall-ffmpeg') {
+        const factory = fakeChildFactories.shift();
+        if (factory) {
+          return factory();
+        }
+        const proc = new EE() as any;
+        proc.stdout = new EE();
+        proc.stderr = new EE();
+        proc.pid = 88888;
+        setImmediate(() => proc.emit('close', 0));
+        return proc;
+      }
+      if (cmd === 'taskkill') {
+        killCalls.push({ cmd, args: args ?? [] });
+        const proc = new EE() as any;
+        proc.stdout = new EE();
+        proc.stderr = new EE();
+        proc.unref = () => {};
+        setImmediate(() => proc.emit('close', 0));
+        return proc;
+      }
+      return origSpawn(cmd, args, opts);
+    });
+  });
+
+  afterEach(() => {
+    spawnSpy.mockRestore();
+    jest.useRealTimers();
+  });
+
+  it('rejects with FfmpegStallError after inactivityTimeoutMs of no out_time_ms advance', async () => {
+    const { FfmpegRunner, FfmpegStallError } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/stall-ffmpeg', '/fake/ffprobe');
+
+    // Fake child: emits one out_time_ms tick then goes silent.
+    // When the watchdog kills it (via taskkill on Windows), we detect the
+    // taskkill call and emit 'close' to simulate the child dying.
+    fakeChildFactories.push(() => {
+      const proc = new EE() as any;
+      proc.stdout = new EE();
+      proc.stderr = new EE();
+      proc.pid = 77777;
+
+      // Emit initial progress immediately.
+      setImmediate(() => {
+        proc.stdout.emit('data', Buffer.from('out_time_ms=1000000\nprogress=continue\n'));
+      });
+
+      // Once taskkill fires (tracked via killCalls), close the proc.
+      // We check by polling — under fake timers we need this to run.
+      let closed = false;
+      const closeWhenKilled = () => {
+        if (killCalls.length > 0 && !closed) {
+          closed = true;
+          proc.emit('close', 1);
+        }
+      };
+
+      // Store the closer so we can call it from the test after advancing timers.
+      (proc as any)._closeWhenKilled = closeWhenKilled;
+      return proc;
+    });
+
+    const inactivityTimeoutMs = 5_000;
+    let capturedProc: any;
+    const origFactory = fakeChildFactories[0];
+    fakeChildFactories[0] = () => {
+      capturedProc = origFactory();
+      return capturedProc;
+    };
+
+    const runPromise = runner.run({
+      input: '/videos/source.mp4',
+      output: '/tmp/out.mp4',
+      args: ['-c', 'copy'],
+      inactivityTimeoutMs,
+    });
+
+    // Let the setImmediate (initial progress event) fire.
+    await Promise.resolve();
+    jest.advanceTimersByTime(1);
+    await Promise.resolve();
+
+    // Advance past the inactivity window — watchdog fires and calls kill().
+    jest.advanceTimersByTime(inactivityTimeoutMs + 100);
+    await Promise.resolve();
+
+    // The kill path has now run — close the fake proc manually.
+    if (capturedProc?._closeWhenKilled) {
+      capturedProc._closeWhenKilled();
+    } else if (killCalls.length > 0) {
+      // Fallback if proc wasn't captured (e.g. factory index shifted).
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const err = await runPromise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FfmpegStallError);
+    expect((err as any).idleMs).toBe(inactivityTimeoutMs);
+  });
+
+  it('does NOT reject early when out_time_ms keeps advancing past the inactivity window', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/stall-ffmpeg', '/fake/ffprobe');
+
+    // Fake child: emits three advancing out_time_ms ticks, then closes 0.
+    fakeChildFactories.push(() => {
+      const proc = new EE() as any;
+      proc.stdout = new EE();
+      proc.stderr = new EE();
+      proc.pid = 66666;
+
+      setImmediate(() => {
+        proc.stdout.emit('data', Buffer.from('out_time_ms=1000000\nprogress=continue\n'));
+        proc.stdout.emit('data', Buffer.from('out_time_ms=2000000\nprogress=continue\n'));
+        proc.stdout.emit('data', Buffer.from('out_time_ms=3000000\nprogress=continue\n'));
+        proc.emit('close', 0);
+      });
+
+      return proc;
+    });
+
+    const inactivityTimeoutMs = 5_000;
+    const runPromise = runner.run({
+      input: '/videos/source.mp4',
+      output: '/tmp/out.mp4',
+      args: ['-c', 'copy'],
+      inactivityTimeoutMs,
+    });
+
+    // Fire all timers — child emits progress and closes normally.
+    jest.runAllTimers();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Should resolve (not stall-rejected).
+    await expect(runPromise).resolves.toBeUndefined();
+  });
 });

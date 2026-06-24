@@ -552,9 +552,47 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
     expect(store.items[0].id).toBe('p1');
   });
 
-  // ---------- unseen badge while collapsed (INV-037) ----------
+  // ---------- count bubbles + unseen pulse while collapsed (INV-037) ----------
 
-  it('badge appears on the "done" count span (and only that span) when completedCount changes while collapsed', async () => {
+  it('every count renders as a bubble: grey "--zero" when 0, red (no --zero) when > 0', async () => {
+    const { rootStore, srcFile } = await makeStoreForComponent();
+    const store = await renderDrawer(rootStore);
+
+    const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
+
+    // One completed item → done = 1 (active/red); the other three counts stay 0
+    // (grey/dormant).
+    await act(async () => {
+      runInAction(() => {
+        const item = new QueueItem('bubble0', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
+        item.status = 'completed';
+        item.output = { id: 'out', absolutePath: '/photos/out.mp4', name: 'out.mp4' } as any;
+        store.items.push(item);
+      });
+      await Promise.resolve();
+    });
+
+    // All four counts always render a bubble (the bubble replaces the number).
+    expect(container.querySelectorAll('.media-queue__bubble')).toHaveLength(4);
+
+    const countSpans = Array.from(container.querySelectorAll('.media-queue__count'));
+    const doneSpan = countSpans.find((s) => s.textContent?.includes('done'))!;
+    const doneBubble = doneSpan.querySelector('.media-queue__bubble')!;
+    // done = 1 → active red bubble, NOT --zero, shows the number.
+    expect(doneBubble.classList.contains('media-queue__bubble--zero')).toBe(false);
+    expect(doneBubble.textContent).toBe('1');
+
+    // The other three counts are 0 → grey dormant --zero bubbles.
+    countSpans
+      .filter((s) => !s.textContent?.includes('done'))
+      .forEach((span) => {
+        const bubble = span.querySelector('.media-queue__bubble')!;
+        expect(bubble.classList.contains('media-queue__bubble--zero')).toBe(true);
+        expect(bubble.textContent).toBe('0');
+      });
+  });
+
+  it('the unseen pulse (--unseen) appears on the "done" bubble (and only that one) when completedCount changes while collapsed', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
@@ -572,30 +610,30 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
       await Promise.resolve();
     });
 
-    // Exactly one badge must be present (on "done").
-    const allBadges = container.querySelectorAll('.media-queue__badge');
-    expect(allBadges).toHaveLength(1);
+    // Exactly one bubble pulses (the "done" one).
+    const allUnseen = container.querySelectorAll('.media-queue__bubble--unseen');
+    expect(allUnseen).toHaveLength(1);
 
-    // The badge must be a descendant of the "done" count span.
+    // The pulsing bubble must be a descendant of the "done" count span.
     const countSpans = Array.from(container.querySelectorAll('.media-queue__count'));
     const doneSpan = countSpans.find((s) => s.textContent?.includes('done'));
     expect(doneSpan).toBeTruthy();
-    expect(doneSpan!.querySelector('.media-queue__badge')).toBeTruthy();
+    expect(doneSpan!.querySelector('.media-queue__bubble--unseen')).toBeTruthy();
 
-    // The other count spans must NOT have a badge.
+    // The other count spans must NOT pulse.
     const otherSpans = countSpans.filter((s) => !s.textContent?.includes('done'));
     otherSpans.forEach((span) => {
-      expect(span.querySelector('.media-queue__badge')).toBeNull();
+      expect(span.querySelector('.media-queue__bubble--unseen')).toBeNull();
     });
   });
 
-  it('no badges render while the drawer is open', async () => {
+  it('no bubble pulses (--unseen) while the drawer is open', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
     const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
 
-    // Open the drawer and add a completed item — badge must NOT appear because
+    // Open the drawer and add a completed item — no pulse must appear because
     // unseenCounts are kept in sync while open.
     await act(async () => {
       runInAction(() => {
@@ -610,16 +648,18 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
       await Promise.resolve();
     });
 
-    expect(container.querySelectorAll('.media-queue__badge')).toHaveLength(0);
+    // Bubbles still render (they replace the numbers); none of them pulse.
+    expect(container.querySelectorAll('.media-queue__bubble')).toHaveLength(4);
+    expect(container.querySelectorAll('.media-queue__bubble--unseen')).toHaveLength(0);
   });
 
-  it('badges disappear after opening the drawer (toggle button calls markSeen)', async () => {
+  it('the unseen pulse clears after opening the drawer (toggle button calls markSeen)', async () => {
     const { rootStore, srcFile } = await makeStoreForComponent();
     const store = await renderDrawer(rootStore);
 
     const { QueueItem } = await import('../src/frontend/stores/MediaQueueStore');
 
-    // Start collapsed, cause a badge.
+    // Start collapsed, cause a pulse.
     await act(async () => {
       runInAction(() => {
         const item = new QueueItem('badge3', srcFile, 'reencode-x264', undefined, 'Re-encode', Date.now());
@@ -630,10 +670,10 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
       await Promise.resolve();
     });
 
-    // Confirm badge is present before opening.
-    expect(container.querySelectorAll('.media-queue__badge').length).toBeGreaterThan(0);
+    // Confirm the pulse is present before opening.
+    expect(container.querySelectorAll('.media-queue__bubble--unseen').length).toBeGreaterThan(0);
 
-    // Open via the toggle button — the handler calls markSeen(), clearing badges.
+    // Open via the toggle button — the handler calls markSeen(), clearing the pulse.
     const toggleBtn = container.querySelector('.media-queue__toggle') as HTMLButtonElement | null;
     expect(toggleBtn).toBeTruthy();
     await act(async () => {
@@ -641,7 +681,7 @@ describe('MediaQueueDrawer (INV-035 / TASK-144)', () => {
       await Promise.resolve();
     });
 
-    expect(container.querySelectorAll('.media-queue__badge')).toHaveLength(0);
+    expect(container.querySelectorAll('.media-queue__bubble--unseen')).toHaveLength(0);
   });
 
   // ---------- Retry re-enqueues ----------

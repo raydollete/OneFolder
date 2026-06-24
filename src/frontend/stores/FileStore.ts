@@ -1547,11 +1547,21 @@ class FileStore {
     console.info('[media-job] finalize start', { jobId, tempPath, finalPath });
 
     // A. Tag the temp file (EXIF/XMP) once. Throws loud on failure (caller shows a modal).
+    //    Note: tagTempFile is called BEFORE suppressIngest, so a tag failure here exits
+    //    without having suppressed anything — the finally's unsuppressIngest is a no-op
+    //    against a path that was never suppressed (LocationStore.unsuppressIngest is
+    //    idempotent). No suppression leak on tag failure.
     await this.tagTempFile(source, tempPath);
     console.info('[media-job] tagged temp file', { tempPath, tags: source.tags.size });
 
     // Suppress the watcher for finalPath across the whole place+ingest window so it never creates a
     // competing (untagged) row for the same file. Released in finally once our row exists.
+    //
+    // Containment note (INV-038 / TASK-155): if commitMediaJob or ingestFile hangs, the
+    // renderer settle guard (TASK-154) still advances the queue for other items; and the
+    // main-process FfmpegRunner inactivity backstop (TASK-155) prevents the encode from
+    // hanging before we even reach this point. A per-step timeout on exiftool/move is
+    // deferred to a future hardening pass (noted in INV-038 latent defects).
     locationStore.suppressIngest(finalPath);
     try {
       // B. Place temp → final (single move on the main side).

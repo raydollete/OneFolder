@@ -170,7 +170,13 @@ export class MediaJobService {
     job.onCancelled();
   }
 
-  /** Cancel every live job — called from app `before-quit`. */
+  /**
+   * Cancel every live job — called from app `before-quit`.
+   *
+   * Each `cancel()` call aborts the ffmpeg child (if encoding), which triggers
+   * `FfmpegRunner`'s `onAbort` → `kill()`.  The inactivity watchdog inside
+   * `FfmpegRunner.run()` is cleared when the child closes, so no timer leaks at quit.
+   */
   killAll(): void {
     for (const jobId of [...this.jobs.keys()]) {
       this.cancel(jobId);
@@ -205,6 +211,8 @@ export class MediaJobService {
         args: jobArgs,
         preInputArgs,
         signal: job.abort.signal,
+        // inactivityTimeoutMs uses the default (60s from DEFAULT_INACTIVITY_TIMEOUT_MS in
+        // FfmpegRunner) — single source of truth, no hardcoded 60000 here (INV-038 / TASK-155).
         onProgress: ({ outTimeSec }) => {
           const percent =
             totalSec !== undefined && totalSec > 0
@@ -234,6 +242,9 @@ export class MediaJobService {
       if (err instanceof FfmpegAbortError) {
         callbacks.onCancelled();
       } else {
+        // FfmpegStallError (inactivity backstop, INV-038 / TASK-155) flows here alongside any
+        // other non-abort failure. The existing fse.remove(job.tempPath) above already cleans
+        // up the temp file, and onError surfaces the message to the renderer as a failed row.
         callbacks.onError(err instanceof Error ? err : new Error(String(err)));
       }
     }

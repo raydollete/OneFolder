@@ -36,6 +36,15 @@ export interface FfmpegRunOptions {
   onProgress?: (tick: FfmpegTick) => void;
   /** Abort to cancel: the child is killed and the run promise rejects with FfmpegAbortError. */
   signal?: AbortSignal;
+  /**
+   * Kill the child and reject with FfmpegStallError if no `out_time_ms` advance is seen for
+   * this many milliseconds. Resets on every genuine `out_time_ms` increase. Default: 60000.
+   *
+   * Mirror of the renderer-side STALL_TIMEOUT_MS in MediaQueueStore (TASK-154). This main-
+   * process backstop fires independently of the renderer watchdog so a wedged ffmpeg child
+   * cannot hang the pipeline even if the renderer-side guard is bypassed (INV-038 / TASK-155).
+   */
+  inactivityTimeoutMs?: number;
 }
 
 /**
@@ -61,8 +70,26 @@ export class FfmpegAbortError extends Error {
   }
 }
 
+/**
+ * Thrown by `run()` when the child produced no `out_time_ms` advance for the inactivity
+ * window (distinct from a real failure or a user-initiated abort).
+ *
+ * The renderer-side stall watchdog (TASK-154) is the primary guard; this error is the
+ * main-process backstop so a wedged encode cannot hang `MediaJobService._encode` →
+ * `START_MEDIA_JOB` → the renderer `await` even if the renderer watchdog is bypassed.
+ */
+export class FfmpegStallError extends Error {
+  constructor(public readonly idleMs: number) {
+    super(`FFMPEG_STALLED: no progress for ${idleMs}ms`);
+    this.name = 'FfmpegStallError';
+  }
+}
+
 /** Max 5 progress emissions/sec. */
 const PROGRESS_THROTTLE_MS = 200;
+
+/** Default inactivity timeout: kill and reject if no out_time_ms advance for 60s (INV-038). */
+const DEFAULT_INACTIVITY_TIMEOUT_MS = 60_000;
 
 export class FfmpegRunner {
   constructor(
@@ -71,8 +98,15 @@ export class FfmpegRunner {
   ) {}
 
   /**
-   * Run one ffmpeg invocation. Resolves on exit 0; rejects with FfmpegAbortError if the signal
-   * aborts, or a stderr-tail Error on spawn failure / non-zero exit.
+   * Run one ffmpeg invocation. Resolves on exit 0; rejects with:
+   *   - `FfmpegStallError` if no `out_time_ms` advance is seen for `inactivityTimeoutMs` (default 60s).
+   *   - `FfmpegAbortError` if the signal aborts.
+   *   - A stderr-tail `Error` on spawn failure or non-zero exit.
+   *
+   * The inactivity watchdog resets on every genuine `out_time_ms` increase and is armed
+   * immediately after spawn so a child that never emits a single tick is also caught.
+   * `progress=continue` lines that carry no new `out_time_ms` do NOT reset the watchdog
+   * (a child spamming keep-alive lines without encoding is still detected).
    */
   run(opts: FfmpegRunOptions): Promise<void> {
     return new Promise<void>((resolve, reject) => {
@@ -104,7 +138,39 @@ export class FfmpegRunner {
 
       const onAbort = () => this.kill(child);
       opts.signal?.addEventListener('abort', onAbort, { once: true });
-      const cleanup = () => opts.signal?.removeEventListener('abort', onAbort);
+
+      // --- Inactivity watchdog ---
+      const inactivityMs = opts.inactivityTimeoutMs ?? DEFAULT_INACTIVITY_TIMEOUT_MS;
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      let stalled = false;
+      let lastActivityOutTimeSec = -1;
+
+      const armWatchdog = () => {
+        if (stallTimer !== null) {
+          clearTimeout(stallTimer);
+        }
+        stallTimer = setTimeout(() => {
+          stallTimer = null;
+          stalled = true;
+          this.kill(child);
+        }, inactivityMs);
+      };
+
+      const clearWatchdog = () => {
+        if (stallTimer !== null) {
+          clearTimeout(stallTimer);
+          stallTimer = null;
+        }
+      };
+
+      // Arm immediately after spawn: catches a child that never emits a single out_time_ms tick.
+      armWatchdog();
+
+      const cleanup = () => {
+        opts.signal?.removeEventListener('abort', onAbort);
+        // Clear the inactivity watchdog so it never fires after the child exits.
+        clearWatchdog();
+      };
 
       // --- progress parsing ---
       let stdoutBuf = '';
@@ -122,6 +188,12 @@ export class FfmpegRunner {
             const us = parseInt(trimmed.slice('out_time_ms='.length), 10);
             if (!isNaN(us)) {
               lastOutTimeSec = us / 1_000_000;
+              // Reset the inactivity watchdog on genuine forward progress only.
+              // A stuck or non-monotonic timestamp does not re-arm (uses > not >=).
+              if (lastOutTimeSec > lastActivityOutTimeSec) {
+                lastActivityOutTimeSec = lastOutTimeSec;
+                armWatchdog();
+              }
             }
           } else if (trimmed === 'progress=continue' || trimmed === 'progress=end') {
             const now = Date.now();
@@ -147,7 +219,11 @@ export class FfmpegRunner {
 
       child.on('close', (code) => {
         cleanup();
-        if (opts.signal?.aborted) {
+        // Check stall FIRST — a stall kill looks like a normal child exit (code null / non-zero),
+        // so we must branch on the stalled flag before checking signal?.aborted or code === 0.
+        if (stalled) {
+          reject(new FfmpegStallError(inactivityMs));
+        } else if (opts.signal?.aborted) {
           reject(new FfmpegAbortError());
         } else if (code === 0) {
           resolve();

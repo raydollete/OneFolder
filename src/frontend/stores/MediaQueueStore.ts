@@ -28,6 +28,21 @@ export interface MediaQueueCounts {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * If a running job's `outTimeSec` (the primary liveness signal from ffmpeg)
+ * does not advance for this many milliseconds, the job is auto-failed and the
+ * queue drains the next pending job (INV-038 / TASK-154).
+ *
+ * The integer `percent` is used as a fallback liveness signal when a progress
+ * message lacks `outTimeSec` (e.g. older/edge message shapes), so a healthy job
+ * without that field is also never false-failed.
+ */
+const STALL_TIMEOUT_MS = 60_000;
+
+// ---------------------------------------------------------------------------
 // QueueItem
 // ---------------------------------------------------------------------------
 
@@ -266,7 +281,9 @@ class MediaQueueStore {
    *   - never touches the viewer (focusViewer: false)
    *   - on MEDIA_JOB_CANCELLED splices the row (the user already cancelled it)
    *   - on any other error marks the row as failed with the error message
-   *   - always calls processNext() in finally to drain the next pending job
+   *   - uses a single idempotent `settle()` helper for ALL terminal paths so the
+   *     progress subscription and stall watchdog are always torn down exactly once
+   *     and `processNext()` is called exactly once (INV-038 / TASK-154).
    *
    * All state mutations that occur after the first await are wrapped in
    * runInAction as required by MobX strict mode.
@@ -288,10 +305,96 @@ class MediaQueueStore {
           item.percent = Math.round(msg.percent);
         }
       });
+
+      // Liveness tracking for the stall watchdog (outside runInAction — no observable mutation).
+      // Primary signal: outTimeSec advance (ticks far more often than integer percent, so a
+      // long encode where one 1% step exceeds 60s is never false-failed).
+      if (msg.outTimeSec !== undefined && msg.outTimeSec > lastOutTimeSec) {
+        lastOutTimeSec = msg.outTimeSec;
+        armStallTimer();
+      } else if (msg.outTimeSec === undefined && msg.percent !== undefined) {
+        // Fallback: arm on integer percent change when outTimeSec is absent (older message shapes).
+        const rounded = Math.round(msg.percent);
+        if (rounded !== lastPercentForWatchdog) {
+          lastPercentForWatchdog = rounded;
+          armStallTimer();
+        }
+      }
     });
 
+    // --- Stall-watchdog state (imperative, non-observable — timer handles, not UI state) ---
+
+    // Latch that prevents any terminal path from firing more than once.
+    // All terminal outcomes (success, failure, cancel, stall) route through settle(),
+    // which sets this to true on first call and no-ops on all subsequent calls.
+    let settled = false;
+
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Primary liveness signal: the last outTimeSec value seen from a real progress message.
+    // Reset to -1 so any non-negative value counts as forward progress.
+    let lastOutTimeSec = -1;
+
+    // Fallback liveness signal used only when outTimeSec is absent from a progress message.
+    let lastPercentForWatchdog: number | null = null;
+
+    /**
+     * (Re)arm the stall watchdog. Called on every genuine forward-progress signal.
+     * If no further progress arrives within STALL_TIMEOUT_MS, the item is auto-failed.
+     */
+    const armStallTimer = () => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+      }
+      stallTimer = setTimeout(() => {
+        stallTimer = null;
+        // Kill the wedged child best-effort (main side will also time out independently).
+        if (item.jobId !== null) {
+          RendererMessenger.cancelMediaJob(item.jobId);
+        }
+        const frozenAt = item.percent !== null ? ` (stuck at ${item.percent}%)` : '';
+        settle(() => {
+          item.status = 'failed';
+          item.errorMessage = `Stalled: no progress for 60s${frozenAt}.`;
+        });
+      }, STALL_TIMEOUT_MS);
+    };
+
+    /**
+     * Idempotent settle helper. All terminal paths (success, failure, cancel, stall) call this.
+     *
+     * On first call:
+     *   1. Sets the settled latch (all subsequent calls are no-ops).
+     *   2. Tears down the MEDIA_JOB_PROGRESS subscription (fixes the listener-leak in INV-038 #7).
+     *   3. Clears the stall watchdog timer.
+     *   4. Runs `apply()` inside runInAction to apply the terminal mutation.
+     *   5. Calls processNext() exactly once to drain the next pending job.
+     *
+     * The idempotency guarantee means: cancel-then-rejection, stall-then-late-completion,
+     * and completion-then-stall-timer (already cleared by settle) are all safe no-ops after
+     * the first settle fires.
+     */
+    const settle = (apply: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribe();
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+      runInAction(apply);
+      this.processNext();
+    };
+
+    // Arm the stall watchdog immediately when the item enters `running`.
+    // This covers the case where the synthetic percent:0 first event has not yet
+    // been processed — the clock starts as soon as the job is dispatched.
+    armStallTimer();
+
     // The actual async work is kicked off but NOT awaited in this synchronous
-    // @action body.  All post-await mutations are wrapped in runInAction.
+    // @action body.  All post-await mutations are wrapped via settle/runInAction.
     (async () => {
       try {
         // toJS() converts the @observable clip into a plain object — a MobX
@@ -304,9 +407,6 @@ class MediaQueueStore {
           toJS(item.clip),
         );
 
-        // Tear down the progress subscription — ffmpeg is done.
-        unsubscribe();
-
         // Commit the output into the library.  focusViewer: false means the
         // viewer/selection are never touched by this call (TASK-139).
         const output = await this.rootStore.fileStore.finalizeEncodedOutput(
@@ -315,20 +415,18 @@ class MediaQueueStore {
           { focusViewer: false },
         );
 
-        runInAction(() => {
+        settle(() => {
           item.output = output;
           item.status = 'completed';
         });
       } catch (err: unknown) {
-        // Tear down the subscription on any failure too.
-        unsubscribe();
-
         const message = err instanceof Error ? err.message : String(err);
 
         if (message === 'MEDIA_JOB_CANCELLED') {
-          // User-initiated cancel: splice the row.  The Cancel action already
-          // sent cancelMediaJob to main; this rejection is the confirmation.
-          runInAction(() => {
+          // User-initiated cancel: the row was already optimistically spliced by cancel()
+          // (INV-038 / TASK-154). settle() here is a safe no-op if the row is already gone —
+          // the splice in apply() is guarded by indexOf, and processNext() is idempotent.
+          settle(() => {
             const idx = this.items.indexOf(item);
             if (idx !== -1) {
               this.items.splice(idx, 1);
@@ -336,14 +434,16 @@ class MediaQueueStore {
           });
         } else {
           // Hard ffmpeg failure: mark the row as failed with the error detail.
-          runInAction(() => {
+          settle(() => {
             item.status = 'failed';
             item.errorMessage = message;
           });
         }
       } finally {
-        // Always drain the next pending job, whether success, failure, or cancel.
-        this.processNext();
+        // Defensive no-op settle: if an unforeseen exception escaped every try/catch
+        // branch above (e.g. a thrown non-Error), this guarantees the slot is still
+        // freed and processNext() still runs. The idempotency latch makes this free.
+        settle(() => {});
       }
     })();
   }
@@ -352,8 +452,24 @@ class MediaQueueStore {
    * Cancel a queued or running job.
    *
    * Pending: the row is spliced immediately (ffmpeg never started).
-   * Running: sends a cancel IPC to main; the in-flight `runItem` then rejects
-   *   with `MEDIA_JOB_CANCELLED` and removes the row from its catch block.
+   *
+   * Running: sends a cancel IPC to main to kill the child, then immediately
+   *   splices the row and advances the queue — without waiting for the
+   *   `MEDIA_JOB_CANCELLED` round-trip (INV-038 / TASK-154).
+   *
+   *   The in-flight `runItem` async body will still receive the rejection (or a
+   *   natural completion) eventually, but by then the item is already gone from
+   *   `this.items`, so its `settle()` call's splice is a harmless indexOf no-op,
+   *   and `processNext()` is idempotent (it only starts a job if none is running).
+   *
+   *   This makes Cancel work even during the finalize phase (Blast Radius #2): even
+   *   if `cancelMediaJob` is a main-side no-op once ffmpeg has already finished, the
+   *   row is removed and the queue advances locally; the orphaned `finalizeEncodedOutput`
+   *   completes or fails harmlessly against the no-longer-listed item.
+   *
+   *   When `item.jobId` is null (cancel pressed before the first progress event), the
+   *   row is still spliced locally; the kill is best-effort once jobId is known — the
+   *   main-side FfmpegRunner inactivity backstop (TASK-155) handles the orphaned child.
    */
   @action.bound cancel(itemId: string): void {
     const item = this.items.find((it) => it.id === itemId);
@@ -366,9 +482,22 @@ class MediaQueueStore {
       if (idx !== -1) {
         this.items.splice(idx, 1);
       }
-    } else if (item.status === 'running' && item.jobId !== null) {
-      RendererMessenger.cancelMediaJob(item.jobId);
-      // Row removal is handled in runItem's catch block when the rejection arrives.
+    } else if (item.status === 'running') {
+      // Fire the kill IPC best-effort (jobId may be null if cancel is pressed before
+      // the first progress event; the main-side backstop handles that case).
+      if (item.jobId !== null) {
+        RendererMessenger.cancelMediaJob(item.jobId);
+      }
+
+      // Optimistically splice the row and advance the queue immediately.
+      // The in-flight runItem settle() will fire later but is a harmless no-op:
+      // - Its splice finds indexOf === -1 (item already removed) → skipped.
+      // - Its processNext() is idempotent (early-returns if a job is already running).
+      const idx = this.items.indexOf(item);
+      if (idx !== -1) {
+        this.items.splice(idx, 1);
+      }
+      this.processNext();
     }
   }
 
