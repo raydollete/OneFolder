@@ -2,6 +2,15 @@
 
 OneFolder is a desktop photo management application built with Electron, React, and TypeScript. It follows a "Your files, your folder, forever" philosophy — photos remain as ordinary files with organization data stored in standard EXIF/XMP metadata.
 
+# Workflow Routing (migration in progress)
+
+This project is migrating from a homegrown investigation/task pipeline to **OpenSpec** (spec-driven development). Until the migration completes:
+
+- **All NEW bugs and features go through OpenSpec.** Use `/opsx:explore` to investigate/clarify, then `/opsx:propose` to create the change (proposal + design + tasks + delta specs), `/opsx:apply` to implement, and `/opsx:sync` → `/opsx:archive` to merge specs and finalize. `openspec/specs/**` is the living source of truth; in-flight changes live in `openspec/changes/`. `/opsx:explore` is the new "investigate first" step (it replaces the `task-writer` root-cause phase for new work).
+- **The `docs/TODO/` pipeline is FROZEN for new work.** Its agents (`task-writer`, `task-runner`, `task-closer`) are used **only** to finish items already in `docs/TODO/backlog/`, `pending_qa/`, or `completed/`. Do not create new investigations/tasks there. (`bomb-squad` remains available for ad-hoc root-cause analysis.)
+- When `docs/TODO/backlog/` and `docs/TODO/pending_qa/` are empty, the old pipeline is retired and OpenSpec becomes the sole workflow.
+- Carry the manual-QA evidence gate forward: any OpenSpec task needing Windows/GUI verification is marked `REQUIRES MANUAL EXECUTION` and requires concrete evidence before it is considered done (see `docs/TODO/QA-DISCIPLINE.md`).
+
 # Architecture
 
 - **Electron main process** (`src/main.ts`) — Window management, native APIs, IPC handlers
@@ -58,4 +67,4 @@ yarn package:headless   # build both + produce dist-headless/ SEA binary
 
 Project documentation lives in `docs/` — read relevant docs before making changes to understand design decisions and system behavior.
 
-Task tracking uses `docs/TODO/` with investigations and tasks managed by the agent workflow.
+Task tracking for NEW work uses **OpenSpec** (`openspec/`, `/opsx:*` commands) — see "Workflow Routing" above. The legacy `docs/TODO/` investigation/task pipeline is frozen to in-flight items only.
