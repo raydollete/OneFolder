@@ -1,0 +1,42 @@
+schema: spec-driven
+
+# Project context — shown to the AI when creating artifacts.
+context: |
+  OneFolder is a desktop photo-management app. Philosophy: "Your files, your
+  folder, forever" — photos stay as ordinary files; organization data lives in
+  standard EXIF/XMP metadata.
+
+  Stack: Electron 27 (pinned 41.7.2 runtime; Electron 42 blocked by better-sqlite3
+  V8 incompatibility), React 18, MobX 6, TypeScript 4.9 (strict), Dexie 3,
+  Chokidar, ExifTool, Sharp, TensorFlow.js, Rust→WASM (masonry, EXR). Build:
+  Webpack. Package manager: Yarn (via corepack). This fork ships portable-only.
+
+  Architecture: Electron main (src/main.ts) | Library abstraction
+  (src/api/library.ts, common/library-registry.ts) | React renderer
+  (src/renderer.tsx, MobX) | IPC (src/ipc/) | Backend (src/backend/, Dexie) |
+  API DTOs (src/api/) | Frontend (src/frontend/) | Common (common/) | Widgets
+  (widgets/) | WASM (wasm/).
+
+  Hard conventions:
+  - TypeScript strict mode; MobX observables + @observer for React components.
+  - DTOs (FileDTO, LocationDTO, TagDTO) define all API contracts.
+  - Web Workers for heavy work (file watching, thumbnails). SCSS for styles.
+  - PLATFORM SEAM: frontend code MUST import filesystem/path/shell/messenger/ExifIO
+    from src/frontend/platform — never directly from fs-extra, electron, node path,
+    or common/ExifIO. Violating this breaks the web bundle at compile time.
+  - Renderer paths use forward slashes; never === a main-process path against
+    ClientFile.absolutePath without normalizing separators + case.
+  - Fail loud — prefer errors that STOP over swallowed nulls/silent fallbacks.
+
+  Workflow note: this project is migrating from a homegrown docs/TODO investigation
+  /task pipeline to OpenSpec. All NEW work goes through OpenSpec. docs/TODO is
+  frozen to in-flight items only (see CLAUDE.md routing block).
+
+# Per-artifact rules
+rules:
+  tasks:
+    - Order steps with dependencies first and tests last.
+    - For any step that needs manual GUI/Windows verification, mark it
+      "REQUIRES MANUAL EXECUTION" — only a human may tick it, and promotion to
+      done needs concrete evidence (screenshot, captured log line, or clip).
+    - Reuse existing utilities/patterns from neighboring code before adding new code.
