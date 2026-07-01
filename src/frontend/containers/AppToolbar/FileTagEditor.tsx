@@ -192,8 +192,11 @@ const MatchingTagsList = observer(
       [inputText, tagStore],
     ).get();
 
-    const toggleSelection = useAction((isSelected: boolean, tag: ClientTag) => {
-      const operation = isSelected
+    const toggleSelection = useAction((allHaveTag: boolean, tag: ClientTag) => {
+      // Fill-then-remove: only remove when every selected file already has the tag;
+      // otherwise add it to the whole selection. addTag is idempotent, so files that
+      // already have the tag are left untouched — the partial case fills in the rest.
+      const operation = allHaveTag
         ? (f: ClientFile) => f.removeTag(tag)
         : (f: ClientFile) => f.addTag(tag);
       uiStore.fileSelection.forEach(operation);
@@ -203,7 +206,9 @@ const MatchingTagsList = observer(
     return (
       <Grid ref={ref} id={POPUP_ID} multiselectable>
         {matches.map((tag) => {
-          const selected = counter.get().get(tag) !== undefined;
+          // "selected" means every selected file already has this tag (a partially
+          // applied tag shows unchecked, signalling that entering it will fill in the rest).
+          const selected = (counter.get().get(tag) ?? 0) === uiStore.fileSelection.size;
           return (
             <TagOption
               key={tag.id}
