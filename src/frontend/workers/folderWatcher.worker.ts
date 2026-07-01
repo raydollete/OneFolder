@@ -140,7 +140,19 @@ export class FolderWatcherWorker {
         })
         .on('error', (error) => {
           console.error('Error fired in watcher', directory, error);
-          ctx.postMessage({ type: 'error', value: error });
+          // Serialize the chokidar Error into a plain, structured payload before
+          // posting. Structured-clone preserves a vanilla Error's message but not
+          // chokidar's `code`/`path` extras, so extract them explicitly — the
+          // renderer's receiver types this exact shape.
+          const errnoErr = error as NodeJS.ErrnoException;
+          ctx.postMessage({
+            type: 'error',
+            value: {
+              message: error.message,
+              code: errnoErr.code,
+              path: errnoErr.path,
+            },
+          });
         });
     });
   }

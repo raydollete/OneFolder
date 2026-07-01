@@ -597,6 +597,12 @@ export default class SQLiteBackend implements DataStorage {
 
   async createLocation(location: LocationDTO): Promise<void> {
     console.info('SQLite: Creating location...', location);
+    // Defense in depth: refuse to write a row with an empty/whitespace path even
+    // if a caller bypasses the renderer-side guard. An empty-path row becomes an
+    // unnamed broken-link ghost with no clean way to remove it.
+    if (location.path.trim() === '') {
+      throw new Error(`Refusing to create location ${location.id} with an empty path`);
+    }
     this.#db
       .prepare(
         `

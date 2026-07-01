@@ -82,7 +82,15 @@ class LocationStore {
     }
 
     // Get dirs from backend
-    const dirs = await this.backend.fetchLocations();
+    const dirs = (await this.backend.fetchLocations()).filter((dir) => {
+      // Defensively skip malformed rows with an empty path (from a bad import or
+      // a hand-edited DB): they would otherwise become permanent unnamed ghosts.
+      if (dir.path.trim() === '') {
+        console.warn('Skipping malformed location row with empty path', dir.id);
+        return false;
+      }
+      return true;
+    });
 
     // backwards compatibility
     dirs.sort((a, b) =>
@@ -145,22 +153,20 @@ class LocationStore {
         progressToastKey,
       );
 
-      // TODO: Add a maximum timeout for init: sometimes it's hanging for me. Could also be some of the following steps though
-      // added a retry toast for now, can't figure out the cause, and it's hard to reproduce
-      // FIXME: Toasts should not be abused for error handling. Create some error messaging mechanism.
+      // Initial scans of large/slow locations can legitimately take a while. After a
+      // generous threshold, show a calm progress note — NOT a "something is wrong"
+      // warning, and deliberately with no "Retry?" action (reloading would just
+      // restart the same scan and strictly worsen the wait).
+      const progressNoteKey = `retry-init-${location.id}`;
       const readyTimeout = setTimeout(() => {
         AppToaster.show(
           {
-            message: 'This appears to be taking longer than usual.',
+            message: `Scanning location "${location.name}"… this can take a while for large folders.`,
             timeout: 0,
-            clickAction: {
-              onClick: platform.desktop.reload,
-              label: 'Retry?',
-            },
           },
-          'retry-init',
+          progressNoteKey,
         );
-      }, 20000);
+      }, 60000);
 
       console.groupCollapsed(`Initializing location ${location.name}`);
       const diskFiles = await location.init();
@@ -169,7 +175,7 @@ class LocationStore {
       );
 
       clearTimeout(readyTimeout);
-      AppToaster.dismiss('retry-init');
+      AppToaster.dismiss(progressNoteKey);
 
       if (diskFiles === undefined) {
         AppToaster.show(
@@ -371,6 +377,11 @@ class LocationStore {
   }
 
   @action.bound async create(path: string): Promise<ClientLocation> {
+    // Fail loud: an empty/whitespace path would persist as an unnamed ghost row
+    // that silently becomes a broken link on load. Refuse it at the boundary.
+    if (path.trim() === '') {
+      throw new Error('Cannot create a location with an empty path');
+    }
     const location = new ClientLocation(
       this,
       generateId(),

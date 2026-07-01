@@ -236,8 +236,15 @@ export async function migrateIfNeeded(sqliteDbPath: string): Promise<boolean> {
         VALUES (@id, @path, @dateAdded, @subLocations, @index)
       `);
 
+      let skippedEmptyLocations = 0;
       for (const location of locations) {
         const rawLoc = location as any;
+        // Skip malformed legacy rows with an empty path so a single bad row can't
+        // create a permanent unnamed ghost in the migrated library.
+        if (!location.path || String(location.path).trim() === '') {
+          skippedEmptyLocations++;
+          continue;
+        }
         insertLocation.run({
           id: location.id,
           path: location.path,
@@ -247,6 +254,11 @@ export async function migrateIfNeeded(sqliteDbPath: string): Promise<boolean> {
           ),
           index: rawLoc.index || 0,
         });
+      }
+      if (skippedEmptyLocations > 0) {
+        console.warn(
+          `Migration: skipped ${skippedEmptyLocations} location row(s) with an empty path`,
+        );
       }
 
       // ---- searches ----

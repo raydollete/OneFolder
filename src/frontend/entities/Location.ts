@@ -126,7 +126,11 @@ export class ClientLocation {
   }
 
   get name(): string {
-    return platform.path.basename(this.path);
+    // Never return an empty string: `basename` is '' for filesystem roots
+    // (Windows drive roots like `D:\`, UNC roots, POSIX `/`). Fall back to the
+    // full path, then to a literal placeholder, so every consumer (toasts,
+    // sidebar, dialog titles, console logs) renders a real label.
+    return platform.path.basename(this.path) || this.path || '(unnamed)';
   }
 
   @action async init(): Promise<FileStats[] | undefined> {
@@ -276,7 +280,10 @@ export class ClientLocation {
     worker.onmessage = ({
       data,
     }: {
-      data: { type: 'remove' | 'error'; value: string } | { type: 'add'; value: FileStats };
+      data:
+        | { type: 'remove'; value: string }
+        | { type: 'error'; value: { message: string; code?: string; path?: string } }
+        | { type: 'add'; value: FileStats };
     }) => {
       if (data.type === 'add') {
         const { absolutePath } = data.value;
@@ -296,15 +303,22 @@ export class ClientLocation {
         this.store.hideFile(value);
       } else if (data.type === 'error') {
         const { value } = data;
+        if (!this.isReady) {
+          // Initial-scan errors are noise: chokidar reliably hits system-protected
+          // directories while first traversing a drive root (System Volume
+          // Information, $RECYCLE.BIN, etc.). Log only — do not toast.
+          console.warn('Suppressed initial-scan error from location', this.name, value);
+          return;
+        }
         console.error('Location watch error:', value);
+        const detail = value.path ?? value.message;
         AppToaster.show(
           {
-            message: `An error has occured while ${
-              this.isReady ? 'watching' : 'initializing'
-            } location "${this.name}".`,
+            message: `Could not access "${this.name}": ${value.code ?? ''} ${detail}`.trim(),
             timeout: 0,
           },
-          'location-error',
+          // Per-location key so concurrent errors don't overwrite each other.
+          `location-error-${this.id}`,
         );
       }
     };
@@ -313,6 +327,12 @@ export class ClientLocation {
     this.worker = await new WorkerFactory();
     // Make a list of all files in this directory, which will be returned when all subdirs have been traversed
     const initialFiles = await this.worker.watch(directory, this.extensions);
+
+    // The initial scan is done (the worker resolves on chokidar's 'ready' event);
+    // from here the watcher emits live add/remove/error events. Flip the flag the
+    // error handler uses to distinguish noisy initial-scan errors from real
+    // watch-time errors.
+    this.isReady = true;
 
     // Filter out images from excluded sub-locations
     // TODO: Could also put them in the chokidar ignore property

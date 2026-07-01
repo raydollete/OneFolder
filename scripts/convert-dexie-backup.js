@@ -286,7 +286,14 @@ try {
       });
     }
 
+    let skippedEmptyLocations = 0;
     for (const location of locations) {
+      // Skip malformed rows with an empty path so a single bad legacy row can't
+      // create a permanent unnamed ghost in the converted library.
+      if (!location.path || String(location.path).trim() === '') {
+        skippedEmptyLocations++;
+        continue;
+      }
       insertLocation.run({
         id: location.id,
         path: location.path,
@@ -296,6 +303,9 @@ try {
         ),
         index: location.index || 0,
       });
+    }
+    if (skippedEmptyLocations > 0) {
+      console.warn(`Skipped ${skippedEmptyLocations} location row(s) with an empty path`);
     }
 
     for (const search of searches) {
