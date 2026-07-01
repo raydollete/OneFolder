@@ -461,9 +461,15 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
           // is not reliably reflected to the DOM, so we set it here on the freshly-
           // remounted element before autoplay begins. (INV-027)
           el.muted = uiStore.videoMuted;
+          // Expose this element to the global shortcut dispatcher so Spacebar can
+          // toggle its playback (video-spacebar-toggle-playback).
+          uiStore.setActiveVideoElement(el);
+        } else {
+          // Detached, or not a video — stop advertising a stale/irrelevant element.
+          uiStore.setActiveVideoElement(null);
         }
       },
-      [file.absolutePath, file.extension, mediaReleaseCoordinator, uiStore.videoMuted],
+      [file.absolutePath, file.extension, mediaReleaseCoordinator, uiStore],
     );
     // Ensure unregistration + watchdog teardown on unmount regardless of React's
     // ref-callback order.
@@ -473,8 +479,9 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
         slideUnregisterRef.current = null;
         freezeRecoveryCleanupRef.current?.();
         freezeRecoveryCleanupRef.current = null;
+        uiStore.setActiveVideoElement(null);
       },
-      [],
+      [uiStore],
     );
 
     if (image.tag === 'ready' && 'err' in image.value) {

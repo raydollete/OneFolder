@@ -2,6 +2,7 @@ import { action, computed, makeObservable, observable } from 'mobx';
 
 import { maxNumberOfExternalFilesBeforeWarning } from 'common/config';
 import { clamp, notEmpty } from 'common/core';
+import { isFileExtensionVideo } from 'common/fs';
 import { ID } from '../../api/id';
 import { SearchCriteria } from '../../api/search-criteria';
 import platform from 'src/frontend/platform';
@@ -212,6 +213,13 @@ class UiStore {
   @observable galleryVideoPlaybackMode: GalleryVideoPlaybackMode = 'hover';
   /** Sticky mute state for the slide/preview video player. */
   @observable videoMuted: boolean = false;
+  /**
+   * The <video> element currently shown in slide mode, registered imperatively by
+   * the slide viewer's callback ref. Deliberately NOT observable — it is a DOM
+   * handle used for imperative playback control (Spacebar toggle), not reactive
+   * state, and making it observable would trigger spurious MobX reactions.
+   */
+  private activeVideoElement: HTMLVideoElement | null = null;
 
   @observable isToolbarTagPopoverOpen: boolean = false;
   /** Dialog for removing unlinked files from OneFolder's database */
@@ -325,6 +333,15 @@ class UiStore {
 
   @action.bound setVideoMuted(muted: boolean): void {
     this.videoMuted = muted;
+  }
+
+  /**
+   * Register (or clear, with null) the <video> element currently shown in slide
+   * mode so global shortcuts can control its playback. Not an @action because
+   * activeVideoElement is a plain DOM handle, not observable state.
+   */
+  setActiveVideoElement(el: HTMLVideoElement | null): void {
+    this.activeVideoElement = el;
   }
 
   @action.bound setFirstItem(index: number = 0): void {
@@ -947,13 +964,38 @@ class UiStore {
   }
 
   @action.bound processGlobalShortCuts(e: KeyboardEvent): void {
-    if ((e.target as HTMLElement | null)?.matches('input')) {
+    // Never hijack keys (incl. Spacebar) while a text-entry surface is focused, so
+    // typing a space in the tag editor, search, or rename field inserts a space.
+    if ((e.target as HTMLElement | null)?.matches('input, textarea, [contenteditable="true"]')) {
       return;
     }
     const combo = getKeyCombo(e);
     const matches = (c: string): boolean => {
       return comboMatches(combo, parseKeyCombo(c));
     };
+    // Spacebar toggles playback of the focused slide-mode video, taking precedence
+    // over the `viewSlide` (exit slide mode) binding that also uses Space. Only fires
+    // when a video is actually shown in slide mode and its element is registered, so
+    // images still exit on Space and other contexts are unaffected. Reads the real
+    // `paused` state so the toggle can never drift. (video-spacebar-toggle-playback)
+    if (
+      matches('space') &&
+      this.isSlideMode &&
+      this.activeVideoElement !== null &&
+      this.slideFile !== undefined &&
+      isFileExtensionVideo(this.slideFile.extension)
+    ) {
+      const el = this.activeVideoElement;
+      if (el.paused) {
+        // play() rejects under autoplay policies / if interrupted — that is the
+        // documented browser contract, so swallow only the promise rejection.
+        void el.play().catch(() => undefined);
+      } else {
+        el.pause();
+      }
+      e.preventDefault();
+      return;
+    }
     const { hotkeyMap } = this;
     let isMatch = true;
     // UI
