@@ -1,6 +1,7 @@
 import React, { ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { humanFileSize } from 'common/fmt';
+import { isFileExtensionVideo } from 'common/fs';
 import { RendererMessenger } from '../../ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
@@ -26,6 +27,23 @@ const immediateFolderName = (absolutePath: string): string => {
   const parts = absolutePath.split(/[/\\]+/).filter(Boolean);
   // The last part is the filename; the one before it is the immediate folder.
   return parts.length >= 2 ? parts[parts.length - 2] : '';
+};
+
+/**
+ * Format an ExifTool VideoFrameRate value (e.g. "29.970030" or "30") into a
+ * concise display string like "29.97" or "30". Returns '' for missing/non-numeric
+ * input so nothing is appended.
+ */
+const formatFps = (raw: string | undefined): string => {
+  if (!raw) {
+    return '';
+  }
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n)) {
+    return '';
+  }
+  // Round to 2 decimals, then drop trailing zeros (and a trailing dot).
+  return n.toFixed(2).replace(/\.?0+$/, '');
 };
 
 type ExifField = { label: string; modifiable?: boolean; format?: (val: string) => ReactNode };
@@ -74,11 +92,15 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [viewAllExifTool, setViewAllExifTool] = useState(false);
   const [exifStats, setExifStats] = useState<Record<string, string>>({});
   const [exifAll, setExifAll] = useState<string>('');
+  const [videoFps, setVideoFps] = useState<string>('');
+
+  const dimensions =
+    `${file.width || '?'} x ${file.height || '?'}` + (videoFps ? ` · ${videoFps} fps` : '');
 
   const fileStats: CommonMetadata = {
     name: file.name,
     folder: immediateFolderName(file.absolutePath),
-    dimensions: `${file.width || '?'} x ${file.height || '?'}`,
+    dimensions,
     size: humanFileSize(file.size),
   };
 
@@ -92,6 +114,17 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
         {},
       ),
     );
+
+    // Frame rate is only meaningful for videos; read it from ExifTool's
+    // VideoFrameRate tag and show it next to the dimensions. Absent/non-video
+    // files simply leave it blank.
+    setVideoFps('');
+    if (isFileExtensionVideo(file.extension)) {
+      exifTool
+        .readExifTags(file.absolutePath, ['VideoFrameRate'])
+        .then(([raw]) => setVideoFps(formatFps(raw)))
+        .catch(() => setVideoFps(''));
+    }
 
     exifTool.readAllExifTags(file.absolutePath).then((values) => {
       setExifAll(JSON.stringify(values, null, 2));
