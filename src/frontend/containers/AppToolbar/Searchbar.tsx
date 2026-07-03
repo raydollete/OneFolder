@@ -23,15 +23,19 @@ const Searchbar = observer(() => {
   return (
     <div className="searchbar">
       {isQuickSearch ? <QuickSearchList /> : <CriteriaList />}
-      <Checkbox
-        checked={uiStore.showVideosOnly}
-        onChange={(checked) => {
-          uiStore.setShowVideosOnly(checked);
+      <select
+        className="media-type-filter"
+        aria-label="Media type filter"
+        value={uiStore.mediaTypeFilter}
+        onChange={(e) => {
+          uiStore.setMediaTypeFilter(e.target.value as MediaTypeFilter);
           fileStore.refetch();
         }}
       >
-        Video Only
-      </Checkbox>
+        <option value="all">Show All Media</option>
+        <option value="images">Images Only</option>
+        <option value="video">Video Only</option>
+      </select>
     </div>
   );
 });
@@ -45,7 +49,9 @@ import {
 } from 'src/frontend/entities/SearchCriteria';
 import { ClientTag } from 'src/frontend/entities/Tag';
 
-import { Checkbox, IconButton, IconSet, Row, Tag } from 'widgets';
+import { IconButton, IconSet, Row, Tag } from 'widgets';
+
+import { MediaTypeFilter } from 'common/fs';
 
 import { TagSelector } from 'src/frontend/components/TagSelector';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';

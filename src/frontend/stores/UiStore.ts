@@ -2,7 +2,7 @@ import { action, computed, makeObservable, observable } from 'mobx';
 
 import { maxNumberOfExternalFilesBeforeWarning } from 'common/config';
 import { clamp, notEmpty } from 'common/core';
-import { isFileExtensionVideo } from 'common/fs';
+import { isFileExtensionVideo, MediaTypeFilter } from 'common/fs';
 import { ID } from '../../api/id';
 import { SearchCriteria } from '../../api/search-criteria';
 import platform from 'src/frontend/platform';
@@ -148,7 +148,7 @@ type PersistentPreferenceFields =
   | 'inspectorWidth'
   | 'isRememberSearchEnabled'
   | 'hideMissingFilesInBrowsing'
-  | 'showVideosOnly'
+  | 'mediaTypeFilter'
   // the following are only restored when isRememberSearchEnabled is enabled
   | 'isSlideMode'
   | 'firstItem'
@@ -191,8 +191,10 @@ class UiStore {
    *  All / Untagged / Query / Duplicates / Calendar / List views. The dedicated Missing Files
    *  recovery view is unaffected. */
   @observable hideMissingFilesInBrowsing: boolean = true;
-  /** When true, the gallery is filtered to only show video files (mp4, webm, ogg). Default false. */
-  @observable showVideosOnly: boolean = false;
+  /** Gallery media-type display filter: `'all'` shows everything, `'images'` hides videos,
+   *  `'video'` shows only video files (mp4, webm, ogg). Default `'all'`. Applied as an upstream
+   *  gate in FileStore.updateFromBackend before any ClientFile is constructed. */
+  @observable mediaTypeFilter: MediaTypeFilter = 'all';
   @observable inspectorIsDescriptionVisible: boolean = true;
   @observable inspectorIsPromptVisible: boolean = false;
   @observable inspectorIsParametersVisible: boolean = false;
@@ -449,12 +451,8 @@ class UiStore {
     this.hideMissingFilesInBrowsing = !this.hideMissingFilesInBrowsing;
   }
 
-  @action.bound setShowVideosOnly(value: boolean): void {
-    this.showVideosOnly = value;
-  }
-
-  @action.bound toggleShowVideosOnly(): void {
-    this.showVideosOnly = !this.showVideosOnly;
+  @action.bound setMediaTypeFilter(value: MediaTypeFilter): void {
+    this.mediaTypeFilter = value;
   }
 
   @action.bound toggleInspectorDescriptionVisibility(): void {
@@ -1118,7 +1116,18 @@ class UiStore {
           prefs.isThumbnailResolutionOverlayEnabled ?? false,
         );
         this.hideMissingFilesInBrowsing = Boolean(prefs.hideMissingFilesInBrowsing ?? true);
-        this.showVideosOnly = Boolean(prefs.showVideosOnly ?? false);
+        // Tri-state media-type filter with legacy migration. Strict guard: only accept one of
+        // the three known values; map the legacy `showVideosOnly: true` boolean to 'video';
+        // coerce anything else (missing, null, false, malformed) to 'all' so a bad persisted
+        // value can never reach the gate as undefined.
+        this.mediaTypeFilter =
+          prefs.mediaTypeFilter === 'all' ||
+          prefs.mediaTypeFilter === 'images' ||
+          prefs.mediaTypeFilter === 'video'
+            ? prefs.mediaTypeFilter
+            : prefs.showVideosOnly === true
+            ? 'video'
+            : 'all';
         this.videoMuted = Boolean(prefs.videoMuted ?? false);
         this.inspectorIsDescriptionVisible = Boolean(prefs.inspectorIsDescriptionVisible ?? true);
         this.inspectorIsPromptVisible = Boolean(prefs.inspectorIsPromptVisible ?? true);
@@ -1214,7 +1223,7 @@ class UiStore {
       importMetadataAtReIndexing: this.importMetadataAtReIndexing,
       isThumbnailResolutionOverlayEnabled: this.isThumbnailResolutionOverlayEnabled,
       hideMissingFilesInBrowsing: this.hideMissingFilesInBrowsing,
-      showVideosOnly: this.showVideosOnly,
+      mediaTypeFilter: this.mediaTypeFilter,
       outlinerWidth: this.outlinerWidth,
       inspectorWidth: this.inspectorWidth,
       isRememberSearchEnabled: this.isRememberSearchEnabled,

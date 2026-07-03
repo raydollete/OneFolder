@@ -47,6 +47,24 @@ export function isFileExtensionVideo(fileExtension: string) {
   return fileExtension === 'webm' || fileExtension === 'mp4' || fileExtension === 'ogg';
 }
 
+/** Tri-state gallery media-type display filter. `'all'` shows everything, `'video'` only
+ *  recognized video files, `'images'` everything that is not a recognized video file. */
+export type MediaTypeFilter = 'all' | 'images' | 'video';
+
+/** Returns true when a file with the given extension should be shown under the active
+ *  media-type filter. Reuses {@link isFileExtensionVideo} as the single authoritative
+ *  video-extension list, so new video formats propagate here automatically. */
+export function mediaTypeMatches(filter: MediaTypeFilter, fileExtension: string): boolean {
+  switch (filter) {
+    case 'all':
+      return true;
+    case 'video':
+      return isFileExtensionVideo(fileExtension);
+    case 'images':
+      return !isFileExtensionVideo(fileExtension);
+  }
+}
+
 function hashString(s: string) {
   let hash = 0;
   let chr = 0;

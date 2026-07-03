@@ -8,7 +8,7 @@ import {
   transaction,
 } from 'mobx';
 
-import { getThumbnailPath, isFileExtensionVideo } from 'common/fs';
+import { getThumbnailPath, mediaTypeMatches } from 'common/fs';
 import { IS_DEV } from 'common/process';
 import { promiseAllLimit } from 'common/promise';
 import { debounce } from 'common/timeout';
@@ -133,10 +133,10 @@ class FileStore {
       () => this.rootStore.uiStore.hideMissingFilesInBrowsing,
       () => this.refetch(),
     );
-    // When the "video only" preference toggles, re-run the current fetch so
-    // the gallery immediately reflects the new setting without requiring a restart.
+    // When the media-type filter changes, re-run the current fetch so the gallery
+    // immediately reflects the new setting without requiring a restart.
     reaction(
-      () => this.rootStore.uiStore.showVideosOnly,
+      () => this.rootStore.uiStore.mediaTypeFilter,
       () => this.refetch(),
     );
   }
@@ -1642,6 +1642,24 @@ class FileStore {
     );
     backendFiles = backendFiles.filter((f) => !f.tags.some((t) => hiddenTagIds.has(t)));
 
+    // Upstream media-type gate: trim the raw FileDTO[] to the active media-type filter BEFORE
+    // any ClientFile is constructed, so excluded files never materialize, render, or trigger a
+    // thumbnail (this replaces the old post-fetch splice, which flashed images in and out). Not
+    // applied in the Missing-files view, which is always unfiltered — though that view uses a
+    // separate inline path (fetchMissingFiles) and never reaches updateFromBackend, so the guard
+    // is defensive parity with the former splice. Capture the post-hidden-tags count first so the
+    // All-view "total" badge keeps reporting the pre-gate size (see numTotalFiles override below).
+    const preGateFetchedCount = backendFiles.length;
+    const mediaFilter = this.rootStore.uiStore.mediaTypeFilter;
+    // Fail-safe: only the two real filtering values activate the gate. Any other value
+    // ('all', or an unexpected/undefined value) shows all media rather than hiding
+    // everything, so a bad preference can never blank the gallery.
+    const mediaFilterActive =
+      (mediaFilter === 'images' || mediaFilter === 'video') && !this.showsMissingContent;
+    if (mediaFilterActive) {
+      backendFiles = backendFiles.filter((f) => mediaTypeMatches(mediaFilter, f.extension));
+    }
+
     // For every new file coming in, either re-use the existing client file if it exists,
     // or construct a new client file
     const [newClientFiles, reusedStatus] = this.filesFromBackend(backendFiles);
@@ -1726,24 +1744,10 @@ class FileStore {
             splicedList = true;
           }
 
-          // Post-fetch video-only display filter — mirrors the broken-file splice above.
-          // Not applied in the Missing-files content view (showsMissingContent), which is
-          // always unfiltered by design.
-          const showVideosOnly = this.rootStore.uiStore.showVideosOnly && !this.showsMissingContent;
-          if (showVideosOnly) {
-            // Re-derive from newClientFiles (not the possibly-already-spliced fileList)
-            // so the two display filters compose: keep files that are BOTH video and,
-            // if hide-missing is on, not broken.
-            const visible = newClientFiles.filter(
-              (f) => isFileExtensionVideo(f.extension) && !(shouldHide && f.isBroken),
-            );
-            this.fileList.clear();
-            this.fileList.push(...visible);
-            // Drop any stale selection references to non-video files that were removed.
-            this.cleanFileSelection();
-            this.fileListLastModified = new Date();
-            splicedList = true;
-          }
+          // NOTE: the media-type display filter is no longer applied here. It runs upstream on the
+          // raw FileDTO[] (before filesFromBackend), so media-filtered files never became ClientFiles
+          // and are already absent from newClientFiles/fileList. cleanFileSelection() in the main
+          // transaction already dropped any hidden-media files from the selection.
 
           // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
           // fileList looks like now (possibly filtered above).
@@ -1769,12 +1773,13 @@ class FileStore {
           this.numMissingFiles = brokenCount;
 
           // updateFileListState also sets numTotalFiles = fileList.length when showing
-          // All content. After the filter splice, fileList is smaller than the DB total,
-          // so the Outliner "All Images" badge would show the visible count rather than
-          // the true library size. Override with the full fetched count so the badge
-          // stays accurate even when files are hidden by either display filter.
-          if (this.showsAllContent && ((shouldHide && brokenCount > 0) || showVideosOnly)) {
-            this.numTotalFiles = newClientFiles.length;
+          // All content. After the broken-file splice or the upstream media-type gate,
+          // fileList is smaller than the DB total, so the Outliner "All Images" badge would
+          // show the visible count rather than the true library size. Override with the
+          // pre-gate fetched count (post-hidden-tags, pre-media-filter) so the badge stays
+          // accurate even when files are hidden by either display filter.
+          if (this.showsAllContent && ((shouldHide && brokenCount > 0) || mediaFilterActive)) {
+            this.numTotalFiles = preGateFetchedCount;
           }
         });
       })

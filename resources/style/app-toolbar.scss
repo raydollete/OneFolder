@@ -27,11 +27,20 @@
     min-width: 0; // allow the input to shrink instead of pushing the checkbox off-screen
   }
 
-  // Video Only checkbox: fixed size, pinned to the right
-  > label {
+  // Media-type filter dropdown: fixed size, pinned to the right
+  .media-type-filter {
     flex: 0 0 auto;
     white-space: nowrap;
     color: var(--text-color-muted);
+    background-color: var(--background-color-alt);
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    padding: 0.15rem 0.3rem;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text-color);
+    }
   }
 
   .btn-icon-large {
