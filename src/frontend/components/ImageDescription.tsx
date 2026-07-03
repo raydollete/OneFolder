@@ -30,13 +30,23 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [descriptionOriginalValue, setDescriptionOriginalValue] = useState('');
 
   useEffect(() => {
+    // Stale-guard: descriptionValue backs an editable <textarea> + write-back, so a
+    // late resolution from a previously selected file must never seed this file's
+    // textarea (which would then be saved into the current file).
+    let cancelled = false;
     exifTool
       .readDescription(file.absolutePath)
       .then((description) => {
+        if (cancelled) {
+          return;
+        }
         setDescriptionValue(description || '');
         setDescriptionOriginalValue(description || '');
       })
       .catch((err) => {
+        if (cancelled) {
+          return;
+        }
         AppToaster.show({
           message: 'Error reading EXIF data',
           clickAction: { label: 'View', onClick: RendererMessenger.toggleDevTools },
@@ -45,6 +55,9 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
         setDescriptionValue('');
         console.error(err);
       });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 

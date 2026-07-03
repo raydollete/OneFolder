@@ -56,6 +56,7 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
 
   useEffect(() => {
     // When the file changes, update the exif stats
+    let cancelled = false;
     setIsEditing(false);
     // Reset previous fields to empty string, so the re-render doesn't flicker as when setting it to {}
     setExifStats(
@@ -65,14 +66,30 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
       ),
     );
 
-    exifTool.readExifTags(file.absolutePath, exifTags).then((tagValues) => {
-      const stats: Record<string, string> = {};
-      tagValues.forEach((val, i) => {
-        const key = exifTags[i];
-        stats[key] = val || '';
+    // Stale-guard: a late resolution from a previously selected file must never seed
+    // this file's editable date inputs (which back the write-back path).
+    exifTool
+      .readExifTags(file.absolutePath, exifTags)
+      .then((tagValues) => {
+        if (cancelled) {
+          return;
+        }
+        const stats: Record<string, string> = {};
+        tagValues.forEach((val, i) => {
+          const key = exifTags[i];
+          stats[key] = val || '';
+        });
+        setExifStats(stats);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[ImageDates] exif read failed', file.absolutePath, err);
+        }
       });
-      setExifStats(stats);
-    });
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 

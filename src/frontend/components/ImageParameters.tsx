@@ -30,13 +30,22 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [descriptionOriginalValue, setDescriptionOriginalValue] = useState('');
 
   useEffect(() => {
+    // Stale-guard: a late resolution from a previously selected file must never show
+    // the prior file's parameters under the current selection.
+    let cancelled = false;
     exifTool
       .readParameters(file.absolutePath)
       .then((description) => {
+        if (cancelled) {
+          return;
+        }
         setDescriptionValue(description || 'no parameters');
         setDescriptionOriginalValue(description || 'no parameters');
       })
       .catch((err) => {
+        if (cancelled) {
+          return;
+        }
         AppToaster.show({
           message: 'Error reading EXIF data',
           clickAction: { label: 'View', onClick: RendererMessenger.toggleDevTools },
@@ -45,6 +54,9 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
         setDescriptionValue('');
         console.error(err);
       });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 

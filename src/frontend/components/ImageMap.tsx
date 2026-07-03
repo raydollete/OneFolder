@@ -125,6 +125,7 @@ const ImageInfo = observer(({ file }: ImageInfoProps) => {
 
   useEffect(() => {
     // When the file changes, update the exif stats
+    let cancelled = false;
     setIsEditing(false);
     setLat(0);
     setLon(0);
@@ -136,15 +137,30 @@ const ImageInfo = observer(({ file }: ImageInfoProps) => {
       ),
     );
 
-    exifTool.readExifTags(file.absolutePath, exifTags).then((tagValues) => {
-      const stats: Record<string, string> = {};
-      tagValues.forEach((val, i) => {
-        const key = exifTags[i];
-        stats[key] = val || '';
+    // Stale-guard: if the user switches files before this read resolves, ignore the
+    // late resolution so a previous file's GPS never seeds this file's editable form.
+    exifTool
+      .readExifTags(file.absolutePath, exifTags)
+      .then((tagValues) => {
+        if (cancelled) {
+          return;
+        }
+        const stats: Record<string, string> = {};
+        tagValues.forEach((val, i) => {
+          const key = exifTags[i];
+          stats[key] = val || '';
+        });
+        setExifStats(stats);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[ImageMap] exif read failed', file.absolutePath, err);
+        }
       });
-      setExifStats(stats);
-    });
 
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 

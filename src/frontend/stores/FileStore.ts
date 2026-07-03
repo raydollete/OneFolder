@@ -688,7 +688,11 @@ class FileStore {
       const { thumbnailDirectory } = this.rootStore.uiStore; // TODO: make a config store for this?
       const oldThumbnailPath = file.thumbnailPath.replace('?v=1', '');
       const newThumbPath = getThumbnailPath(newData.absolutePath, thumbnailDirectory);
-      platform.fs.move(oldThumbnailPath, newThumbPath).catch(() => {});
+      // Fire-and-forget, but fail loud: log a failed thumbnail move instead of
+      // swallowing it (a stale thumbnail then quietly points at the old path).
+      platform.fs.move(oldThumbnailPath, newThumbPath).catch((err) => {
+        console.warn('[FileStore] thumbnail move failed', oldThumbnailPath, newThumbPath, err);
+      });
 
       const newClientFile = new ClientFile(this, newIFile, this.rootStore.exifTool);
       newClientFile.thumbnailPath = newThumbPath;

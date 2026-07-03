@@ -25,12 +25,21 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [descriptionValue, setDescriptionValue] = useState('');
 
   useEffect(() => {
+    // Stale-guard: a late resolution from a previously selected file must never show
+    // the prior file's prompt JSON under the current selection.
+    let cancelled = false;
     exifTool
       .readPrompt(file.absolutePath)
       .then((description) => {
+        if (cancelled) {
+          return;
+        }
         setDescriptionValue(description || '');
       })
       .catch((err) => {
+        if (cancelled) {
+          return;
+        }
         AppToaster.show({
           message: 'Error reading EXIF data',
           clickAction: { label: 'View', onClick: RendererMessenger.toggleDevTools },
@@ -39,6 +48,9 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
         setDescriptionValue('');
         console.error(err);
       });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 

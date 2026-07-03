@@ -5,6 +5,7 @@ import { isFileExtensionVideo } from 'common/fs';
 import { RendererMessenger } from '../../ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
+import { usePromise } from '../hooks/usePromise';
 import ExternalLink from './ExternalLink';
 import { AppToaster } from './Toaster';
 
@@ -12,6 +13,7 @@ type CommonMetadata = {
   name: string;
   folder: string;
   dimensions: string;
+  frameRate?: string;
   size: string;
 };
 
@@ -19,6 +21,7 @@ const commonMetadataLabels: Record<keyof CommonMetadata, string> = {
   name: 'Filename',
   folder: 'Folder Name',
   dimensions: 'Dimensions',
+  frameRate: 'Frame Rate',
   size: 'Size',
 };
 
@@ -92,20 +95,41 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
   const [viewAllExifTool, setViewAllExifTool] = useState(false);
   const [exifStats, setExifStats] = useState<Record<string, string>>({});
   const [exifAll, setExifAll] = useState<string>('');
-  const [videoFps, setVideoFps] = useState<string>('');
 
-  const dimensions =
-    `${file.width || '?'} x ${file.height || '?'}` + (videoFps ? ` · ${videoFps} fps` : '');
+  // Frame rate is only meaningful for videos. Read it through usePromise so the
+  // async read is stale-guarded (a resolution for a previously selected file is
+  // ignored) and its error branch is explicit instead of silently swallowed.
+  const framePoll = usePromise(
+    file.absolutePath,
+    file.extension,
+    async (path, ext): Promise<string | undefined> =>
+      isFileExtensionVideo(ext)
+        ? (await exifTool.readExifTags(path, ['VideoFrameRate']))[0]
+        : undefined,
+  );
+
+  let frameRate = '';
+  if (framePoll.tag === 'ready') {
+    if ('ok' in framePoll.value) {
+      const fps = formatFps(framePoll.value.ok);
+      frameRate = fps ? `${fps} fps` : '';
+    } else {
+      // Fail loud: distinguish "read failed" from "video has no frame rate".
+      console.warn('[ImageInfo] frame-rate read failed', file.absolutePath, framePoll.value.err);
+    }
+  }
 
   const fileStats: CommonMetadata = {
     name: file.name,
     folder: immediateFolderName(file.absolutePath),
-    dimensions,
+    dimensions: `${file.width || '?'} x ${file.height || '?'}`,
+    frameRate: frameRate || undefined,
     size: humanFileSize(file.size),
   };
 
   useEffect(() => {
     // When the file changes, update the exif stats
+    let cancelled = false;
     setIsEditing(false);
     // Reset previous fields to empty string, so the re-render doesn't flicker as when setting it to {}
     setExifStats(
@@ -115,29 +139,43 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
       ),
     );
 
-    // Frame rate is only meaningful for videos; read it from ExifTool's
-    // VideoFrameRate tag and show it next to the dimensions. Absent/non-video
-    // files simply leave it blank.
-    setVideoFps('');
-    if (isFileExtensionVideo(file.extension)) {
-      exifTool
-        .readExifTags(file.absolutePath, ['VideoFrameRate'])
-        .then(([raw]) => setVideoFps(formatFps(raw)))
-        .catch(() => setVideoFps(''));
-    }
-
-    exifTool.readAllExifTags(file.absolutePath).then((values) => {
-      setExifAll(JSON.stringify(values, null, 2));
-    });
-
-    exifTool.readExifTags(file.absolutePath, exifTags).then((tagValues) => {
-      const stats: Record<string, string> = {};
-      tagValues.forEach((val, i) => {
-        const key = exifTags[i];
-        stats[key] = val || '';
+    // Stale-guard both reads: a late resolution from a previously selected file must
+    // never seed the display (exifAll) or the editable inputs (exifStats + write-back).
+    exifTool
+      .readAllExifTags(file.absolutePath)
+      .then((values) => {
+        if (!cancelled) {
+          setExifAll(JSON.stringify(values, null, 2));
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[ImageInfo] readAll failed', file.absolutePath, err);
+        }
       });
-      setExifStats(stats);
-    });
+
+    exifTool
+      .readExifTags(file.absolutePath, exifTags)
+      .then((tagValues) => {
+        if (cancelled) {
+          return;
+        }
+        const stats: Record<string, string> = {};
+        tagValues.forEach((val, i) => {
+          const key = exifTags[i];
+          stats[key] = val || '';
+        });
+        setExifStats(stats);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[ImageInfo] exif read failed', file.absolutePath, err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.absolutePath]);
 
@@ -190,12 +228,20 @@ const ImageInfo = ({ file }: ImageInfoProps) => {
       <form onSubmit={handleEditSubmit} onReset={() => setIsEditing(false)}>
         <table id="file-info">
           <tbody>
-            {Object.entries(commonMetadataLabels).map(([field, label]) => (
-              <tr key={field}>
-                <th scope="row">{label}</th>
-                <td>{fileStats[field as keyof CommonMetadata]}</td>
-              </tr>
-            ))}
+            {Object.entries(commonMetadataLabels).map(([field, label]) => {
+              const value = fileStats[field as keyof CommonMetadata];
+              // Frame Rate is optional: hide the row entirely for images and for
+              // videos that report no frame rate (rather than showing '?'/blank).
+              if (field === 'frameRate' && !value) {
+                return null;
+              }
+              return (
+                <tr key={field}>
+                  <th scope="row">{label}</th>
+                  <td>{value}</td>
+                </tr>
+              );
+            })}
             {Object.entries(exifFields).map(([key, field]) => {
               const value = exifStats[key];
               const isEditingMode = isEditing && field.modifiable;
