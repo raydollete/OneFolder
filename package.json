@@ -176,7 +176,7 @@
     "geo-coordinates-parser": "^1.6.3",
     "libheif-js": "^1.17.1",
     "mapbox-gl": "^3.0.1",
-    "mobx": "^6.8.0",
+    "mobx": "^6.16.1",
     "mobx-react-lite": "^3.4.0",
     "node-stream-zip": "^1.15.0",
     "react": "^18.2.0",
