@@ -5213,10 +5213,10 @@ gensync@^1.0.0-beta.2:
   resolved "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz"
   integrity sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==
 
-geo-coordinates-parser@^1.6.3:
-  version "1.6.4"
-  resolved "https://registry.npmjs.org/geo-coordinates-parser/-/geo-coordinates-parser-1.6.4.tgz"
-  integrity sha512-WAXujzfgNL9EhjAQzi+u1muiRgwbVJc/V7ViiHeF/MN8B+DQkeeUfH8yFbP8/tfHqQgeoE3NkdLs6iA16o3TwA==
+geo-coordinates-parser@^1.7.4:
+  version "1.7.4"
+  resolved "https://registry.yarnpkg.com/geo-coordinates-parser/-/geo-coordinates-parser-1.7.4.tgz#b9c45ee188cc5bdd7b29f82601e6e6d7b566ac9c"
+  integrity sha512-gVGxBW+s1csexXVMf5bIwz3TH9n4sCEglOOOqmrPk8YazUI5f79jCowKjTw05m/0h1//3+Z2m/nv8IIozgZyUw==
 
 geojson-vt@^4.0.2:
   version "4.0.2"
