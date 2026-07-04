@@ -91,13 +91,13 @@ retargeting (see "Deleting the viewed file advances to the adjacent file").
 
 ### Requirement: Deleting the viewed file advances to the adjacent file
 
-Deleting the file currently open in slide mode is a deliberate, user-initiated
-action, so the system SHALL treat it as intentional retargeting: the viewer SHALL
-advance to the adjacent surviving file (preferring the file immediately after the
-deleted one, falling back to the file before it when the deleted file was at the
-tail) and SHALL re-anchor to that file's identity. When no file survives the
-deletion the viewer SHALL close. This advance SHALL NOT leave the viewer in the
-"no file" state while a surviving neighbour exists.
+The system SHALL treat deleting the file currently open in slide mode as a
+deliberate, user-initiated retargeting rather than incidental churn. On such a
+delete the viewer SHALL advance to the adjacent surviving file (preferring the
+file immediately after the deleted one, falling back to the file before it when
+the deleted file was at the tail) and SHALL re-anchor to that file's identity.
+When no file survives the deletion the viewer SHALL close. This advance SHALL NOT
+leave the viewer in the "no file" state while a surviving neighbour exists.
 
 #### Scenario: Deleting the viewed video advances to and plays the next file
 
