@@ -170,7 +170,7 @@
     "comlink": "^4.4.1",
     "copy-webpack-plugin": "^11.0.0",
     "dexie": "^3.2.3",
-    "dexie-export-import": "^1.0.3",
+    "dexie-export-import": "^4.1.4",
     "express": "^5.2.1",
     "fs-extra": "^11.1.0",
     "geo-coordinates-parser": "^1.6.3",
