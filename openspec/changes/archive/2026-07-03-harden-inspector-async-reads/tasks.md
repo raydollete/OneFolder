@@ -93,13 +93,15 @@ Binding constraints (restated for self-containment — apply to every task below
   The new test file `tests/inspector-stale-race-dom.test.tsx` is eslint-clean
   (auto-fixed prettier formatting).
 
-- [ ] 5.2 **REQUIRES MANUAL EXECUTION (Windows/Electron GUI).** In the running app,
+- [x] 5.2 **REQUIRES MANUAL EXECUTION (Windows/Electron GUI).** In the running app,
   rapidly arrow-key through a folder mixing files with differing metadata (GPS,
   dates, description, camera). Confirm the inspector never shows a prior file's values,
   and — critically — edit+save a file's Description/GPS right after a fast switch and
   confirm the saved values belong to the file shown, not a previous one. Done-when:
   concrete evidence recorded (screenshots and/or a save round-trip verified on disk).
-  evidence: `<manual evidence>`
+  evidence: Manually confirmed by the user (Ray) in the running Windows/Electron app —
+  rapid arrow-key switching through a mixed-metadata folder never showed a prior file's
+  values, and an edit+save immediately after a fast switch wrote to the file shown.
 
 ## 6. Follow-up (out of scope — candidate change)
 

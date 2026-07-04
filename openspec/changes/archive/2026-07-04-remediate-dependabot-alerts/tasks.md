@@ -44,10 +44,10 @@ Add a `resolutions` block to `package.json`, pinning each vulnerable transitive 
 
 ## 5. Confirm the resulting alert state
 
-- [~] 5.1 After push, trigger/await a Dependabot re-scan; confirm the 103 `package-lock.json` alerts are gone. Dependabot is slow to reconcile a deleted manifest (per external review), so **manually dismiss any lingering `package-lock.json` alerts** as "no longer applicable" rather than assuming auto-closure.
-  evidence: **REQUIRES MANUAL EXECUTION (post-push, user).** Pre-push baseline captured now: `gh api .../dependabot/alerts` → 103 open against `package-lock.json` (all phantom; file deleted in 1.2 so all 103 should auto-close, dismiss any stragglers as "no longer applicable").
-- [~] 5.2 Confirm the genuine `yarn.lock` alerts are resolved: `gh api repos/raydollete/OneFolder/dependabot/alerts --paginate -q '.[] | select(.state=="open")'` shows no remaining critical/high from `yarn.lock` (or only entries explicitly marked BLOCKED with a documented note from 3.6).
-  evidence: **REQUIRES MANUAL EXECUTION (post-push, user).** Pre-push baseline: 56 open `yarn.lock` alerts (1 critical, 24 high, 23 medium, 8 low). Every affected package except `uuid` is patched in the regenerated `yarn.lock` (verified version-by-version in 3.x). Expected post-push: **0 critical, 0 high**, and only the single BLOCKED `uuid` medium remaining → 55 of 56 cleared.
+- [x] 5.1 After push, trigger/await a Dependabot re-scan; confirm the 103 `package-lock.json` alerts are gone. Dependabot is slow to reconcile a deleted manifest (per external review), so **manually dismiss any lingering `package-lock.json` alerts** as "no longer applicable" rather than assuming auto-closure.
+  evidence: Merged to `master` (bc205a70) and pushed. Dependabot re-scanned within minutes; `gh api .../dependabot/alerts` @ 19:21Z → **0 open `package-lock.json` alerts** (all 103 auto-closed on manifest deletion — no stragglers needed manual dismissal).
+- [x] 5.2 Confirm the genuine `yarn.lock` alerts are resolved: `gh api repos/raydollete/OneFolder/dependabot/alerts --paginate -q '.[] | select(.state=="open")'` shows no remaining critical/high from `yarn.lock` (or only entries explicitly marked BLOCKED with a documented note from 3.6).
+  evidence: Post-merge `gh api` @ 19:21Z → **1 open `yarn.lock` alert total: `uuid` (medium, BLOCKED)**. Zero critical, zero high, zero low; 55 of 56 cleared. Alert state overall 159 → 1.
 - [x] 5.3 Update the change's verification notes with the final open-alert count and any BLOCKED items.
   evidence: Verification Notes section added below with per-package resolved versions, expected post-push counts, and the BLOCKED `uuid` item + rationale.
 
@@ -59,7 +59,7 @@ Add a `resolutions` block to `package.json`, pinning each vulnerable transitive 
 
 **Build/test evidence:** `yarn build` → webpack 5.105.4, 1 warning (baseline-identical), exit 0. `yarn lint` → eslint runs on ajv@6.15.0 (no crash). `yarn test` → 30 suites / 263 tests pass under jsdom.
 
-**Expected post-push alert state:** package-lock.json 103 → 0 (manifest deleted). yarn.lock 56 → 1 (only `uuid`).
+**Confirmed post-merge alert state** (Dependabot re-scan @ 19:21Z after merge to `master`): package-lock.json 103 → **0** (manifest deleted, auto-closed, no stragglers). yarn.lock 56 → **1** (only `uuid`; 0 critical / 0 high / 0 low). Overall 159 → 1.
 
 **BLOCKED items:**
 - `uuid` (medium, advisory `< 11.1.1`): tree resolves `uuid@8.3.2` (via @tensorflow/mapbox); clearing requires a v8→v11 **major** bump of a runtime transitive whose runtime behavior cannot be verified headlessly. Per task 3.6's escape hatch, left BLOCKED rather than forcing a risky major jump for a medium advisory. Revisit if a within-v8 backport is published or the consumers move to uuid ≥ 11.
