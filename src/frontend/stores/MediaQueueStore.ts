@@ -607,8 +607,11 @@ class MediaQueueStore {
    */
   @action.bound focusFileInViewer(file: ClientFile): void {
     const { fileStore, uiStore } = this.rootStore;
-    const idx = fileStore.ensureFileInListAt(file);
-    uiStore.setFirstItem(idx);
+    // Ensure the target is present in the list, then re-anchor the viewer to it by
+    // identity. This is a deliberate retarget (distinct from incidental list churn),
+    // so setSlideFile explicitly pins slideFileId + firstItem to the intended file.
+    fileStore.ensureFileInListAt(file);
+    uiStore.setSlideFile(file);
     uiStore.selectFile(file, true);
     uiStore.enableSlideMode();
   }

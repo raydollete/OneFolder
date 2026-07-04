@@ -28,12 +28,22 @@ import UiStore from '../src/frontend/stores/UiStore';
 // ---------------------------------------------------------------------------
 
 function makeUiStore(extension: string): UiStore {
-  const file = { extension } as any;
+  const file = { id: 'f1', extension } as any;
+  const fileList = [file];
+  // In slide mode, slideFile now resolves by identity via fileStore.get(slideFileId)
+  // (viewer-file-anchoring). Provide the same O(1) id→file surface the real
+  // FileStore exposes so the anchor resolves to fileList[0].
+  const index = new Map<string, number>([['f1', 0]]);
   const mockRootStore = {
-    fileStore: { fileList: [file] },
+    fileStore: {
+      fileList,
+      get: (id: string) => (index.get(id) !== undefined ? fileList[index.get(id)!] : undefined),
+      getIndex: (id: string) => index.get(id),
+    },
   } as any;
   const store = new UiStore(mockRootStore);
-  store.firstItem = 0; // slideFile === fileList[0]
+  store.firstItem = 0;
+  store.slideFileId = 'f1'; // anchor the viewer on fileList[0] (as enableSlideMode would)
   return store;
 }
 

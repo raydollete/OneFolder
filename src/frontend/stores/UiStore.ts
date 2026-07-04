@@ -209,6 +209,14 @@ class UiStore {
   /** Index of the first item in the viewport. Also acts as the current item shown in slide mode */
   // TODO: Might be better to store the ID to the file. I believe we were storing the index for performance, but we have instant conversion between index/ID now
   @observable firstItem: number = 0;
+  /**
+   * Identity anchor for the slide-mode viewer: the ID of the file the viewer is
+   * pinned to while `isSlideMode` is true. The viewer resolves its displayed file
+   * by this ID (identity), not by the numeric `firstItem` index, so a re-sort or
+   * insertion into `fileList` never swaps the open file out from under the user.
+   * Transient session state — deliberately NOT in `PersistentPreferenceFields`.
+   */
+  @observable slideFileId: ID | undefined = undefined;
   @observable thumbnailSize: ThumbnailSize | number = 'medium';
   @observable thumbnailShape: ThumbnailShape = 'square';
   @observable upscaleMode: UpscaleMode = 'smooth';
@@ -352,6 +360,17 @@ class UiStore {
     }
   }
 
+  /**
+   * Anchor the slide-mode viewer to a specific file by identity, keeping the grid
+   * `firstItem` index in sync. This is the single funnel for changing the viewed
+   * file (prev/next navigation, deliberate retargeting) so `slideFileId` and
+   * `firstItem` can never diverge.
+   */
+  @action.bound setSlideFile(file: ClientFile): void {
+    this.slideFileId = file.id;
+    this.setFirstItem(this.rootStore.fileStore.getIndex(file.id));
+  }
+
   @action setMethod(method: ViewMethod): void {
     this.method = method;
   }
@@ -403,11 +422,15 @@ class UiStore {
   }
 
   @action.bound enableSlideMode(): void {
+    // Anchor the viewer to the file being opened. `selectFile` runs first in the
+    // preview flow, so `firstFileInView` already points at the intended file.
+    this.slideFileId = this.firstFileInView?.id;
     this.isSlideMode = true;
   }
 
   @action.bound disableSlideMode(): void {
     this.isSlideMode = false;
+    this.slideFileId = undefined;
   }
 
   @action.bound toggleSlideMode(): void {
@@ -686,6 +709,11 @@ class UiStore {
     }
     this.fileSelection.add(file);
     this.setFirstItem(this.rootStore.fileStore.getIndex(file.id));
+    // Selection-driven navigation while the viewer is open must re-anchor too, so
+    // the identity anchor and the grid index stay consistent.
+    if (this.isSlideMode) {
+      this.slideFileId = file.id;
+    }
   }
 
   @action.bound deselectFile(file: ClientFile): void {
@@ -1268,6 +1296,17 @@ class UiStore {
    * mount gate (LayoutSwitcher), the slide image (SlideView), and the inspector body (Inspector).
    */
   @computed get slideFile(): ClientFile | undefined {
+    // In slide mode the viewer is anchored by identity (`slideFileId`), resolved
+    // via FileStore's O(1) id→file lookup. This decouples the open file from the
+    // numeric `firstItem` index so list re-sorts/inserts cannot swap it. Resolving
+    // against list membership means a deleted/filtered-out file returns `undefined`,
+    // which the SlideMode component renders as an explicit empty state (fail loud).
+    // Outside slide mode the grid/inspector still track `firstFileInView`.
+    if (this.isSlideMode) {
+      return this.slideFileId !== undefined
+        ? this.rootStore.fileStore.get(this.slideFileId)
+        : undefined;
+    }
     return this.firstFileInView;
   }
 

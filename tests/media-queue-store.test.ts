@@ -126,6 +126,9 @@ async function makeStore(): Promise<{
       firstFileInView: undefined as any,
       firstItem: 0,
       setFirstItem: jest.fn(),
+      // focusFileInViewer now re-anchors the viewer by identity via setSlideFile
+      // (viewer-file-anchoring change); provide the mock so it does not throw.
+      setSlideFile: jest.fn(),
       selectFile: jest.fn(),
       enableSlideMode: jest.fn(),
       // Required by FileStore.fetchAllFiles when the helperFileStore is initialised.
@@ -512,7 +515,8 @@ describe('MediaQueueStore (INV-035 / TASK-144)', () => {
     const trashFile = jest.fn().mockResolvedValue({ ok: true, isPermanent: false });
     await store.keepOriginal(item, trashFile);
 
-    // focusFileInViewer calls uiStore.selectFile and uiStore.enableSlideMode.
+    // focusFileInViewer re-anchors the viewer by identity, then selects + enters slide mode.
+    expect(rootStore.uiStore.setSlideFile).toHaveBeenCalledWith(srcFile);
     expect(rootStore.uiStore.selectFile).toHaveBeenCalledWith(srcFile, true);
     expect(rootStore.uiStore.enableSlideMode).toHaveBeenCalled();
   });

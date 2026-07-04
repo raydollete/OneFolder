@@ -118,6 +118,8 @@ async function makeStoreForComponent(): Promise<{
       firstFileInView: undefined as any,
       firstItem: 0,
       setFirstItem: jest.fn(),
+      // focusFileInViewer re-anchors via setSlideFile (viewer-file-anchoring).
+      setSlideFile: jest.fn(),
       selectFile: jest.fn(),
       enableSlideMode: jest.fn(),
       hideMissingFilesInBrowsing: false,

@@ -50,8 +50,9 @@ interface SlideViewProps {
 
 const SlideView = observer(({ width, height }: SlideViewProps) => {
   const { uiStore, fileStore, imageLoader, mediaReleaseCoordinator } = useStore();
-  // While a media job is in flight/finalizing this is the pinned source/output (identity-anchored,
-  // immune to fileList/firstItem churn from the folder watcher); otherwise the normal first-in-view.
+  // In slide mode this resolves by identity anchor (uiStore.slideFileId), so the
+  // open file is stable across fileList re-sorts/inserts; `undefined` means the
+  // anchored file left the list and we render an explicit empty state below.
   const file = uiStore.slideFile;
   const eventManager = useMemo(() => (file ? new CommandDispatcher(file) : undefined), [file]);
   const isFirst = useComputed(() => uiStore.firstItem === 0);
@@ -88,17 +89,34 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
     return () => window.removeEventListener('popstate', popStateHandler);
   }, [uiStore]);
 
+  // Prev/next move relative to the *anchored* file's current position, then
+  // re-anchor to the newly shown file via setSlideFile so the viewer follows by
+  // identity. Missing-anchor fallback: if the anchored file has left the list
+  // (viewer is in its empty state), step relative to the retained firstItem so
+  // the user can navigate back into a valid file instead of deadlocking.
+  const currentNavIndex = (): number => {
+    const anchorIndex =
+      uiStore.slideFileId !== undefined ? fileStore.getIndex(uiStore.slideFileId) : undefined;
+    return anchorIndex ?? uiStore.firstItem;
+  };
   const decrImgIndex = useAction(() => {
-    const index = Math.max(0, uiStore.firstItem - 1);
-    uiStore.setFirstItem(index);
-
+    if (fileStore.fileList.length === 0) {
+      return;
+    }
+    const index = Math.max(0, currentNavIndex() - 1);
+    const target = fileStore.fileList[index];
+    uiStore.setSlideFile(target);
     // Select only this file: TagEditor overlay shows tags on selected images
-    uiStore.selectFile(fileStore.fileList[index], true);
+    uiStore.selectFile(target, true);
   });
   const incrImgIndex = useAction(() => {
-    const index = Math.min(uiStore.firstItem + 1, fileStore.fileList.length - 1);
-    uiStore.setFirstItem(index);
-    uiStore.selectFile(fileStore.fileList[index], true);
+    if (fileStore.fileList.length === 0) {
+      return;
+    }
+    const index = Math.min(currentNavIndex() + 1, fileStore.fileList.length - 1);
+    const target = fileStore.fileList[index];
+    uiStore.setSlideFile(target);
+    uiStore.selectFile(target, true);
   });
 
   // Detect left/right arrow keys to scroll between images. Top/down is already handled in the layout that's open in the background
@@ -235,7 +253,7 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
         />
       </nav>
 
-      {file && (
+      {file ? (
         <ZoomableImage
           file={file}
           thumbnailSrc={file.thumbnailPath}
@@ -246,6 +264,16 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
           onClose={uiStore.disableSlideMode}
           upscaleMode={uiStore.upscaleMode}
         />
+      ) : (
+        // Explicit empty state: the anchored file has left the list (deleted or
+        // filtered out). Fail loud rather than silently surfacing whatever file
+        // now occupies the old index. Nav buttons remain so the user can step to
+        // an adjacent file (missing-anchor fallback) or use Back to exit.
+        <div id="slide-mode-empty" style={{ ...CONTAINER_DEFAULT_STYLE, textAlign: 'center' }}>
+          <span className="custom-icon-128">{IconSet.MEDIA}</span>
+          <h2 className="dialog-title">File no longer available</h2>
+          <p>The file you were viewing is no longer in the current view.</p>
+        </div>
       )}
       <NavigationButtons
         isStart={isFirst.get()}

@@ -1805,6 +1805,12 @@ class FileStore {
    * back into range — never silently left pointing past the end (which would blank the viewer). This
    * mirrors the firstItem reconciliation `removeFilesFromListInPlace` performs for the delete path.
    * Cross-store write to `uiStore.firstItem` (same pattern as `cleanFileSelection`).
+   *
+   * NOTE: As of the viewer-file-anchoring change, the slide-mode viewer resolves its displayed file
+   * by identity (`uiStore.slideFileId`), NOT by `firstItem`. This getter now only maintains the grid
+   * viewport index — the clamp fallback below can therefore no longer swap the viewer to an unrelated
+   * file (when the anchored file is gone, `slideFile` resolves to `undefined` and the viewer shows an
+   * explicit empty state). Reconcile logic is intentionally left unchanged.
    */
   @action private reconcileFirstItemTo(anchorId: ID | undefined): void {
     const { uiStore } = this.rootStore;
