@@ -115,7 +115,7 @@
     "@electron/notarize": "^2.2.0",
     "@svgr/webpack": "^6.5.1",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/chrome": "^0.0.195",
+    "@types/chrome": "^0.2.2",
     "@types/express": "^5.0.6",
     "@types/fs-extra": "^11.0.1",
     "@types/jest": "^29.5.1",
