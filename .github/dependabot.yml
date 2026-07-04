@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Scope scanning to the npm ecosystem at the repo root. This fork installs
+  # exclusively via Yarn 1 (packageManager: yarn@1.22.22), so the only lockfile
+  # of record is yarn.lock — no package-lock.json is committed. Keeping this
+  # single npm entry prevents a stray regenerated npm lockfile from silently
+  # reintroducing phantom alerts.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
