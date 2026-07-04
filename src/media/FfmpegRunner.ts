@@ -38,7 +38,7 @@ export interface FfmpegRunOptions {
   signal?: AbortSignal;
   /**
    * Kill the child and reject with FfmpegStallError if no `out_time_ms` advance is seen for
-   * this many milliseconds. Resets on every genuine `out_time_ms` increase. Default: 60000.
+   * this many milliseconds. Resets on every genuine `out_time_ms` increase. Default: 240000.
    *
    * Mirror of the renderer-side STALL_TIMEOUT_MS in MediaQueueStore (TASK-154). This main-
    * process backstop fires independently of the renderer watchdog so a wedged ffmpeg child
@@ -88,8 +88,8 @@ export class FfmpegStallError extends Error {
 /** Max 5 progress emissions/sec. */
 const PROGRESS_THROTTLE_MS = 200;
 
-/** Default inactivity timeout: kill and reject if no out_time_ms advance for 60s (INV-038). */
-const DEFAULT_INACTIVITY_TIMEOUT_MS = 60_000;
+/** Default inactivity timeout: kill and reject if no out_time_ms advance for 240s (INV-038). */
+const DEFAULT_INACTIVITY_TIMEOUT_MS = 240_000;
 
 export class FfmpegRunner {
   constructor(
@@ -99,7 +99,7 @@ export class FfmpegRunner {
 
   /**
    * Run one ffmpeg invocation. Resolves on exit 0; rejects with:
-   *   - `FfmpegStallError` if no `out_time_ms` advance is seen for `inactivityTimeoutMs` (default 60s).
+   *   - `FfmpegStallError` if no `out_time_ms` advance is seen for `inactivityTimeoutMs` (default 240s).
    *   - `FfmpegAbortError` if the signal aborts.
    *   - A stderr-tail `Error` on spawn failure or non-zero exit.
    *

@@ -815,6 +815,13 @@ class FileStore {
         // targets the file now on screen rather than an empty selection.
         if (uiStore.isSlideMode) {
           uiStore.fileSelection.replace([targetFile]);
+          // The slide-mode viewer resolves its file by identity (slideFileId), not by
+          // firstItem. A deliberate delete is intentional retargeting, so re-anchor the
+          // viewer to the advanced-to file; otherwise slideFileId still points at the
+          // deleted file and slideFile resolves to undefined (blank "no file" state).
+          // Distinct from incidental list churn (re-sort/ingest/filter), which must NOT
+          // re-anchor. See openspec/specs/viewer-file-anchoring/spec.md.
+          uiStore.slideFileId = targetFile.id;
         }
       } else {
         // No survivors found at all (shouldn't reach here because fileList.length

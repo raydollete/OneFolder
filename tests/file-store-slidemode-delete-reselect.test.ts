@@ -49,6 +49,10 @@ function makeMockRootStore(): any {
   const uiStore: any = {
     firstItem: 0,
     isSlideMode: false,
+    // Identity anchor for the slide-mode viewer (see UiStore.slideFileId). The
+    // viewer resolves its file via this ID, so the delete auto-advance must keep
+    // it in sync or the viewer drops to the empty "no file" state.
+    slideFileId: undefined,
     hideMissingFilesInBrowsing: false,
     showVideosOnly: false,
     fileSelection,
@@ -97,7 +101,10 @@ function makeFileDTO(id: string, absolutePath = `/photos/${id}.jpg`): FileDTO {
   };
 }
 
-async function makeFileStore(fileDTOs: FileDTO[], rootStore?: any): Promise<{ store: any; root: any }> {
+async function makeFileStore(
+  fileDTOs: FileDTO[],
+  rootStore?: any,
+): Promise<{ store: any; root: any }> {
   const { default: FileStore } = await import('../src/frontend/stores/FileStore');
   const root = rootStore ?? makeMockRootStore();
   const backend: any = {
@@ -142,6 +149,7 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     runInAction(() => {
       root.uiStore.firstItem = 2;
       root.uiStore.isSlideMode = true;
+      root.uiStore.slideFileId = fileC.id; // viewer anchored to 'c'
       root.uiStore.fileSelection.replace([fileC]);
     });
 
@@ -158,6 +166,9 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     expect(selectionIds(root)).toEqual(['d']);
     // The advanced-to file is the same object as in fileList.
     expect(root.uiStore.fileSelection.has(fileD)).toBe(true);
+    // Viewer re-anchor: slideFileId must move to 'd', not stay on the deleted 'c'.
+    // (Without this the viewer resolves slideFile to undefined → blank empty state.)
+    expect(root.uiStore.slideFileId).toBe('d');
   });
 
   /**
@@ -175,6 +186,7 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     runInAction(() => {
       root.uiStore.firstItem = 4;
       root.uiStore.isSlideMode = true;
+      root.uiStore.slideFileId = fileE.id; // viewer anchored to 'e'
       root.uiStore.fileSelection.replace([fileE]);
     });
 
@@ -186,6 +198,8 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     expect(root.uiStore.firstItem).toBe(3);
     expect(root.uiStore.fileSelection.size).toBe(1);
     expect(root.uiStore.fileSelection.has(fileD)).toBe(true);
+    // Viewer re-anchor: backward advance to the new tail 'd'.
+    expect(root.uiStore.slideFileId).toBe('d');
   });
 
   /**
@@ -257,6 +271,7 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     runInAction(() => {
       root.uiStore.firstItem = 2; // viewing 'c'
       root.uiStore.isSlideMode = true;
+      root.uiStore.slideFileId = fileC.id; // viewer anchored to 'c'
       root.uiStore.fileSelection.replace([fileC]);
     });
 
@@ -270,5 +285,8 @@ describe('FileStore SlideMode delete auto-advance re-selection (INV-033, TASK-12
     // TASK-123 fix: selection must still contain exactly 'c'.
     expect(root.uiStore.fileSelection.size).toBe(1);
     expect(root.uiStore.fileSelection.has(fileC)).toBe(true);
+    // The viewed file survived, so the anchor must remain on 'c' (non-interference:
+    // the survived-file branch must not re-anchor to a different file).
+    expect(root.uiStore.slideFileId).toBe('c');
   });
 });

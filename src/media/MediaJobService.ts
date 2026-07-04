@@ -211,8 +211,8 @@ export class MediaJobService {
         args: jobArgs,
         preInputArgs,
         signal: job.abort.signal,
-        // inactivityTimeoutMs uses the default (60s from DEFAULT_INACTIVITY_TIMEOUT_MS in
-        // FfmpegRunner) — single source of truth, no hardcoded 60000 here (INV-038 / TASK-155).
+        // inactivityTimeoutMs uses the default (240s from DEFAULT_INACTIVITY_TIMEOUT_MS in
+        // FfmpegRunner) — single source of truth, no hardcoded 240000 here (INV-038 / TASK-155).
         onProgress: ({ outTimeSec }) => {
           const percent =
             totalSec !== undefined && totalSec > 0

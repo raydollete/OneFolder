@@ -71,20 +71,44 @@ the ends of the list.
 - **WHEN** the anchored file is the last file in the list and the user triggers "next"
 - **THEN** the viewer continues to display the last file and does not wrap or error
 
-### Requirement: The anchored file leaving the list does not silently swap the viewer
+### Requirement: The anchored file leaving the list via incidental churn does not silently swap the viewer
 
 The system SHALL NOT display a different, unrelated file in the slot the anchored
 file previously occupied when the anchored file is no longer present in the gallery
-list (for example it was deleted, or an active filter now excludes it). Instead the
-viewer SHALL present an explicit "no file" / closed state rather than silently
-surfacing whichever file now occupies the old index.
+list as a result of **incidental** list churn the user did not direct at the viewed
+file (for example an active filter now excludes it, or a re-sort/re-fetch drops it).
+Instead the viewer SHALL present an explicit "no file" / closed state rather than
+silently surfacing whichever file now occupies the old index. This protection does
+NOT apply to a deliberate delete of the viewed file, which is intentional
+retargeting (see "Deleting the viewed file advances to the adjacent file").
 
-#### Scenario: Deleting the viewed file does not surface an unrelated file
+#### Scenario: Filtering out the viewed file does not surface an unrelated file
 
 - **WHEN** a file is open in slide mode
-- **AND** that file is removed from the gallery list (deleted or filtered out)
+- **AND** that file is removed from the gallery list by an active filter or a re-fetch (not by the user deleting it)
 - **THEN** the viewer does not silently switch to whatever file now occupies the previous index
 - **AND** the viewer shows an explicit empty-or-closed state
+
+### Requirement: Deleting the viewed file advances to the adjacent file
+
+Deleting the file currently open in slide mode is a deliberate, user-initiated
+action, so the system SHALL treat it as intentional retargeting: the viewer SHALL
+advance to the adjacent surviving file (preferring the file immediately after the
+deleted one, falling back to the file before it when the deleted file was at the
+tail) and SHALL re-anchor to that file's identity. When no file survives the
+deletion the viewer SHALL close. This advance SHALL NOT leave the viewer in the
+"no file" state while a surviving neighbour exists.
+
+#### Scenario: Deleting the viewed video advances to and plays the next file
+
+- **WHEN** a video is open in slide mode and the user deletes it
+- **THEN** the viewer advances to the next surviving file and re-anchors to its identity
+- **AND** if that file is a video it mounts and plays, rather than showing the empty state
+
+#### Scenario: Deleting the last file advances backward
+
+- **WHEN** the viewed file is the last surviving file in the list and the user deletes it
+- **THEN** the viewer advances to the file immediately before it and re-anchors, without wrapping or erroring
 
 ### Requirement: Intentional retargeting of the viewer is still permitted
 

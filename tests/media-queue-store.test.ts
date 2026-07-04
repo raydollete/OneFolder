@@ -764,6 +764,13 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
   let store: any;
   let srcFile: any;
 
+  // Mirror of STALL_TIMEOUT_MS in MediaQueueStore (kept in sync manually; the store's
+  // dynamic-import pattern prevents importing the const directly without breaking the
+  // hoisted IPC mocks). UNDER_STALL_MS is a single tick short of the threshold, used to
+  // assert the watchdog re-arms rather than fires.
+  const STALL_TIMEOUT_MS = 240_000;
+  const UNDER_STALL_MS = STALL_TIMEOUT_MS - 1_000;
+
   beforeEach(async () => {
     startMediaJobMock.mockReset();
     cancelMediaJobMock.mockReset();
@@ -787,9 +794,9 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
     }
   };
 
-  // ---------- stall watchdog fires after 60s of no outTimeSec progress ----------
+  // ---------- stall watchdog fires after 240s of no outTimeSec progress ----------
 
-  it('stall watchdog: auto-fails the item after 60s of no outTimeSec progress, calls cancelMediaJob, and starts next job (INV-038)', async () => {
+  it('stall watchdog: auto-fails the item after 240s of no outTimeSec progress, calls cancelMediaJob, and starts next job (INV-038)', async () => {
     // item0 holds open; item1 is a second pending job.
     startMediaJobMock
       .mockReturnValueOnce(new Promise(() => {})) // item0 — never resolves
@@ -809,8 +816,8 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
     expect(store.items[0].jobId).toBe('stall-job');
     expect(store.items[0].percent).toBe(10);
 
-    // Advance 60s without any further outTimeSec advance — watchdog fires.
-    jest.advanceTimersByTime(60_000);
+    // Advance the full stall window without any further outTimeSec advance — watchdog fires.
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS);
     await flushMicrotasks(); // let the settle() runInAction flush
 
     // item0 must be failed with a stall message.
@@ -837,22 +844,22 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
     const item = store.items[0];
     expect(item.status).toBe('running');
 
-    // Simulate steady forward progress: advance outTimeSec each time before 60s elapses.
-    // Three iterations at 59s gaps = 177s total, far past a single 60s window.
+    // Simulate steady forward progress: advance outTimeSec each time before the window elapses.
+    // Three iterations at (threshold - 1s) gaps = far past a single stall window.
     let outTime = 0.0;
     for (let i = 0; i < 3; i++) {
       outTime += 1.0;
       fireProgress({ jobId: 'healthy-job', percent: 10 + i, outTimeSec: outTime });
       await flushMicrotasks();
-      jest.advanceTimersByTime(59_000); // 59s gap — watchdog re-armed before it fires
+      jest.advanceTimersByTime(UNDER_STALL_MS); // just under threshold — watchdog re-armed before it fires
       await flushMicrotasks();
     }
 
     // Job must still be running — watchdog never fired.
     expect(item.status).toBe('running');
 
-    // Now stop advancing and wait the full 60s — watchdog fires.
-    jest.advanceTimersByTime(60_000);
+    // Now stop advancing and wait the full window — watchdog fires.
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS);
     await flushMicrotasks();
 
     expect(item.status).toBe('failed');
@@ -872,22 +879,22 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
     // Progress events with no outTimeSec field — watchdog should still re-arm on percent change.
     fireProgress({ jobId: 'pct-job', percent: 10 }); // no outTimeSec
     await flushMicrotasks();
-    jest.advanceTimersByTime(59_000);
+    jest.advanceTimersByTime(UNDER_STALL_MS);
     await flushMicrotasks();
 
     expect(item.status).toBe('running'); // still alive
 
     fireProgress({ jobId: 'pct-job', percent: 11 }); // different percent, re-arms
     await flushMicrotasks();
-    jest.advanceTimersByTime(59_000);
+    jest.advanceTimersByTime(UNDER_STALL_MS);
     await flushMicrotasks();
 
     expect(item.status).toBe('running'); // still alive
 
-    // Same percent repeated — watchdog does NOT re-arm; expires after 60s.
+    // Same percent repeated — watchdog does NOT re-arm; expires after the full window.
     fireProgress({ jobId: 'pct-job', percent: 11 }); // same percent, no re-arm
     await flushMicrotasks();
-    jest.advanceTimersByTime(60_000);
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS);
     await flushMicrotasks();
 
     expect(item.status).toBe('failed');
@@ -949,15 +956,15 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
 
     const item = store.items[0];
 
-    // Advance some time but less than 60s, then complete successfully.
-    jest.advanceTimersByTime(30_000);
+    // Advance some time but less than the stall window, then complete successfully.
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS / 2);
     resolveJob({ jobId: 'idem-job', tempPath: '/tmp/j.mp4', finalPath: '/photos/out.mp4' });
     await flushMicrotasks();
 
     expect(item.status).toBe('completed');
 
-    // Advance past the original 60s window — stall timer must NOT fire (already cleared).
-    jest.advanceTimersByTime(60_000);
+    // Advance past the original stall window — stall timer must NOT fire (already cleared).
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS);
     await flushMicrotasks();
 
     // Status must still be completed, not overwritten by a phantom stall.
@@ -979,7 +986,7 @@ describe('MediaQueueStore stall watchdog + forcible cancel (INV-038 / TASK-156)'
     const item = store.items[0];
 
     // Let the watchdog fire — item transitions to failed.
-    jest.advanceTimersByTime(60_000);
+    jest.advanceTimersByTime(STALL_TIMEOUT_MS);
     await flushMicrotasks();
 
     expect(item.status).toBe('failed');

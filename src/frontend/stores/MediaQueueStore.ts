@@ -40,7 +40,7 @@ export interface MediaQueueCounts {
  * message lacks `outTimeSec` (e.g. older/edge message shapes), so a healthy job
  * without that field is also never false-failed.
  */
-const STALL_TIMEOUT_MS = 60_000;
+const STALL_TIMEOUT_MS = 240_000;
 
 // ---------------------------------------------------------------------------
 // QueueItem
@@ -308,7 +308,7 @@ class MediaQueueStore {
 
       // Liveness tracking for the stall watchdog (outside runInAction — no observable mutation).
       // Primary signal: outTimeSec advance (ticks far more often than integer percent, so a
-      // long encode where one 1% step exceeds 60s is never false-failed).
+      // long encode where one 1% step exceeds 240s is never false-failed).
       if (msg.outTimeSec !== undefined && msg.outTimeSec > lastOutTimeSec) {
         lastOutTimeSec = msg.outTimeSec;
         armStallTimer();
@@ -355,7 +355,7 @@ class MediaQueueStore {
         const frozenAt = item.percent !== null ? ` (stuck at ${item.percent}%)` : '';
         settle(() => {
           item.status = 'failed';
-          item.errorMessage = `Stalled: no progress for 60s${frozenAt}.`;
+          item.errorMessage = `Stalled: no progress for ${STALL_TIMEOUT_MS / 1000}s${frozenAt}.`;
         });
       }, STALL_TIMEOUT_MS);
     };
