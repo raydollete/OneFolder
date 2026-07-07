@@ -29,13 +29,6 @@ const OVERZOOM_TOLERANCE = 0.05;
 const DOUBLE_TAP_THRESHOLD = 250;
 const ANIMATION_SPEED = 0.1;
 
-// Video wheel-seek step sizes (per scroll tick). Direction sign is multiplied in.
-const VIDEO_SEEK_BARE_SECONDS = 2;
-const VIDEO_SEEK_CTRL_SECONDS = 10;
-// Heuristic single-frame step: exact at 30fps, ~2 frames at 60fps, may not advance at <30fps.
-// HTML5 <video> exposes no per-frame step API, so we approximate.
-const VIDEO_SEEK_SHIFT_FRAME_SECONDS = 1 / 30;
-
 export type SlideTransform = Transform;
 
 export interface ZoomPanProps {
@@ -159,40 +152,12 @@ export default class ZoomPan extends React.Component<ZoomPanProps, ZoomPanState>
   };
 
   handleMouseWheel = (event: React.WheelEvent) => {
-    // Wheel over a video seeks the timeline. Modifier-dependent step (precedence Shift > Ctrl > bare).
-    // Alt+wheel falls through to the zoom path below.
-    if (this.props.mediaType === 'video' && !event.altKey) {
-      const videoEl = this.containerRef.current?.querySelector('video') as HTMLVideoElement | null;
-      if (videoEl && Number.isFinite(videoEl.duration)) {
-        const direction = event.deltaY < 0 ? -1 : event.deltaY > 0 ? 1 : 0;
-        if (direction !== 0) {
-          let step: number;
-          if (event.shiftKey) {
-            step = VIDEO_SEEK_SHIFT_FRAME_SECONDS * direction;
-            // Frame-stepping only makes sense on a paused video.
-            if (!videoEl.paused) {
-              videoEl.pause();
-            }
-          } else if (event.ctrlKey) {
-            step = VIDEO_SEEK_CTRL_SECONDS * direction;
-          } else {
-            step = VIDEO_SEEK_BARE_SECONDS * direction;
-          }
-          videoEl.currentTime = clamp(videoEl.currentTime + step, 0, videoEl.duration);
-          tryPreventDefault(event);
-          // Ctrl+wheel would otherwise bubble to the gallery's thumbnail-resize handler;
-          // Shift+wheel could be hijacked by horizontal-scroll handlers. Stop propagation
-          // when we intentionally consumed those modifiers. Bare wheel keeps bubbling.
-          if (event.shiftKey || event.ctrlKey) {
-            event.stopPropagation();
-          }
-        }
-      }
-      return;
-    }
-    // Zoom path. For video (only reachable here under Alt+wheel) the deltaY → zoom
-    // polarity is INVERTED so scroll-down zooms IN, matching the seek polarity above.
-    // For image (bare wheel), the original polarity is preserved.
+    // Zoom path only. Video wheel-seek (non-Alt wheels) is handled by the
+    // viewer-scoped capture listener in SlideMode, which consumes those events
+    // before they reach here. This handler therefore sees: image wheels (any
+    // modifier) and video Alt+wheels. For video the deltaY → zoom polarity is
+    // INVERTED so scroll-down zooms IN, matching the seek polarity; for image
+    // the original polarity is preserved.
     this.stopAnimation();
     const { scale } = this.state;
     const point = getRelativePosition(createVec2(event.clientX, event.clientY), this.container);

@@ -461,6 +461,16 @@ video {
     cursor: pointer;
     transform-origin: 0 0;
   }
+
+  // Remove Chromium's default gradient scrim drawn behind the native scrub
+  // controls, so the controls sit over the unmodified frame. Scoped to the
+  // slide-mode video (inside #zoomable-image) so gallery/thumbnail <video>
+  // elements are unaffected.
+  video {
+    &::-webkit-media-controls-panel {
+      background-image: none;
+    }
+  }
 }
 
 #content-placeholder {

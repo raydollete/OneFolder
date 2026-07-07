@@ -1,6 +1,7 @@
 import { autorun, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
+import { clamp } from 'common/core';
 import { ClientFile } from 'src/frontend/entities/File';
 import { useStore } from 'src/frontend/contexts/StoreContext';
 import { useAction, useComputed } from 'src/frontend/hooks/mobx';
@@ -13,6 +14,7 @@ import { UpscaleMode } from '../../../stores/UiStore';
 import Inspector from '../../Inspector';
 import { CommandDispatcher } from '../Commands';
 import ZoomPan, { CONTAINER_DEFAULT_STYLE, SlideTransform } from '../SlideMode/ZoomPan';
+import { computeVideoSeekStep } from './videoSeek';
 import { ContentRect } from '../utils';
 import { Vec2, createDimension } from './utils';
 import AnnotoriousWrapper from './AnnotoriousWrapper';
@@ -512,8 +514,44 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
       [uiStore],
     );
 
+    // Viewer-scoped wheel-seek: whenever a video is the focused item, the wheel
+    // seeks its timeline regardless of pointer position — mirroring the
+    // "focused video" model the Spacebar play/pause already uses, rather than
+    // the old element-scoped ZoomPan onWheel that only fired while hovering the
+    // video. Registered in the CAPTURE phase so it pre-empts the gallery's
+    // Ctrl+wheel thumbnail-resize handler (ContentView) and ZoomPan before
+    // React's root listener runs. Non-Alt wheels are consumed (seek + stop);
+    // Alt+wheel is left alone so it still reaches ZoomPan's onWheel zoom path.
+    const isVideo = isFileExtensionVideo(file.extension);
+    useEffect(() => {
+      if (!isVideo) {
+        return;
+      }
+      const handleWheelSeek = (event: WheelEvent) => {
+        const video = slideVideoRef.current;
+        if (!video || !Number.isFinite(video.duration)) {
+          return;
+        }
+        const seek = computeVideoSeekStep(event, event.deltaY);
+        if (seek === null) {
+          // Alt+wheel (or no vertical delta): do nothing and do NOT stop
+          // propagation, so ZoomPan's onWheel still drives zoom.
+          return;
+        }
+        if (seek.pauseFirst && !video.paused) {
+          video.pause();
+        }
+        video.currentTime = clamp(video.currentTime + seek.stepSeconds, 0, video.duration);
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      window.addEventListener('wheel', handleWheelSeek, { capture: true, passive: false });
+      return () => {
+        window.removeEventListener('wheel', handleWheelSeek, { capture: true });
+      };
+    }, [isVideo]);
+
     if (image.tag === 'ready' && 'err' in image.value) {
-      const isVideo = isFileExtensionVideo(file.extension);
       console.log(image.value.err);
       return (
         <ImageFallback

@@ -1,0 +1,25 @@
+## 1. Remove the scrub-control gradient scrim
+
+- [x] 1.1 In `resources/style/content.scss`, next to the existing slide-mode `video` rules (~`:339`, `:457`), add a rule that clears Chromium's default control-panel gradient behind the scrub controls (e.g. `video::-webkit-media-controls-panel { background-image: none; }`, adding `::-webkit-media-controls-enclosure` if a residual scrim remains). Scope it so gallery/thumbnail video elements are unaffected. DONE
+  evidence: resources/style/content.scss:470 — `#zoomable-image video::-webkit-media-controls-panel { background-image: none; }`
+- [x] 1.2 REQUIRES MANUAL EXECUTION (Windows/GUI): Open a video in slide mode and confirm no gradient/scrim shadow is drawn behind the scrub controls and that the controls remain visible and usable. Capture a before/after screenshot as evidence. DONE
+  evidence: manual GUI verification on the Windows Electron build (yarn start off the freshly-built dist) — user confirmed 2026-07-06: no scrim behind the scrub controls, controls visible and usable. No screenshot file captured.
+
+## 2. Re-scope wheel-seek to the focused video
+
+- [x] 2.1 Extract the seek-step computation currently inline in `ZoomPan.handleMouseWheel` (`ZoomPan.tsx:161`) into a small pure helper (input: modifier flags + deltaY sign; output: step seconds and whether to pause first), reusing the existing constants `VIDEO_SEEK_BARE_SECONDS` (±2s), `VIDEO_SEEK_CTRL_SECONDS` (±10s), `VIDEO_SEEK_SHIFT_FRAME_SECONDS` (±1 frame → pause first). Preserve modifier precedence Shift > Ctrl > bare and the Alt = "not a seek" rule. DONE
+  evidence: src/frontend/containers/ContentView/SlideMode/videoSeek.ts:38 — `export function computeVideoSeekStep(modifiers, deltaY): VideoSeekStep | null` with the three constants moved here; Shift>Ctrl>bare precedence, Alt/zero-delta → null
+- [x] 2.2 Add a viewer-scoped `wheel` listener in `SlideMode/index.tsx` via a `useEffect` modeled on the existing global `keydown` effect (`:139`). Register it only while slide mode is open and the focused item is a video; register with `{ capture: true, passive: false }`; remove it on cleanup. Read the video element from the existing slide video ref (`setSlideVideoRef`, `:564`). DONE
+  evidence: src/frontend/containers/ContentView/SlideMode/index.tsx:548 — `window.addEventListener('wheel', handleWheelSeek, { capture: true, passive: false })` guarded by `isVideo`, removed on cleanup; reads `slideVideoRef.current`
+- [x] 2.3 In that listener: for a non-Alt wheel with a finite `video.duration`, compute the step via the 2.1 helper, pause first when frame-stepping, set `video.currentTime = clamp(currentTime + step, 0, duration)`, then `preventDefault()` and `stopPropagation()` so the wheel does not reach the gallery Ctrl+wheel thumbnail-resize handler (`ContentView/index.tsx:112`) or ZoomPan. For an Alt wheel, do nothing and do NOT stop propagation, so ZoomPan's `onWheel` still drives zoom. DONE
+  evidence: src/frontend/containers/ContentView/SlideMode/index.tsx:544 — `video.currentTime = clamp(video.currentTime + seek.stepSeconds, 0, video.duration); event.preventDefault(); event.stopPropagation();` with `if (seek === null) return;` for Alt (no stopPropagation)
+- [x] 2.4 Remove the video-seek branch from `ZoomPan.handleMouseWheel` (`ZoomPan.tsx:164-192`), leaving only the zoom path (which now handles image wheel-zoom and video Alt+wheel zoom). Remove the now-obsolete `stopPropagation()` seek guard. Keep the `onWheel` binding (`:345`) for the zoom path. DONE
+  evidence: src/frontend/containers/ContentView/SlideMode/ZoomPan.tsx:155 — `handleMouseWheel` now opens `// Zoom path only.`; the seek branch and its `stopPropagation()` guard are gone (git diff), `onWheel` binding retained
+
+## 3. Verify behavior
+
+- [x] 3.1 Run `yarn lint` and `yarn test`; fix any regressions introduced by the refactor. If a unit test can exercise the seek-step helper (pure function), add one covering bare/Ctrl/Shift/Alt cases and the clamp bounds. DONE
+  evidence: yarn test — 31 suites / 270 tests pass, incl. new `tests/video-seek-step.test.ts` 7/7 (bare/Ctrl/Shift/Alt/precedence/zero-delta)
+  evidence: eslint on the 4 touched files (content.scss, ZoomPan.tsx, SlideMode/index.tsx, videoSeek.ts) — clean; repo-wide `yarn lint` exit 1 is 45 pre-existing errors in unrelated files, none in this change's diff
+- [x] 3.2 REQUIRES MANUAL EXECUTION (Windows/GUI): With a video focused in slide mode, verify wheel-seek fires with the pointer OFF the video (over the inspector, nav chrome, and letterbox margin): bare wheel ±2s, Ctrl+wheel ±10s (and gallery thumbnails do NOT resize), Shift+wheel ±1 frame with the video pausing. Verify Alt+wheel still zooms. Verify wheel does nothing seek-related when an image (not a video) is the focused item. Capture evidence. DONE
+  evidence: manual GUI verification on the Windows Electron build — user confirmed 2026-07-06 the feature works end-to-end (wheel-seek fires with pointer off the video, Alt+wheel still zooms, gallery thumbnails do not resize). No screenshot/recording file captured.
