@@ -31,10 +31,14 @@
         (column-0, keyed). Caller Agreement is the returned callerAgreement;
         record `n/a` when the tool returned no rating (older server or a tool
         without callerAnswer support) — never a fabricated number.
-        'Quorum: not achieved' is an honest record, not a pass: revise the
-        design per the response and re-run until achieved. A failed arbiter or
-        a certainty below the config's min_certainty is a degraded result —
-        prefer re-running over transcribing it. A Caller Agreement below the
+        'Quorum: not achieved' is an honest record and a HALT, not a pass:
+        transcribe the verdict and roster verbatim, incorporate nothing from
+        the review response into the design or the reasoning, do NOT write
+        tasks.md, and stop and surface the verdict to the user, who alone
+        decides how to proceed (retry once the outage clears, direct a
+        revision, or explicitly override). A failed arbiter or a certainty
+        below the config's min_certainty is a degraded result — prefer
+        re-running over transcribing it. A Caller Agreement below the
         config's min_caller_agreement means independent peers diverge from
         the draft — reconcile the divergence in Review Feedback or revise
         the design.
@@ -42,7 +46,16 @@
         each point marked ACCEPTED (with the follow-up) or REJECTED (with why).
         An empty or single-line Review Feedback section does not pass review.
      If the peer-review MCP server is genuinely unavailable, record instead
-     (verbatim): External Review: Unavailable — peer-review (mcp__peer-review__peer_review) missing -->
+     (verbatim): External Review: Unavailable — peer-review (mcp__peer-review__peer_review) missing
+
+     Tier 2 hotfix lane (proposal declares 'Mode: hotfix'): skip steps 1-2 —
+     no pre-task review call, no bomb-squad. Leave this section with only a
+     one-line note that review is deferred (the proposal carries the
+     'External Review: Deferred — hotfix (...)' state line, and tasks.md carries
+     the unchecked 'review debt' task). To PAY the debt later, run the review
+     post-hoc and transcribe a full '### Peer Review Verdict' + '### Review
+     Feedback' here in the grammar above — that restores a clean pass and the
+     debt task may then be ticked (evidence: this design.md verdict). -->
 ## External Review
 
 ### Peer Review Verdict
@@ -68,3 +81,19 @@ Consensus feedback recorded verbatim:
 ## Bomb-squad findings
 
 - <finding with file:line, or 'hunt completed — no latent defects of this class found'>
+
+<!-- Reframe record — written by /opsx-reframe when repeated user corrections
+     during apply show the mental model was wrong (two 'correction:' lines on
+     one live task in tasks.md warn until resolved). Uncomment and fill when
+     triggered; delete otherwise. The Lesson line captures the scenario in the
+     durable store openspec/lessons.md (created from openspec/templates/lessons.md
+     on first capture) — a filled Reframe without it warns; a placeholder or
+     fabricated payload is a violation.
+## Reframe
+
+- Wrong assumption: <what the plan assumed that the corrections disproved>
+- Corrected model: <the corrected understanding, grounded in real code>
+- Approach delta: <what changes in the approach because of it>
+- Tasks reframed: <tasks marked OBSOLETE + their replacements, or tasks carrying a reframed: line>
+- Lesson: openspec/lessons.md#<slug> — <one-line summary (captured by /opsx-reframe)>
+-->

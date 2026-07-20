@@ -8,6 +8,16 @@ Type: <feature|bug>
 <!-- Tier 1 only (trivial: copy/style/one-file, no behavior fork) — keep this line and delete it for Tier 2+: -->
 External Review: Waived — Tier 1 (<one-line rationale>)
 
+<!-- Tier 2 hotfix lane only (urgent work, review deferred). To adopt it, ADD an
+     uncommented 'Mode: hotfix' line directly under the Type: line above, and an
+     uncommented copy of the state line below — both at column 0. Kept commented
+     here on purpose: an uncommented Mode/state line left in a normal proposal
+     would silently defer review (a weakening the linter must not ship as a
+     default). Pay the debt later with a full achieved verdict in design.md.
+Mode: hotfix
+External Review: Deferred — hotfix (<one-line urgency rationale>) -->
+
+
 <!-- Bug changes only — delete this whole section for features.
      Name EXACTLY ONE category, diagnosed from code actually read (cite the file/function), never from memory:
      wrong-mental-model | architectural-shortcoming | order-of-operations |
