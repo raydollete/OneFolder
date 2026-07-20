@@ -463,17 +463,14 @@ export default class SQLiteBackend implements DataStorage {
 
   async fetchFiles(order: OrderBy<FileDTO>, fileOrder: OrderDirection): Promise<FileDTO[]> {
     console.info('SQLite: Fetching files...');
-    if (order === 'random') {
+    // Both "random" modes fetch in deterministic id order: the session-stable
+    // seeded ordering is applied client-side by FileStore (seededShuffle.ts).
+    // An unindexed SQL `ORDER BY RANDOM()` full-table sort per fetch — which
+    // also reshuffled on every refetch — is deliberately not used anymore
+    // (see openspec/specs/large-library-performance).
+    if (order === 'random' || order === 'tagCountRandom') {
       const rows = this.#db
-        .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY RANDOM()`)
-        .all() as FileRow[];
-      return rows.map(fileRowToDTO);
-    }
-
-    if (order === 'tagCountRandom') {
-      // COUNT(ft.tagId) yields 0 for untagged files (LEFT JOIN produces NULL tagId; COUNT ignores NULLs)
-      const rows = this.#db
-        .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY COUNT(ft.tagId) ASC, RANDOM()`)
+        .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY f.id`)
         .all() as FileRow[];
       return rows.map(fileRowToDTO);
     }
@@ -483,6 +480,29 @@ export default class SQLiteBackend implements DataStorage {
       .prepare(`${FILE_SELECT} ${FILE_GROUP_BY} ORDER BY f.${order} ${direction}`)
       .all() as FileRow[];
     return rows.map(fileRowToDTO);
+  }
+
+  /**
+   * Id-projection fetch: returns ONLY the ids of all files, in the requested
+   * order. Used by FileStore's progressive materialization path: the cheap id
+   * list arrives first, then full rows are fetched in bounded batches via
+   * fetchFilesByID so no single UI-thread task scales with library size.
+   *
+   * For the "random" modes the ids are returned in plain id order — the seeded
+   * ordering is applied client-side (tagCountRandom additionally falls back to
+   * the one-shot path in FileStore since it needs tag counts for ordering).
+   */
+  async fetchFileIds(order: OrderBy<FileDTO>, fileOrder: OrderDirection): Promise<ID[]> {
+    console.info('SQLite: Fetching file ids...');
+    if (order === 'random' || order === 'tagCountRandom') {
+      const rows = this.#db.prepare('SELECT id FROM files ORDER BY id').all() as { id: ID }[];
+      return rows.map((r) => r.id);
+    }
+    const direction = fileOrder === OrderDirection.Desc ? 'DESC' : 'ASC';
+    const rows = this.#db.prepare(`SELECT id FROM files ORDER BY ${order} ${direction}`).all() as {
+      id: ID;
+    }[];
+    return rows.map((r) => r.id);
   }
 
   async fetchFilesByID(ids: ID[]): Promise<FileDTO[]> {
@@ -537,11 +557,11 @@ export default class SQLiteBackend implements DataStorage {
     const allParams = clauses.flatMap((c) => c.params);
 
     let sql: string;
-    if (order === 'tagCountRandom') {
-      // COUNT(ft.tagId) yields 0 for untagged files; RANDOM() tie-breaks within equal-count buckets
-      sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY COUNT(ft.tagId) ASC, RANDOM()`;
-    } else if (order === 'random') {
-      sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY RANDOM()`;
+    if (order === 'random' || order === 'tagCountRandom') {
+      // Deterministic id order; the seeded "random" ordering (and the
+      // fewest-tags-first ordering for tagCountRandom) is applied client-side
+      // by FileStore — see fetchFiles above.
+      sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY f.id`;
     } else {
       const direction = fileOrder === OrderDirection.Desc ? 'DESC' : 'ASC';
       sql = `${FILE_SELECT} WHERE ${whereFragment} ${FILE_GROUP_BY} ORDER BY f.${order} ${direction}`;
@@ -549,6 +569,40 @@ export default class SQLiteBackend implements DataStorage {
 
     const rows = this.#db.prepare(sql).all(...allParams) as FileRow[];
     return rows.map(fileRowToDTO);
+  }
+
+  /**
+   * Id-projection variant of searchFiles — same WHERE semantics, ids only.
+   * See fetchFileIds for the contract; used by FileStore's progressive path.
+   * The WHERE clauses only reference the files table and EXISTS subqueries,
+   * so no join/GROUP BY is needed except for tag-count ordering (which the
+   * store routes to the one-shot path instead).
+   */
+  async searchFileIds(
+    criteria: ConditionDTO<FileDTO> | [ConditionDTO<FileDTO>, ...ConditionDTO<FileDTO>[]],
+    order: OrderBy<FileDTO>,
+    fileOrder: OrderDirection,
+    matchAny?: boolean,
+  ): Promise<ID[]> {
+    console.info('SQLite: Searching file ids...', { criteria, matchAny });
+    const criteriaArray = Array.isArray(criteria) ? criteria : [criteria];
+    const clauses = criteriaArray.map(buildConditionClause);
+    const conjunction = matchAny ? ' OR ' : ' AND ';
+    const whereFragment = clauses.map((c) => c.sql).join(conjunction);
+    const allParams = clauses.flatMap((c) => c.params);
+
+    let orderFragment: string;
+    if (order === 'random' || order === 'tagCountRandom') {
+      orderFragment = 'ORDER BY f.id';
+    } else {
+      const direction = fileOrder === OrderDirection.Desc ? 'DESC' : 'ASC';
+      orderFragment = `ORDER BY f.${order} ${direction}`;
+    }
+
+    const rows = this.#db
+      .prepare(`SELECT f.id FROM files f WHERE ${whereFragment} ${orderFragment}`)
+      .all(...allParams) as { id: ID }[];
+    return rows.map((r) => r.id);
   }
 
   // -------------------------------------------------------------------------

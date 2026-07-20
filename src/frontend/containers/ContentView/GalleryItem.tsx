@@ -126,7 +126,7 @@ export const Thumbnail = observer(
     galleryVideoPlaybackMode,
     isSlideMode,
   }: ItemProps) => {
-    const { uiStore, imageLoader } = useStore();
+    const { uiStore, imageLoader, fileStore } = useStore();
     const { thumbnailPath, isBroken } = file;
 
     // This will check whether a thumbnail exists, generate it if needed
@@ -176,7 +176,12 @@ export const Thumbnail = observer(
     const handleImageError = useCallback(() => {
       if (fileIdRef.current === fileId) {
         setLoadError(true);
+        // On-demand existence fallback: the regular load path no longer stats
+        // every file, so a failed image load triggers a single-file check that
+        // flags the file missing if it is gone from disk.
+        fileStore.verifyFileExistence(file).catch(() => {});
       }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fileId]);
     useEffect(() => {
       fileIdRef.current = fileId;

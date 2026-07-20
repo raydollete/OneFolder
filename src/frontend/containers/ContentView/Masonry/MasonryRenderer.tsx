@@ -113,16 +113,25 @@ const MasonryRenderer = observer(({ contentRect, select, lastSelectionIndex }: G
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Compute new layout when content changes (new fileList, e.g. sorting, searching)
-  useEffect(() => {
-    if (containerHeight !== undefined && containerWidth > 100) {
-      // todo: could debounce if needed. Or only recompute in increments?
-      console.debug('Masonry: Items changed. Computing new layout!');
-      (async function onItemOrderChange() {
+  // Compute new layout when content changes (new fileList, e.g. sorting, searching).
+  // Debounced (matching the resize path below) so a burst of file-list changes —
+  // watcher batches, progressive-load batch appends — coalesces into one layout
+  // pass. The compute reads fileStore.fileList LIVE at fire time, so the
+  // debounced call always lays out the freshest list. The adapter additionally
+  // sends only changed dimensions across the WASM boundary and skips no-op
+  // recomputes entirely (see MasonryWorkerAdapter/dimensionDiff).
+  const handleContentChange = useRef(
+    (() => {
+      async function onItemOrderChange(
+        containerWidth: number,
+        thumbnailSize: number,
+        viewMethod: SupportedViewMethod,
+      ) {
+        console.debug('Masonry: Items changed. Computing new layout!');
         try {
           const containerHeight = await worker.compute(
             fileStore.fileList,
-            numImages,
+            fileStore.fileList.length,
             containerWidth,
             {
               thumbSize: thumbnailSize,
@@ -135,7 +144,13 @@ const MasonryRenderer = observer(({ contentRect, select, lastSelectionIndex }: G
         } catch (e) {
           console.error(e);
         }
-      })();
+      }
+      return debounce(onItemOrderChange, 150);
+    })(),
+  );
+  useEffect(() => {
+    if (containerHeight !== undefined && containerWidth > 100) {
+      handleContentChange.current(containerWidth, thumbnailSize, viewMethod);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numImages, fileStore.fileListLastModified]);

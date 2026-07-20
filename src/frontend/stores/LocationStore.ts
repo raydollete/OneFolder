@@ -1,7 +1,13 @@
 import { action, makeObservable, observable, runInAction } from 'mobx';
 
 import { getThumbnailPath } from 'common/fs';
-import { promiseAllLimit } from 'common/promise';
+import { promiseAllLimit, yieldToEventLoop } from 'common/promise';
+import { perf } from '../perf';
+import {
+  buildDbFilesByCreatedDate,
+  matchMissingToCreated,
+  matchMissingToDbDuplicates,
+} from './locationReconciliation';
 import { DataStorage } from '../../api/data-storage';
 import { OrderDirection } from '../../api/data-storage-search';
 import { FileDTO, IMG_EXTENSIONS, IMG_EXTENSIONS_TYPE } from '../../api/file';
@@ -22,19 +28,8 @@ function getLocationPrefsKey(prefix?: string): string {
   return prefix ? `${prefix}:location-store-preferences` : 'location-store-preferences';
 }
 
-/**
- * Compares metadata of two files to determine whether the files are (likely to be) identical
- * Note: note comparing size, since it can change, e.g. when writing tags to file metadata.
- *   Could still include it, but just to check whether it's in the same ballpark
- */
-function areFilesIdenticalBesidesName(a: FileDTO, b: FileDTO): boolean {
-  return (
-    a.ino === b.ino ||
-    (a.width === b.width &&
-      a.height === b.height &&
-      a.dateCreated.getTime() === b.dateCreated.getTime())
-  );
-}
+// File-identity matching for reconciliation lives in locationReconciliation.ts
+// (Map-indexed, O(missing + created) instead of nested .find scans).
 
 class LocationStore {
   private readonly backend: DataStorage;
@@ -124,24 +119,38 @@ class LocationStore {
     const len = this.locationList.length;
     const getLocation = action((index: number) => this.locationList[index]);
 
-    // Get all files in the DB, set up data structures for quick lookups
-    // Doing it for all locations, so files moved to another Location on disk, it's properly re-assigned in OneFolder too
-    // TODO: Could be optimized, at startup we already fetch all files, don't need to fetch them again here
-    const dbFiles: FileDTO[] = await this.backend.fetchFiles('id', OrderDirection.Asc);
+    perf.startPhase('reconcile');
+
+    // Get all files in the DB, set up data structures for quick lookups.
+    // Doing it for all locations, so files moved to another Location on disk, it's properly re-assigned in OneFolder too.
+    // The startup fetch already loaded every row — reuse those DTOs instead of
+    // re-fetching the entire library a second time (falls back to a fetch when
+    // the session started on a search view and the cache was never filled).
+    const dbFiles: FileDTO[] =
+      this.rootStore.fileStore.consumeStartupFetchDTOs() ??
+      (await this.backend.fetchFiles('id', OrderDirection.Asc));
     const dbFilesPathSet = new Set(dbFiles.map((f) => f.absolutePath));
-    const dbFilesByCreatedDate = new Map<number, FileDTO[]>();
+    const dbFilesByCreatedDate = buildDbFilesByCreatedDate(dbFiles);
+    // Per-location grouping so the per-location passes below don't rescan the
+    // entire library once per location.
+    const dbFilesByLocation = new Map<ID, FileDTO[]>();
     for (const file of dbFiles) {
-      const time = file.dateCreated.getTime();
-      const entry = dbFilesByCreatedDate.get(time);
-      if (entry) {
+      const entry = dbFilesByLocation.get(file.locationId);
+      if (entry !== undefined) {
         entry.push(file);
       } else {
-        dbFilesByCreatedDate.set(time, [file]);
+        dbFilesByLocation.set(file.locationId, [file]);
       }
     }
 
+    // Files confirmed gone from disk (not renamed/moved/deduped) — becomes the
+    // new missingFileIds truth in FileStore at the end of reconciliation.
+    const stillMissingIds = new Set<ID>();
+
     // For every location, find created/moved/deleted files, and update the database accordingly.
-    // TODO: Do this in a web worker, not in the renderer thread!
+    // The matching passes are Map-indexed (locationReconciliation.ts) and the
+    // loops yield to the event loop in bounded slices, so reconciliation never
+    // parks a long task on the renderer thread while the gallery is interactive.
     for (let i = 0; i < len; i++) {
       const location = getLocation(i);
 
@@ -190,48 +199,30 @@ class LocationStore {
       }
 
       console.log('Finding created files...');
-      // Find all files that have been created (those on disk but not in DB)
+      // Find all files that have been created (those on disk but not in DB).
+      // Metadata extraction per created file is I/O-heavy — bounded to 50
+      // concurrent (formerly an unbounded Promise.all).
       const createdPaths = diskFiles.filter((f) => !dbFilesPathSet.has(f.absolutePath));
-      const createdFiles = await Promise.all(
-        createdPaths.map((path) => pathToIFile(path, location, this.rootStore.imageLoader)),
+      const createdFiles = await promiseAllLimit(
+        createdPaths.map((path) => () => pathToIFile(path, location, this.rootStore.imageLoader)),
+        50,
       );
 
       // Find all files of this location that have been removed (those in DB but not on disk anymore)
-      const missingFiles = dbFiles.filter(
-        (file) => file.locationId === location.id && !diskFileMap.has(file.absolutePath),
+      const locationDbFiles = dbFilesByLocation.get(location.id) ?? [];
+      const missingFiles = locationDbFiles.filter((file) => !diskFileMap.has(file.absolutePath));
+      await yieldToEventLoop();
+
+      // Find matches between removed and created images (different name/path
+      // but same characteristics) — Map-indexed by ino and identity key.
+      const createdMatches = matchMissingToCreated(missingFiles, createdFiles);
+      // Also look for duplicate files: when a file is renamed/moved it will become a new entry, should be de-duplicated
+      const dbMatches = matchMissingToDbDuplicates(
+        missingFiles,
+        createdMatches,
+        dbFilesByCreatedDate,
       );
-
-      // Find matches between removed and created images (different name/path but same characteristics)
-      // TODO: use the ino field on files for this
-      const createdMatches = missingFiles.map((mf) =>
-        createdFiles.find((cf) => areFilesIdenticalBesidesName(cf, mf)),
-      );
-      // Also look for duplicate files: when a files is renamed/moved it will become a new entry, should be de-duplicated
-      const dbMatches = missingFiles.map((missingDbFile, i) => {
-        if (createdMatches[i]) {
-          return false;
-        } // skip missing files that match with a newly created file
-        // Quick lookup for files with same created date,
-        const candidates = dbFilesByCreatedDate.get(missingDbFile.dateCreated.getTime()) || [];
-
-        // then first look for a file with the same name + resolution (for when file is moved to different path)
-        const matchWithName = candidates.find(
-          (otherDbFile) =>
-            missingDbFile !== otherDbFile &&
-            missingDbFile.name === otherDbFile.name &&
-            areFilesIdenticalBesidesName(missingDbFile, otherDbFile),
-        );
-
-        // If no match, try looking without filename in case the file was renamed (prone to errors, but better than nothing)
-        return (
-          matchWithName ||
-          candidates.find(
-            (otherDbFile) =>
-              missingDbFile !== otherDbFile &&
-              areFilesIdenticalBesidesName(missingDbFile, otherDbFile),
-          )
-        );
-      });
+      await yieldToEventLoop();
 
       console.debug({ missingFiles, createdFiles, createdMatches, dbMatches });
 
@@ -291,12 +282,25 @@ class LocationStore {
         await this.backend.createFilesFromPath(location.path, newFiles);
       }
 
+      // Record which missing files were NOT explained as renames/moves — they
+      // are genuinely gone from disk and feed FileStore's missingFileIds.
+      for (let mi = 0; mi < missingFiles.length; mi++) {
+        if (!createdMatches[mi] && !dbMatches[mi]) {
+          stillMissingIds.add(missingFiles[mi].id);
+        }
+      }
+
       // Also update files that have changed, e.g. when overwriting a file (with same filename)
       // --> update metadata (resolution, size) and recreate thumbnail
       // This can be accomplished by comparing the dateLastIndexed of the file in DB to dateModified of the file on disk
+      // (scans only THIS location's rows, in yielded slices — not the whole library per location)
       const updatedFiles: FileDTO[] = [];
       const thumbnailDirectory = runInAction(() => this.rootStore.uiStore.thumbnailDirectory);
-      for (const dbFile of dbFiles) {
+      let scanned = 0;
+      for (const dbFile of locationDbFiles) {
+        if (++scanned % 2000 === 0) {
+          await yieldToEventLoop();
+        }
         const diskFile = diskFileMap.get(dbFile.absolutePath);
         if (
           diskFile &&
@@ -326,6 +330,12 @@ class LocationStore {
 
       foundNewFiles = foundNewFiles || newFiles.length > 0;
     }
+
+    // Publish the reconciled existence truth: materialized files flip their
+    // isBroken flag here, and subsequent fetches derive existence from this
+    // set instead of statting the disk per load.
+    this.rootStore.fileStore.reconcileMissingFiles(stillMissingIds);
+    perf.endPhase('reconcile');
 
     if (foundNewFiles) {
       AppToaster.show({ message: 'New images detected.', timeout: 5000 }, progressToastKey);

@@ -99,7 +99,13 @@ function makeFileDTO(id: string, extension: string): FileDTO {
 
 async function makeFileStore(mockBackend: any, rootStore: any): Promise<any> {
   const { default: FileStore } = await import('../src/frontend/stores/FileStore');
-  return new FileStore(mockBackend, rootStore);
+  const store = new FileStore(mockBackend, rootStore);
+  // Pin a deterministic sort: the default 'random' now applies a session-seeded
+  // client-side shuffle in updateFromBackend, which would scramble the
+  // insertion order the id-array assertions rely on.
+  const { runInAction } = await import('mobx');
+  runInAction(() => ((store as any).orderBy = 'name'));
+  return store;
 }
 
 describe('FileStore media-type upstream gate', () => {

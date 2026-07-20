@@ -25,6 +25,22 @@ export interface DataStorage {
   fetchTags(): Promise<TagDTO[]>;
   fetchFiles(order: OrderBy<FileDTO>, fileOrder: OrderDirection): Promise<FileDTO[]>;
   fetchFilesByID(ids: ID[]): Promise<FileDTO[]>;
+  /**
+   * OPTIONAL id-projection fetch: ids of all files in the requested order.
+   * When implemented (desktop SQLite backend), FileStore materializes views
+   * progressively: cheap id list first, then full rows in bounded batches via
+   * fetchFilesByID, so no single UI-thread task scales with library size.
+   * Backends without it (e.g. the web sidecar's HttpBackend) keep the one-shot
+   * fetchFiles path unchanged — this member is additive for interface parity.
+   */
+  fetchFileIds?(order: OrderBy<FileDTO>, fileOrder: OrderDirection): Promise<ID[]>;
+  /** OPTIONAL id-projection variant of searchFiles — same contract as fetchFileIds. */
+  searchFileIds?(
+    criteria: ConditionDTO<FileDTO> | [ConditionDTO<FileDTO>, ...ConditionDTO<FileDTO>[]],
+    order: OrderBy<FileDTO>,
+    fileOrder: OrderDirection,
+    matchAny?: boolean,
+  ): Promise<ID[]>;
   fetchFilesByKey(key: keyof FileDTO, value: IndexableValue): Promise<FileDTO[]>;
   fetchLocations(): Promise<LocationDTO[]>;
   fetchSearches(): Promise<FileSearchDTO[]>;

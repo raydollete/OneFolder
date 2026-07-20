@@ -1,13 +1,4 @@
-import {
-  action,
-  IReactionDisposer,
-  makeObservable,
-  observable,
-  ObservableSet,
-  reaction,
-  computed,
-  runInAction,
-} from 'mobx';
+import { action, makeObservable, observable, ObservableSet, computed, runInAction } from 'mobx';
 import platform from 'src/frontend/platform';
 
 import { FileDTO, IMG_EXTENSIONS_TYPE } from '../../api/file';
@@ -46,7 +37,6 @@ interface IExtendedMetaData extends IMetaData {
  */
 export class ClientFile {
   private store: FileStore;
-  private saveHandler: IReactionDisposer;
   private autoSave: boolean = true;
   private immediateMetadataSync: boolean = true;
   private exifTool: ExifIO;
@@ -105,22 +95,23 @@ export class ClientFile {
     // string to object
     this.annotations = fileProps.annotations;
 
-    // observe all changes to observable fields
-    this.saveHandler = reaction(
-      // We need to explicitly define which values this reaction should react to
-      () => this.serialize(),
-      // Then update the entity in the database
-      (file) => {
-        // Remove reactive properties, since observable props are not accepted in the backend
-        if (this.autoSave) {
-          console.log('🌱', file);
-          this.store.save(file);
-        }
-      },
-      { delay: 500 },
-    );
+    // Auto-save is centralized: mutation methods call markDirty(), which
+    // registers this file in FileStore's dirty set; one debounced flusher
+    // serializes only dirty files. This replaces the former per-file MobX
+    // reaction on serialize() — N files no longer means N live reactions
+    // (see openspec/changes/optimize-large-library-performance).
 
     makeObservable(this);
+  }
+
+  /** Whether centralized auto-save may persist this file (disabled for broken/disposed files). */
+  get isAutoSaveEnabled(): boolean {
+    return this.autoSave;
+  }
+
+  /** Registers this file with the store's central debounced auto-save flusher. */
+  private markDirty(): void {
+    this.store.markFileDirty(this);
   }
 
   @computed get getAnnotations(): string {
@@ -135,6 +126,7 @@ export class ClientFile {
     const hasTag = this.tags.has(tag);
     if (!hasTag) {
       this.tags.add(tag);
+      this.markDirty();
 
       // Write tags to file metadata with debouncing (unless disabled for bulk operations)
       if (this.immediateMetadataSync) {
@@ -152,6 +144,7 @@ export class ClientFile {
   @action.bound removeTag(tag: ClientTag): void {
     const hadTag = this.tags.delete(tag);
     if (hadTag) {
+      this.markDirty();
       // Write updated tags to file metadata with debouncing (unless disabled for bulk operations)
       if (this.immediateMetadataSync) {
         this.scheduleMetadataWrite();
@@ -235,6 +228,7 @@ export class ClientFile {
       this.store.incrementNumUntaggedFiles();
       this.tags.forEach((tag) => tag.decrementFileCount());
       this.tags.clear();
+      this.markDirty();
     }
   }
 
@@ -249,6 +243,9 @@ export class ClientFile {
 
   @action.bound updateTagsFromBackend(tags: ClientTag[]): void {
     this.tags.replace(tags);
+    // Parity with the former serialize()-reaction, which also fired on
+    // backend-sourced tag updates: keep persisting them.
+    this.markDirty();
   }
 
   serialize(): FileDTO {
@@ -273,9 +270,9 @@ export class ClientFile {
   }
 
   dispose(): void {
+    // No per-file reaction to dispose anymore; disabling autoSave makes the
+    // central flusher skip this instance if it is still in the dirty set.
     this.autoSave = false;
-    // clean up the observer
-    this.saveHandler();
   }
 
   // FACES

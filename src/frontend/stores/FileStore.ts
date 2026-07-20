@@ -10,8 +10,15 @@ import {
 
 import { getThumbnailPath, mediaTypeMatches } from 'common/fs';
 import { IS_DEV } from 'common/process';
-import { promiseAllLimit } from 'common/promise';
+import { promiseAllLimit, yieldToEventLoop } from 'common/promise';
 import { debounce } from 'common/timeout';
+import { perf } from '../perf';
+import {
+  newSeed,
+  orderBySeededRank,
+  orderByTagCountSeeded,
+  orderIdsBySeededRank,
+} from './seededShuffle';
 import { DataStorage } from '../../api/data-storage';
 import { ConditionDTO, OrderBy, OrderDirection } from '../../api/data-storage-search';
 import { FileDTO, IMG_EXTENSIONS_TYPE } from '../../api/file';
@@ -105,6 +112,41 @@ class FileStore {
   /** The library-scoped localStorage key prefix. Empty string = legacy global behaviour. */
   readonly storageKeyPrefix: string;
 
+  /**
+   * Session-stable seed for the "random" sort modes. The seeded per-file rank
+   * (seededShuffle.ts) replaces SQL `ORDER BY RANDOM()`: refetches within a
+   * session keep every file's position; a fresh shuffle happens only when the
+   * user explicitly re-selects a random ordering (orderFilesBy reseeds) or on
+   * a new session (construction).
+   */
+  private randomSeed = newSeed();
+
+  /**
+   * Ids of files known to be missing on disk. THE existence source for the
+   * load path: fetches no longer stat every file (the per-load pathExists
+   * sweep is gone). Populated by watcher reconciliation (LocationStore.
+   * watchLocations → reconcileMissingFiles), runtime unlink events (hideFile),
+   * the Missing-files audit view, and on-demand load-failure checks
+   * (verifyFileExistence).
+   */
+  private readonly missingFileIds = new Set<ID>();
+
+  /**
+   * Files with unsaved observable changes (tags/annotations). Mutation methods
+   * on ClientFile call markFileDirty(); one debounced flusher serializes only
+   * dirty files — replacing the former one-reaction-per-file auto-save.
+   */
+  private readonly dirtyFiles = new Set<ClientFile>();
+  private readonly debouncedFlushDirtyFiles: () => void;
+
+  /**
+   * Raw DTOs of the startup full fetch, retained once so watchLocations can
+   * reconcile against them instead of re-fetching the entire library a second
+   * time. Consumed (and cleared) by consumeStartupFetchDTOs().
+   */
+  private cachedStartupDTOs: FileDTO[] | undefined = undefined;
+  private startupCacheArmed = true;
+
   constructor(backend: DataStorage, rootStore: RootStore, storageKeyPrefix = '') {
     this.backend = backend;
     this.rootStore = rootStore;
@@ -113,7 +155,21 @@ class FileStore {
 
     this.debouncedRefetch = debounce(this.refetch, 200).bind(this);
     this.debouncedSaveFilesToSave = debounce(this.saveFilesToSave, 100).bind(this);
+    // Same 500 ms envelope as the former per-file reaction's { delay: 500 }.
+    this.debouncedFlushDirtyFiles = debounce(this.flushDirtyFiles, 500).bind(this);
+
+    // Pending edits must never be lost on quit: flush the dirty set and the
+    // save queue synchronously on unload (better-sqlite3 writes execute
+    // synchronously under the async facade, so this completes on desktop).
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', this.handleBeforeUnload);
+    }
   }
+
+  private handleBeforeUnload = (): void => {
+    this.flushDirtyFiles();
+    void this.saveFilesToSave();
+  };
 
   /**
    * Wire up reactions that read OTHER stores on the root store.
@@ -615,6 +671,11 @@ class FileStore {
   }
 
   @action.bound orderFilesBy(prop: OrderBy<FileDTO> = 'random'): void {
+    if (prop === 'random' || prop === 'tagCountRandom') {
+      // Explicit (re-)selection of a random ordering is the one trigger for a
+      // fresh shuffle; refetches keep the session-stable seed (see randomSeed).
+      this.randomSeed = newSeed();
+    }
     this.setOrderBy(prop);
     this.refetch();
   }
@@ -669,6 +730,9 @@ class FileStore {
    */
   @action.bound hideFile(file: ClientFile): void {
     file.setBroken(true);
+    // Keep the existence source of truth current: the load path derives
+    // isBroken from missingFileIds instead of statting the disk per load.
+    this.missingFileIds.add(file.id);
     this.rootStore.uiStore.deselectFile(file);
     this.incrementNumMissingFiles();
     if (file.tags.size === 0) {
@@ -734,13 +798,37 @@ class FileStore {
     const oldFirstItemId: ID | undefined =
       oldFirstItem < oldFileList.length ? oldFileList[oldFirstItem].id : undefined;
 
+    // Record the smallest removed index and the removed files' contributions
+    // to the counters BEFORE mutating, for incremental derived-state updates.
+    let minRemovedIndex = this.fileList.length;
+    let removedMissing = 0;
+    let removedUntagged = 0;
+    const removedIds = new Set<ID>();
+    for (const f of files) {
+      const idx = this.index.get(f.id);
+      if (idx !== undefined) {
+        removedIds.add(f.id);
+        minRemovedIndex = Math.min(minRemovedIndex, idx);
+        if (f.isBroken) {
+          removedMissing++;
+        } else if (f.tags.size === 0) {
+          removedUntagged++;
+        }
+      }
+    }
+
     // Splice: for small batches use per-item remove (O(n*k)); for larger
-    // batches use a bulk replace to avoid quadratic blowup.
+    // batches rebuild via clear() + push(...survivors).
+    // POLICY (unified with updateFromBackend): observableArray.replace() is
+    // banned for large arrays until MobX #3189 is verified fixed on the pinned
+    // MobX 6.x — clear+push is the one blessed large-list mutation everywhere
+    // (this site previously used replace() while the load path banned it).
     let actualRemovals = 0;
     if (ids.size > 50) {
       const survivors = this.fileList.filter((f) => !ids.has(f.id));
       actualRemovals = this.fileList.length - survivors.length;
-      this.fileList.replace(survivors);
+      this.fileList.clear();
+      this.fileList.push(...survivors);
     } else {
       for (let i = this.fileList.length - 1; i >= 0; i--) {
         const f = this.fileList[i];
@@ -751,14 +839,31 @@ class FileStore {
       }
     }
 
-    // Rebuild index, numUntaggedFiles, numMissingFiles from the new fileList.
-    // updateFileListState() is the canonical writer of numUntaggedFiles, so we
-    // must call it rather than manually decrement to avoid invariant drift.
-    this.updateFileListState();
+    // Incremental derived-state update: index entries before the first removed
+    // position are untouched; only the shifted tail is rewritten. A full
+    // updateFileListState() pass over the entire list per delete is exactly
+    // the O(N)-per-mutation cost this replaces. Counters move by the removed
+    // files' contributions (note: unlike the former full recount, a delete no
+    // longer zeroes the hidden-missing tally when hide-missing is active).
+    for (const id of removedIds) {
+      this.index.delete(id);
+    }
+    for (let i = minRemovedIndex; i < this.fileList.length; i++) {
+      this.index.set(this.fileList[i].id, i);
+    }
+    this.numMissingFiles = Math.max(0, this.numMissingFiles - removedMissing);
+    if (this.showsAllContent) {
+      this.numUntaggedFiles = Math.max(0, this.numUntaggedFiles - removedUntagged);
+    } else if (this.showsUntaggedContent) {
+      this.numUntaggedFiles = this.fileList.length;
+    }
 
     // Decrement the DB-total counter by the number of entries that were actually
     // present in fileList (the caller may pass files that were already hidden as
-    // broken; only count entries that were genuinely spliced out).
+    // broken; only count entries that were genuinely spliced out). The former
+    // updateFileListState() call first reset numTotalFiles to the post-splice
+    // list length, making this a double subtraction in the All view — the
+    // incremental path subtracts exactly once.
     this.numTotalFiles = Math.max(0, this.numTotalFiles - actualRemovals);
 
     // Signal that the list has changed so downstream effects re-trigger
@@ -1000,7 +1105,21 @@ class FileStore {
       // Capture generation AFTER the content flip, BEFORE the await, so that any
       // fetcher dispatched later gets a strictly larger generation. See INV-009.
       const gen = this.nextFetchGeneration();
+      if (this.canFetchProgressively()) {
+        return this.runProgressiveFetch(
+          () =>
+            // Existence of fetchFileIds is what canFetchProgressively() checked.
+            this.backend.fetchFileIds!(this.orderBy, this.orderDirection),
+          gen,
+        );
+      }
+      perf.startPhase('fetch');
       const fetchedFiles = await this.backend.fetchFiles(this.orderBy, this.orderDirection);
+      perf.endPhase('fetch');
+      if (this.startupCacheArmed) {
+        this.cachedStartupDTOs = fetchedFiles;
+        this.startupCacheArmed = false;
+      }
       return this.updateFromBackend(fetchedFiles, gen);
     } catch (err) {
       console.error('Could not load all files', err);
@@ -1030,6 +1149,18 @@ class FileStore {
       this.setContentUntagged();
       // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
       const gen = this.nextFetchGeneration();
+      if (this.canFetchProgressively() && typeof this.backend.searchFileIds === 'function') {
+        return this.runProgressiveFetch(
+          () =>
+            this.backend.searchFileIds!(
+              criteria.toCondition(this.rootStore),
+              this.orderBy,
+              this.orderDirection,
+              uiStore.searchMatchAny,
+            ),
+          gen,
+        );
+      }
       const fetchedFiles = await this.backend.searchFiles(
         criteria.toCondition(this.rootStore),
         this.orderBy,
@@ -1055,9 +1186,13 @@ class FileStore {
       // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
       const gen = this.nextFetchGeneration();
 
-      // Fetch all files, then check their existence and only show the missing ones
-      // Similar to {@link updateFromBackend}, but the existence check needs to be awaited before we can show the images
-      const backendFiles = await this.backend.fetchFiles(orderBy, orderDirection);
+      // Fetch all files, then check their existence and only show the missing ones.
+      // This full existence sweep is deliberate here — the Missing view IS the
+      // existence audit (an explicit user action), unlike the regular load
+      // path which derives existence from missingFileIds without disk I/O.
+      const backendFiles = this.applyClientOrder(
+        await this.backend.fetchFiles(orderBy, orderDirection),
+      );
 
       // For every new file coming in, either re-use the existing client file if it exists,
       // or construct a new client file
@@ -1072,14 +1207,22 @@ class FileStore {
         }
       });
 
-      // We don't store whether files are missing (since they might change at any time)
-      // So we have to check all files and check their existence them here
+      // The audit stats every file, then refreshes the missingFileIds source
+      // of truth so subsequent regular loads inherit the verified state.
+      perf.startPhase('existence');
       const existenceCheckPromises = newClientFiles.map((clientFile) => async () => {
-        clientFile.setBroken(!(await platform.fs.pathExists(clientFile.absolutePath)));
+        const exists = await platform.fs.pathExists(clientFile.absolutePath);
+        clientFile.setBroken(!exists);
+        if (exists) {
+          this.missingFileIds.delete(clientFile.id);
+        } else {
+          this.missingFileIds.add(clientFile.id);
+        }
       });
 
-      const N = 50; // TODO: same here as in fetchFromBackend: number of concurrent checks should be system dependent
+      const N = 50;
       await promiseAllLimit(existenceCheckPromises, N);
+      perf.endPhase('existence');
 
       runInAction(() => {
         // Guard: if a newer fetcher has dispatched during the existence-check batch,
@@ -1099,7 +1242,9 @@ class FileStore {
           curFirst >= 0 && curFirst < this.fileList.length ? this.fileList[curFirst].id : undefined;
 
         const missingClientFiles = newClientFiles.filter((file) => file.isBroken);
-        this.fileList.replace(missingClientFiles);
+        // Unified large-list mutation policy (see removeFilesFromListInPlace).
+        this.fileList.clear();
+        this.fileList.push(...missingClientFiles);
         this.numMissingFiles = missingClientFiles.length;
         this.index.clear();
         for (let index = 0; index < this.fileList.length; index++) {
@@ -1148,6 +1293,18 @@ class FileStore {
       this.setContentQuery();
       // Capture generation AFTER the content flip, BEFORE the await. See INV-009.
       const gen = this.nextFetchGeneration();
+      if (this.canFetchProgressively() && typeof this.backend.searchFileIds === 'function') {
+        return this.runProgressiveFetch(
+          () =>
+            this.backend.searchFileIds!(
+              criterias as [ConditionDTO<FileDTO>, ...ConditionDTO<FileDTO>[]],
+              this.orderBy,
+              this.orderDirection,
+              uiStore.searchMatchAny,
+            ),
+          gen,
+        );
+      }
       const fetchedFiles = await this.backend.searchFiles(
         criterias as [ConditionDTO<FileDTO>, ...ConditionDTO<FileDTO>[]],
         this.orderBy,
@@ -1271,6 +1428,118 @@ class FileStore {
   private async saveFilesToSave() {
     await this.backend.saveFiles(Array.from(this.filesToSave.values()));
     this.filesToSave.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // Centralized auto-save (replaces the per-ClientFile serialize() reaction)
+  // -------------------------------------------------------------------------
+
+  /** Called by ClientFile mutation methods; schedules the debounced flush. */
+  markFileDirty(file: ClientFile): void {
+    this.dirtyFiles.add(file);
+    this.debouncedFlushDirtyFiles();
+  }
+
+  /**
+   * Serializes and saves every dirty file (skipping files whose auto-save is
+   * disabled — broken or disposed), then clears the dirty set. Runs debounced
+   * (500 ms) after edits, and synchronously on beforeunload so pending edits
+   * are never lost on quit.
+   */
+  flushDirtyFiles(): void {
+    if (this.dirtyFiles.size === 0) {
+      return;
+    }
+    for (const file of this.dirtyFiles) {
+      if (file.isAutoSaveEnabled) {
+        this.save(file.serialize());
+      }
+    }
+    this.dirtyFiles.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // File-existence state (replaces the per-load pathExists sweep)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Wholesale reconciliation from watchLocations' full disk-vs-DB pass: the
+   * given set becomes the new missing-file truth. Materialized files flip
+   * their isBroken flag accordingly, and derived counters refresh once.
+   */
+  @action reconcileMissingFiles(missingIds: ReadonlySet<ID>): void {
+    for (const id of this.missingFileIds) {
+      if (!missingIds.has(id)) {
+        const file = this.get(id);
+        if (file !== undefined && file.isBroken === true) {
+          file.setBroken(false);
+        }
+      }
+    }
+    this.missingFileIds.clear();
+    for (const id of missingIds) {
+      this.missingFileIds.add(id);
+      const file = this.get(id);
+      if (file !== undefined && file.isBroken !== true) {
+        file.setBroken(true);
+      }
+    }
+    // One full derived-state pass at reconciliation end (not per file).
+    this.updateFileListState();
+    this.fileListLastModified = new Date();
+  }
+
+  /**
+   * On-demand existence fallback: called when an image/thumbnail fails to
+   * load. Stats just that one file and updates its missing state — the load
+   * path itself never sweeps the disk (see missingFileIds).
+   */
+  async verifyFileExistence(file: ClientFile): Promise<void> {
+    perf.startPhase('existence');
+    const exists = await platform.fs.pathExists(file.absolutePath);
+    perf.endPhase('existence');
+    runInAction(() => {
+      if (!exists) {
+        if (!this.missingFileIds.has(file.id)) {
+          this.missingFileIds.add(file.id);
+          if (file.isBroken !== true) {
+            file.setBroken(true);
+            this.incrementNumMissingFiles();
+          }
+        }
+      } else {
+        this.missingFileIds.delete(file.id);
+        if (file.isBroken === true) {
+          file.setBroken(false);
+        }
+      }
+    });
+  }
+
+  /**
+   * Hands the raw startup fetch DTOs to watchLocations (once) so startup
+   * reconciliation does not re-fetch the entire library. Returns undefined if
+   * the cache was never armed/filled (e.g. session started on a search view).
+   */
+  consumeStartupFetchDTOs(): FileDTO[] | undefined {
+    const dtos = this.cachedStartupDTOs;
+    this.cachedStartupDTOs = undefined;
+    return dtos;
+  }
+
+  // -------------------------------------------------------------------------
+  // Client-side seeded ordering (replaces SQL ORDER BY RANDOM())
+  // -------------------------------------------------------------------------
+
+  /** Applies the session-stable seeded ordering for the random sort modes. */
+  private applyClientOrder(files: FileDTO[]): FileDTO[] {
+    if (this.orderBy === 'random') {
+      return orderBySeededRank(files, this.randomSeed);
+    }
+    if (this.orderBy === 'tagCountRandom') {
+      return orderByTagCountSeeded(files, this.randomSeed);
+    }
+    return files;
   }
 
   /**
@@ -1642,6 +1911,11 @@ class FileStore {
       return this.clearFileList();
     }
 
+    // Session-stable seeded ordering for the random sort modes (the backend
+    // returns deterministic id order; the shuffle is client-side, see
+    // seededShuffle.ts).
+    backendFiles = this.applyClientOrder(backendFiles);
+
     // Filter out images with hidden tags
     // TODO: could also do it in search query, this is simpler though (maybe also more performant)
     const hiddenTagIds = new Set(
@@ -1669,9 +1943,10 @@ class FileStore {
 
     // For every new file coming in, either re-use the existing client file if it exists,
     // or construct a new client file
+    perf.startPhase('materialize');
     const [newClientFiles, reusedStatus] = this.filesFromBackend(backendFiles);
 
-    // Dispose of Client files that are not re-used (to get rid of MobX observers).
+    // Dispose of Client files that are not re-used.
     // Capture the file the viewer is currently anchored to (firstItem) BEFORE fileList is replaced,
     // so we can re-point firstItem to it by IDENTITY after the rebuild. Without this, ANY refetch
     // leaves firstItem at a now-stale index so SlideMode jumps to an unrelated file. The delete path
@@ -1688,109 +1963,208 @@ class FileStore {
       }
     }
 
-    // Check existence of new files asynchronously, no need to wait until they can be shown
-    // we can simply check whether they exist after they start rendering
-    // TODO: We can already get this from chokidar (folder watching), pretty much for free
-    const existenceCheckPromises = newClientFiles.map((clientFile) => async () => {
-      clientFile.setBroken(!(await platform.fs.pathExists(clientFile.absolutePath)));
-    });
-
-    // Run the existence check with at most N checks in parallel
-    // TODO: Should make N configurable, or determine based on the system/disk performance
-    // NOTE: This is _not_ await intentionally, since we want to show the files to the user as soon as possible
-
+    // Existence derives from missingFileIds (watcher reconciliation + unlink
+    // events + on-demand load-failure checks) — the former per-load
+    // one-pathExists-per-file sweep is gone, which also removes the async
+    // second-pass window it required (INV-028's splice race and INV-009's
+    // 'async' drop phase for this path with it). Everything commits in ONE
+    // synchronous transaction now.
     // Use transaction to batch all file list updates into a single reaction
     // This prevents MobX reaction storm when updating large file lists (57k+ files)
     transaction(() => {
-      // TODO: restores this line later, currently broken for large lists, see https://github.com/mobxjs/mobx/pull/3189 (look ma, I'm contributing to open source!)
-      // this.fileList.replace(newClientFiles);
+      // Count broken files BEFORE the hide filter so the Outliner badge stays
+      // accurate regardless of whether they are kept out of fileList.
+      let brokenCount = 0;
+      for (const clientFile of newClientFiles) {
+        clientFile.setBroken(this.missingFileIds.has(clientFile.id));
+        if (clientFile.isBroken === true) {
+          brokenCount++;
+        }
+      }
+
+      const shouldHide =
+        this.rootStore.uiStore.hideMissingFilesInBrowsing && !this.showsMissingContent;
+      const visibleFiles =
+        shouldHide && brokenCount > 0
+          ? newClientFiles.filter((f) => f.isBroken !== true)
+          : newClientFiles;
+
+      // Unified large-list mutation policy: clear() + push(...) — see the
+      // fileList.replace() policy note on removeFilesFromListInPlace.
       this.fileList.clear();
-      this.fileList.push(...newClientFiles);
+      this.fileList.push(...visibleFiles);
 
       this.cleanFileSelection();
       this.updateFileListState(); // update index & untagged image counter
       // Re-anchor firstItem to the viewed file by identity so a refetch never jumps the viewer.
       this.reconcileFirstItemTo(anchorFileId);
       this.fileListLastModified = new Date();
+
+      // updateFileListState derives numMissingFiles from fileList; when broken
+      // files are hidden the count would be 0. Override with the pre-filter
+      // tally so the Outliner warning badge remains accurate.
+      this.numMissingFiles = brokenCount;
+
+      // updateFileListState also sets numTotalFiles = fileList.length when showing
+      // All content. After the broken-file hide or the upstream media-type gate,
+      // fileList is smaller than the DB total, so the Outliner "All Images" badge would
+      // show the visible count rather than the true library size. Override with the
+      // pre-gate fetched count (post-hidden-tags, pre-media-filter) so the badge stays
+      // accurate even when files are hidden by either display filter.
+      if (this.showsAllContent && ((shouldHide && brokenCount > 0) || mediaFilterActive)) {
+        this.numTotalFiles = preGateFetchedCount;
+      }
     });
-    const N = 50;
-    return promiseAllLimit(existenceCheckPromises, N)
-      .then(() => {
-        // Guard (async second-pass): the existence-check batch can take 50–500 ms.
-        // A newer fetcher may have dispatched during that window — discard stale results.
-        // The captured `generation` is the same value passed into updateFromBackend;
-        // this guard uses closure capture. See INV-009.
-        if (generation !== this.fetchGeneration) {
-          this.logStaleDrop('async', generation);
-          return;
+    perf.endPhase('materialize');
+  }
+
+  /**
+   * Progressive view load (desktop backends implementing the id-projection
+   * methods): fetches the cheap ordered id list first, then materializes full
+   * rows in bounded batches that yield to the event loop between chunks — the
+   * gallery is interactive after the first batch and no single UI-thread task
+   * scales with library size. Backends without fetchFileIds (HttpBackend/web
+   * sidecar, test mocks) use the one-shot updateFromBackend path unchanged.
+   *
+   * tagCountRandom is routed to the one-shot path (its ordering needs tag
+   * counts, which the id projection does not carry).
+   */
+  private canFetchProgressively(): boolean {
+    return typeof this.backend.fetchFileIds === 'function' && this.orderBy !== 'tagCountRandom';
+  }
+
+  private static readonly PROGRESSIVE_CHUNK_SIZE = 800;
+
+  @action private async runProgressiveFetch(
+    fetchIds: () => Promise<ID[]>,
+    generation: number,
+  ): Promise<void> {
+    perf.startPhase('fetch');
+    let ids = await fetchIds();
+    perf.endPhase('fetch');
+    if (generation !== this.fetchGeneration) {
+      this.logStaleDrop('sync', generation);
+      return;
+    }
+    if (this.orderBy === 'random') {
+      ids = orderIdsBySeededRank(ids, this.randomSeed);
+    }
+    if (ids.length === 0) {
+      runInAction(() => {
+        this.rootStore.uiStore.clearFileSelection();
+        this.fileListLastModified = new Date();
+        this.clearFileList();
+      });
+      return;
+    }
+
+    // Anchor the viewer by identity across the rebuild (same as updateFromBackend).
+    const anchorFirstItem = this.rootStore.uiStore.firstItem;
+    const anchorFileId =
+      anchorFirstItem >= 0 && anchorFirstItem < this.fileList.length
+        ? this.fileList[anchorFirstItem].id
+        : undefined;
+
+    // Snapshot the old list for instance reuse (pooling) and later disposal —
+    // the observable list itself is cleared when the first batch commits.
+    const oldById = new Map<ID, ClientFile>(this.fileList.map((f) => [f.id, f]));
+    const reusedIds = new Set<ID>();
+
+    const hiddenTagIds = new Set(
+      this.rootStore.tagStore.tagList.filter((t) => t.isHidden).map((t) => t.id),
+    );
+    const mediaFilter = this.rootStore.uiStore.mediaTypeFilter;
+    const mediaFilterActive =
+      (mediaFilter === 'images' || mediaFilter === 'video') && !this.showsMissingContent;
+    const shouldHide =
+      this.rootStore.uiStore.hideMissingFilesInBrowsing && !this.showsMissingContent;
+
+    const startupCache: FileDTO[] | null = this.startupCacheArmed ? [] : null;
+    let preGateFetchedCount = 0;
+    let brokenCount = 0;
+    let committedFirstBatch = false;
+
+    for (let offset = 0; offset < ids.length; offset += FileStore.PROGRESSIVE_CHUNK_SIZE) {
+      const chunkIds = ids.slice(offset, offset + FileStore.PROGRESSIVE_CHUNK_SIZE);
+      perf.startPhase('fetch');
+      const rows = await this.backend.fetchFilesByID(chunkIds);
+      perf.endPhase('fetch');
+      if (generation !== this.fetchGeneration) {
+        this.logStaleDrop('async', generation);
+        return;
+      }
+
+      // IN-clause results are unordered; restore the requested order.
+      const rowById = new Map(rows.map((r) => [r.id, r]));
+      const orderedRows: FileDTO[] = [];
+      for (const id of chunkIds) {
+        const row = rowById.get(id);
+        if (row !== undefined) {
+          orderedRows.push(row);
         }
+      }
+      startupCache?.push(...orderedRows);
 
-        transaction(() => {
-          // Count broken files BEFORE filtering so the Outliner badge stays accurate
-          // regardless of whether we're about to splice them out of fileList.
-          const brokenCount = newClientFiles.reduce((n, f) => n + (f.isBroken ? 1 : 0), 0);
+      let dtos = orderedRows.filter((f) => !f.tags.some((t) => hiddenTagIds.has(t)));
+      preGateFetchedCount += dtos.length;
+      if (mediaFilterActive) {
+        dtos = dtos.filter((f) => mediaTypeMatches(mediaFilter, f.extension));
+      }
 
-          const shouldHide =
-            this.rootStore.uiStore.hideMissingFilesInBrowsing && !this.showsMissingContent;
-
-          // Track whether either splice block actually changed fileList. Re-anchoring firstItem
-          // is only needed when the list structure changed; if nothing was spliced, the sync
-          // first-pass already anchored correctly and any subsequent movement is the user's
-          // own scroll (overwriting it with a stale start-of-fetch snapshot causes the snap-back
-          // reported in INV-028). See: docs/TOOLS.md §6.
-          let splicedList = false;
-
-          if (shouldHide && brokenCount > 0) {
-            // Replace fileList with only the visible (non-broken) files.
-            const visible = newClientFiles.filter((f) => !f.isBroken);
-            this.fileList.clear();
-            this.fileList.push(...visible);
-            // Drop any stale selection references to broken files that were just removed.
-            this.cleanFileSelection();
-            this.fileListLastModified = new Date();
-            splicedList = true;
+      perf.startPhase('materialize');
+      const [chunkClientFiles, chunkReused] = this.filesFromBackend(dtos, (id) => oldById.get(id));
+      for (const id of chunkReused) {
+        reusedIds.add(id);
+      }
+      transaction(() => {
+        if (!committedFirstBatch) {
+          this.fileList.clear();
+          this.index.clear();
+          committedFirstBatch = true;
+        }
+        for (const clientFile of chunkClientFiles) {
+          clientFile.setBroken(this.missingFileIds.has(clientFile.id));
+          if (clientFile.isBroken === true) {
+            brokenCount++;
+            if (shouldHide) {
+              continue;
+            }
           }
+          this.index.set(clientFile.id, this.fileList.length);
+          this.fileList.push(clientFile);
+        }
+        // Bump per batch so the (debounced) layout picks up the growing list.
+        this.fileListLastModified = new Date();
+      });
+      perf.endPhase('materialize');
 
-          // NOTE: the media-type display filter is no longer applied here. It runs upstream on the
-          // raw FileDTO[] (before filesFromBackend), so media-filtered files never became ClientFiles
-          // and are already absent from newClientFiles/fileList. cleanFileSelection() in the main
-          // transaction already dropped any hidden-media files from the selection.
+      await yieldToEventLoop();
+      if (generation !== this.fetchGeneration) {
+        this.logStaleDrop('async', generation);
+        return;
+      }
+    }
 
-          // Rebuild the index, numUntaggedFiles, and numTotalFiles from whatever
-          // fileList looks like now (possibly filtered above).
-          this.updateFileListState();
-          // When a splice changed the list structure, re-anchor firstItem by identity.
-          // IMPORTANT: read uiStore.firstItem LIVE at this moment (not the stale start-of-fetch
-          // snapshot anchorFileId captured before the await) so the user's scroll during the
-          // existence-check window is honoured. When no splice occurred, leave firstItem untouched —
-          // the sync first-pass already anchored correctly. See INV-028, docs/TOOLS.md §6.
-          if (splicedList) {
-            const { uiStore } = this.rootStore;
-            const curFirst = uiStore.firstItem;
-            const liveAnchorId =
-              curFirst >= 0 && curFirst < this.fileList.length
-                ? this.fileList[curFirst].id
-                : undefined;
-            this.reconcileFirstItemTo(liveAnchorId);
-          }
-
-          // updateFileListState derives numMissingFiles from fileList; after the splice
-          // fileList has no broken entries so the count becomes 0. Override it with the
-          // pre-filter tally so the Outliner warning badge remains accurate.
-          this.numMissingFiles = brokenCount;
-
-          // updateFileListState also sets numTotalFiles = fileList.length when showing
-          // All content. After the broken-file splice or the upstream media-type gate,
-          // fileList is smaller than the DB total, so the Outliner "All Images" badge would
-          // show the visible count rather than the true library size. Override with the
-          // pre-gate fetched count (post-hidden-tags, pre-media-filter) so the badge stays
-          // accurate even when files are hidden by either display filter.
-          if (this.showsAllContent && ((shouldHide && brokenCount > 0) || mediaFilterActive)) {
-            this.numTotalFiles = preGateFetchedCount;
-          }
-        });
-      })
-      .catch((e) => console.error('An error occurred during existence checking!', e));
+    // Completion: dispose replaced instances, run the derived-state passes ONCE.
+    for (const [id, oldFile] of oldById) {
+      if (!reusedIds.has(id)) {
+        oldFile.dispose();
+      }
+    }
+    transaction(() => {
+      this.updateFileListState();
+      this.cleanFileSelection();
+      this.reconcileFirstItemTo(anchorFileId);
+      this.numMissingFiles = brokenCount;
+      if (this.showsAllContent && ((shouldHide && brokenCount > 0) || mediaFilterActive)) {
+        this.numTotalFiles = preGateFetchedCount;
+      }
+      this.fileListLastModified = new Date();
+    });
+    if (startupCache !== null) {
+      this.cachedStartupDTOs = startupCache;
+      this.startupCacheArmed = false;
+    }
   }
 
   /** Remove files from selection that are not in the file list anymore */
@@ -1838,16 +2212,23 @@ class FileStore {
   }
 
   /**
-   *
    * @param backendFiles
+   * @param reuseFrom Optional instance lookup overriding the default
+   *   fileList/index lookup — the progressive fetch path passes a snapshot of
+   *   the pre-fetch list here, since the live list is cleared when the first
+   *   batch commits (instance pooling across refetches).
    * @returns A list of Client files, and a set of keys that was reused from the existing fileList
    */
-  @action private filesFromBackend(backendFiles: FileDTO[]): [ClientFile[], Set<ID>] {
+  @action private filesFromBackend(
+    backendFiles: FileDTO[],
+    reuseFrom?: (id: ID) => ClientFile | undefined,
+  ): [ClientFile[], Set<ID>] {
     const reusedStatus = new Set<ID>();
+    const lookup = reuseFrom ?? ((id: ID) => this.get(id));
 
     const clientFiles = backendFiles.map((f) => {
       // Might already exist!
-      const existingFile = this.get(f.id);
+      const existingFile = lookup(f.id);
       if (existingFile !== undefined) {
         reusedStatus.add(existingFile.id);
         // Update tags (might have changes, e.g. removed/merged)

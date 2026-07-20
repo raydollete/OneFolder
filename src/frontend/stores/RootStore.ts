@@ -134,28 +134,34 @@ class RootStore {
           };
 
     // Load the files already in the database so user instantly sees their images
-    fileStoreInit().then(() => {
-      rootStore.tagStore.initializeFileCounts(rootStore.fileStore.fileList);
+    fileStoreInit()
+      .then(() => {
+        rootStore.tagStore.initializeFileCounts(rootStore.fileStore.fileList);
 
-      // Ensure untagged count is correct after all initialization
-      // This fixes any race conditions between database counts and memory calculations
-      if (rootStore.fileStore.showsAllContent) {
-        rootStore.fileStore.updateFileListState();
-      }
+        // Ensure untagged count is correct after all initialization
+        // This fixes any race conditions between database counts and memory calculations
+        if (rootStore.fileStore.showsAllContent) {
+          rootStore.fileStore.updateFileListState();
+        }
 
-      // If slide mode was recovered from previous session, it's disabled by setContentQuery :/
-      // hacky workaround
-      if (isSlideMode) {
-        rootStore.uiStore.enableSlideMode();
-      }
-    });
-
-    // Then, look for any new or removed images, and refetch if necessary
-    rootStore.locationStore.watchLocations().then((foundNewFiles) => {
-      if (foundNewFiles) {
-        rootStore.fileStore.refetch();
-      }
-    });
+        // If slide mode was recovered from previous session, it's disabled by setContentQuery :/
+        // hacky workaround
+        if (isSlideMode) {
+          rootStore.uiStore.enableSlideMode();
+        }
+      })
+      // Then, look for any new or removed images, and refetch if necessary.
+      // Sequenced AFTER the initial fetch (formerly dispatched concurrently) so
+      // reconciliation can reuse the startup fetch's DTOs instead of issuing a
+      // second full-library fetch, and so its work never competes with the
+      // initial view for the renderer thread.
+      .then(() => rootStore.locationStore.watchLocations())
+      .then((foundNewFiles) => {
+        if (foundNewFiles) {
+          rootStore.fileStore.refetch();
+        }
+      })
+      .catch(console.error);
 
     return rootStore;
   }

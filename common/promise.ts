@@ -1,4 +1,12 @@
 /**
+ * Yields control back to the event loop so pending input/paint tasks can run.
+ * Used to break large batched operations into bounded UI-thread slices.
+ */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
  * Like Promise.all, but runs batches of N promises in sequence
  * @param batchSize The amount of promises in a batch
  * @param proms The promises to run

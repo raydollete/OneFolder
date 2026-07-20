@@ -114,6 +114,11 @@ async function makeFileStore(
     removeFiles: jest.fn().mockResolvedValue(undefined),
   };
   const store = new FileStore(backend, root);
+  // Pin a deterministic sort: the default 'random' now applies a session-seeded
+  // client-side shuffle in updateFromBackend, which would scramble the
+  // insertion order these index-based assertions rely on.
+  const { runInAction } = await import('mobx');
+  runInAction(() => ((store as any).orderBy = 'name'));
   // Load the initial file list synchronously via updateFromBackend (gen=0).
   const gen = (store as any).fetchGeneration;
   await store.updateFromBackend(fileDTOs, gen);
