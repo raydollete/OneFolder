@@ -21,14 +21,6 @@
       "Bash(grep -E \"src[\\\\\\\\/]\\(main|ipc|frontend\\)\")"
     ]
   },
-  "env": {
-    "HINDSIGHT_AUTO_RECALL": "true",
-    "HINDSIGHT_AUTO_RETAIN": "true",
-    "HINDSIGHT_ENABLE_KNOWLEDGE_TOOLS": "true",
-    "HINDSIGHT_BANK_ID": "OneFolder",
-    "HINDSIGHT_RECALL_BUDGET": "low",
-    "HINDSIGHT_RECALL_MAX_TOKENS": "512"
-  },
   "enabledPlugins": {
     "hindsight-memory@hindsight": true
   },
