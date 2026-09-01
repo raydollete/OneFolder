@@ -51,11 +51,23 @@ import { getExtraResourcePath } from './fs';
 // The exif binary is placed using ElectronBuilder's extraResources:
 const exiftoolRunnable = IS_WIN ? 'exiftool.exe' : 'exiftool.pl';
 
-const EXIF_TOOL_PATH = getExtraResourcePath(`exiftool/${exiftoolRunnable}`);
-
-console.log('Exif tool path: ', EXIF_TOOL_PATH);
 // Module-level singleton used by the Electron desktop app (no custom path).
-const ep = new exiftool.ExiftoolProcess(EXIF_TOOL_PATH);
+//
+// Created LAZILY on first use. Importing this module must not have side
+// effects: the sidecar server imports ExifIO and supplies its own exiftool
+// path, and eagerly evaluating getExtraResourcePath() here would resolve a
+// path from `__dirname` plus a build-mode guess in a process that has already
+// resolved the correct one, and spawn a process handle nobody asked for.
+let ep: exiftool.ExiftoolProcess | undefined;
+
+function getDefaultExiftoolProcess(): exiftool.ExiftoolProcess {
+  if (ep === undefined) {
+    const exifToolPath = getExtraResourcePath(`exiftool/${exiftoolRunnable}`);
+    console.log('Exif tool path: ', exifToolPath);
+    ep = new exiftool.ExiftoolProcess(exifToolPath);
+  }
+  return ep;
+}
 
 const defaultWriteArgs = [
   // overwrite_original to prevent duplicate files appearing.
@@ -139,7 +151,9 @@ class ExifIO {
     this.hierarchicalSeparator = hierarchicalSeparator;
     // Use the provided path for a dedicated process, or fall back to the
     // module-level singleton shared by the Electron desktop build.
-    this._ep = exiftoolPath ? new exiftool.ExiftoolProcess(exiftoolPath) : ep;
+    this._ep = exiftoolPath
+      ? new exiftool.ExiftoolProcess(exiftoolPath)
+      : getDefaultExiftoolProcess();
 
     makeObservable(this);
   }
@@ -178,7 +192,12 @@ class ExifIO {
 
   @action.bound setHierarchicalSeparator(val: string): void {
     this.hierarchicalSeparator = val;
-    localStorage.setItem('hierarchical-separator', val);
+    // localStorage is a renderer-only global. The sidecar server instantiates
+    // this class in the Electron main process, where touching it throws; the
+    // preference is a renderer concern, so persisting is a no-op there.
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('hierarchical-separator', val);
+    }
   }
 
   // ------------------

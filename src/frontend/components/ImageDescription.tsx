@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 
 import { IconSet } from 'widgets/icons';
 import { Toolbar, ToolbarButton } from 'widgets/toolbar';
-import { RendererMessenger } from '../../ipc/renderer';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
 import { AppToaster } from './Toaster';

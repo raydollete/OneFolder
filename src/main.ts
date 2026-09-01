@@ -22,6 +22,9 @@ import {
   getSqliteDbPath,
 } from '../common/library-registry';
 import { parseHmsToSeconds } from '../common/fmt';
+import { parseServeArgs } from './serve-args';
+import { startServeMode } from './serve-mode';
+import type { ServerHandle } from './server/index';
 import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress, MediaJobType, MediaJobStartResult } from './ipc/messages';
 import { mediaJobService } from './media/MediaJobService';
@@ -119,6 +122,19 @@ if (IS_PORTABLE_MODE) {
 
 // Inform the common/process module so other main-process code can read IS_PORTABLE.
 setPortableMode(IS_PORTABLE_MODE);
+
+// ---------------------------------------------------------------------------
+// Serve mode detection — `brave.exe --serve` starts the read-only web sidecar
+// instead of the desktop GUI, in this same portable context.
+//
+// Parsed HERE, at module scope, because the single-instance lock further down
+// also runs at module scope and serve mode must bypass it: the lock is keyed on
+// the userData directory that the GUI and the server share, so taking it would
+// make the two mutually exclusive. A second server is stopped by the port bind
+// failing (EADDRINUSE), which is a self-explaining error.
+// ---------------------------------------------------------------------------
+const SERVE_ARGS = parseServeArgs(process.argv);
+const IS_SERVE_MODE = SERVE_ARGS.serve;
 
 // Enable SharedArrayBuffer WITHOUT cross-origin isolation.
 //
@@ -471,37 +487,126 @@ function createPreviewWindow() {
   return previewWindow;
 }
 
-// Ensure only a single instance of OneFolder can be open
-// https://www.electronjs.org/docs/api/app#apprequestsingleinstancelock
-const HAS_INSTANCE_LOCK = app.requestSingleInstanceLock();
-if (!HAS_INSTANCE_LOCK) {
-  console.log('Another instance of OneFolder is already running');
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    // Someone tried to run a second instance, we should focus our window.
-    if (mainWindow === null || mainWindow.isDestroyed()) {
-      // In case there is no main window (could be running in background): re-initialize
-      initialize();
-    } else {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
-  });
+if (IS_SERVE_MODE) {
+  // -------------------------------------------------------------------------
+  // Serve mode: no windows, no single-instance lock, no ffmpeg staging.
+  //
+  // The server is started immediately rather than from app.whenReady(), so the
+  // window layer is never initialized. Every path it needs was already
+  // resolved above (userData/temp remapped for portable mode); serve-mode.ts
+  // and the server library derive nothing themselves.
+  // -------------------------------------------------------------------------
+  const exiftoolRunnable = process.platform === 'win32' ? 'exiftool.exe' : 'exiftool.pl';
 
-  // Only initialize window if no other instance is already running:
-  // This method will be called when Electron has finished
-  // initialization and is ready to create browser windows.
-  // Some APIs can only be used after this event occurs.
-  app.whenReady().then(initialize);
+  // Resource paths key off app.isPackaged, NOT the NODE_ENV-based guess in
+  // getExtraResourcePath (`(IS_DEV ? '../' : '../../') + 'resources'`). That
+  // heuristic assumes production bundle === packaged app, so running the
+  // production main bundle straight from the repo resolved one directory too
+  // high — `D:\Dev\resources\exiftool\exiftool.exe` instead of
+  // `D:\Dev\OneFolder\resources\...`. __dirname is the build output directory
+  // in both cases, so one level up is the repo root.
+  //
+  // Never resolve from process.execPath either: on the Windows portable target
+  // that is the NSIS temp extraction directory, which is wiped on exit.
+  const resourcesRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'resources')
+    : path.resolve(__dirname, '..', 'resources');
+  const spaDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'dist-web')
+    : path.resolve(__dirname, '..', 'dist-web');
+
+  // Shutdown wiring is installed BEFORE the server finishes starting, not on
+  // the success path only. Startup is not instantaneous (exiftool spawn, TLS
+  // material, the bind itself), and a signal that lands inside that window must
+  // still close the database and the exiftool child rather than be ignored.
+  //
+  // Nothing here can help against a force kill (taskkill /F, TerminateProcess):
+  // Windows delivers no signal at all for those, so the child is only
+  // reclaimable on the paths that do get a chance to run.
+  let serverHandle: ServerHandle | null = null;
+  let shutdownRequested = false;
+
+  function closeAndExit(handle: ServerHandle): void {
+    handle
+      .close()
+      .catch(() => undefined)
+      .finally(() => app.exit(0));
+  }
+
+  function shutdown(): void {
+    if (shutdownRequested) {
+      return;
+    }
+    shutdownRequested = true;
+    if (serverHandle !== null) {
+      closeAndExit(serverHandle);
+    }
+    // Otherwise the server is still starting: the `then` below closes it as
+    // soon as the handle exists, and startServeMode's own failure path already
+    // releases whatever it opened.
+  }
+
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  // Windows Ctrl+Break — delivered as SIGBREAK, never as SIGINT.
+  process.once('SIGBREAK', shutdown);
+
+  startServeMode({
+    userData: basePath,
+    tempPath: app.getPath('temp'),
+    isPortable: IS_PORTABLE_MODE,
+    registry,
+    exiftoolPath: path.join(resourcesRoot, 'exiftool', exiftoolRunnable),
+    spaDir,
+    rawPort: SERVE_ARGS.rawPort,
+  })
+    .then((handle) => {
+      serverHandle = handle;
+      if (shutdownRequested) {
+        closeAndExit(handle);
+      }
+    })
+    .catch(() => {
+      // startServeMode already wrote the operator-facing message to server.log
+      // and stdout, and startServer closed the database and exiftool child it
+      // had opened before the failure. Exit non-zero without a dialog — nobody
+      // is watching a screen in serve mode.
+      app.exit(1);
+    });
+} else {
+  // Ensure only a single instance of OneFolder can be open
+  // https://www.electronjs.org/docs/api/app#apprequestsingleinstancelock
+  const HAS_INSTANCE_LOCK = app.requestSingleInstanceLock();
+  if (!HAS_INSTANCE_LOCK) {
+    console.log('Another instance of OneFolder is already running');
+    app.quit();
+  } else {
+    app.on('second-instance', () => {
+      // Someone tried to run a second instance, we should focus our window.
+      if (mainWindow === null || mainWindow.isDestroyed()) {
+        // In case there is no main window (could be running in background): re-initialize
+        initialize();
+      } else {
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.focus();
+      }
+    });
+
+    // Only initialize window if no other instance is already running:
+    // This method will be called when Electron has finished
+    // initialization and is ready to create browser windows.
+    // Some APIs can only be used after this event occurs.
+    app.whenReady().then(initialize);
+  }
 }
 
 app.on('activate', () => {
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
-  if (mainWindow === null) {
+  // Never in serve mode: a headless server must not sprout a window.
+  if (mainWindow === null && !IS_SERVE_MODE) {
     createWindow();
   }
 });
@@ -522,6 +627,13 @@ process.on('uncaughtException', async (error) => {
   const errorMessage = `An unexpected error occurred.\n${
     error.stack?.includes(error.message) ? '' : `${error.name}: ${error.message.slice(0, 200)}\n`
   }\n${error.stack?.slice(0, 300)}`;
+
+  // Serve mode is headless: a modal error box would block the server forever
+  // waiting for a click nobody is there to make. Log and keep serving.
+  if (IS_SERVE_MODE) {
+    console.error(errorMessage);
+    return;
+  }
 
   try {
     if (mainWindow != null && !mainWindow.isDestroyed()) {
@@ -1154,7 +1266,13 @@ function forceRelaunch() {
   const exe = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
   // In dev, argv[1] is the app bundle path that electron.exe must be told to
   // load. Packaged/portable binaries know how to launch themselves.
-  const args = app.isPackaged ? [] : [process.argv[1]];
+  //
+  // The user's own flags MUST be forwarded. Dropping them silently converts a
+  // `--serve` process into a GUI process with no listener the first time any
+  // relaunch path fires (tray menu, the uncaught-exception restart dialog,
+  // onClearDatabase, reload) — the sidecar would simply disappear.
+  const userFlags = process.argv.slice(app.isPackaged ? 1 : 2);
+  const args = app.isPackaged ? [...userFlags] : [process.argv[1], ...userFlags];
   spawn(exe, args, {
     detached: true,
     stdio: 'ignore',

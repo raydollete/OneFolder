@@ -1,4 +1,4 @@
-import { shell } from 'electron';
+import platform from 'src/frontend/platform';
 import React, { ReactNode } from 'react';
 
 type ExternalLinkProps = {
@@ -16,7 +16,7 @@ const ExternalLink = ({ url, children }: ExternalLinkProps) => {
       target="_blank"
       onClickCapture={(event) => {
         event.preventDefault();
-        shell.openExternal(url);
+        platform.desktop.openExternal(url);
       }}
     >
       {children}

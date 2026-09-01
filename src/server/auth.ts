@@ -1,9 +1,12 @@
 /**
- * Auth middleware — INV-034 / TASK-134.
+ * Auth middleware — INV-034 / TASK-134, made optional by add-portable-serve-mode.
  *
- * Applies a single shared-secret gate in front of ALL sidecar routes.
- * The server serves real local files so nothing is public — every request
- * must carry a valid credential.
+ * Applies a single shared-secret gate in front of ALL sidecar routes WHEN a
+ * credential is configured. Authentication is optional: with no credential the
+ * middleware is a pass-through and the server is open. That is a deliberate
+ * choice for the home-network deployment this fork targets — the startup
+ * banner discloses that the server is open and on which addresses it can be
+ * reached, so the exposure is visible rather than implicit.
  *
  * Credential configuration
  * ------------------------
@@ -18,8 +21,11 @@
  *     Explicit username + password pair (HTTP Basic auth).
  *     Takes precedence over ONEFOLDER_AUTH_SECRET if both are set.
  *
- * If NEITHER is set the server starts but rejects EVERY request with 401.
- * A warning is printed to stderr at startup.
+ * An empty or whitespace-only value counts as NOT set.
+ *
+ * If NEITHER is set the server runs WITHOUT an authentication gate: every
+ * request is served, POST /api/auth/login is a no-op, and the startup banner
+ * reports "Authentication: DISABLED — no credential configured".
  *
  * Dual-path credential delivery
  * ------------------------------
@@ -144,26 +150,48 @@ function computeCookieToken(user: string, password: string): string {
 export interface Credential {
   user: string;
   password: string;
+  /**
+   * How the credential was configured.
+   *
+   * 'secret' means ONEFOLDER_AUTH_SECRET, where user === password. The startup
+   * banner must NOT print the user name in that case — it would write the
+   * shared secret in plaintext into server.log.
+   */
+  kind?: 'secret' | 'explicit';
 }
 
 /**
  * Resolve credentials from env vars.
- * Returns null if no credential is configured (server will reject everything).
+ * Returns null if no credential is configured — the server then runs open,
+ * without an authentication gate. Empty / whitespace-only values are absent.
  */
-export function resolveCredential(): Credential | null {
-  const user = process.env.ONEFOLDER_AUTH_USER;
-  const password = process.env.ONEFOLDER_AUTH_PASSWORD;
+export function resolveCredential(env: NodeJS.ProcessEnv = process.env): Credential | null {
+  // An empty or whitespace-only value is ABSENT, not a credential. Treating ''
+  // as configured would accept `Authorization: Basic Og==` (base64 of ":")
+  // while the banner claimed authentication was enabled — a fail-open wearing
+  // the costume of a fail-closed. Harmless when the absent case rejected
+  // everything; dangerous now that the absent case serves everything.
+  const user = readEnv(env.ONEFOLDER_AUTH_USER);
+  const password = readEnv(env.ONEFOLDER_AUTH_PASSWORD);
 
-  if (user !== undefined && password !== undefined) {
-    return { user, password };
+  if (user !== null && password !== null) {
+    return { user, password, kind: 'explicit' };
   }
 
-  const secret = process.env.ONEFOLDER_AUTH_SECRET;
-  if (secret !== undefined) {
-    return { user: secret, password: secret };
+  const secret = readEnv(env.ONEFOLDER_AUTH_SECRET);
+  if (secret !== null) {
+    return { user: secret, password: secret, kind: 'secret' };
   }
 
   return null;
+}
+
+/** Returns the value, or null when unset / empty / whitespace-only. */
+function readEnv(value: string | undefined): string | null {
+  if (value === undefined || value.trim() === '') {
+    return null;
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +236,7 @@ export function clearAuthCookieHeader(): string {
  * configured credential.
  *
  * @param cred    Resolved credential (from resolveCredential()). When null
- *                every request is rejected with 401.
+ *                the middleware is a pass-through — authentication is optional.
  * @param secure  Whether TLS is active — used to add the Secure flag when
  *                issuing the auth cookie via the login endpoint.
  */
@@ -230,17 +258,11 @@ export function makeAuthMiddleware(
       return;
     }
 
-    // No credential configured — fail everything loudly so the operator knows.
+    // No credential configured — authentication is OPTIONAL, so serve the
+    // request. The operator asked for no gate; the startup banner discloses
+    // that the server is open and on which addresses it is reachable.
     if (cred === null || expectedToken === null) {
-      res
-        .status(401)
-        .set('WWW-Authenticate', 'Basic realm="OneFolder"')
-        .json({
-          error:
-            'Authentication required. ' +
-            'Set ONEFOLDER_AUTH_SECRET (or ONEFOLDER_AUTH_USER + ONEFOLDER_AUTH_PASSWORD) ' +
-            'before starting the server.',
-        });
+      next();
       return;
     }
 
@@ -362,11 +384,11 @@ export function makeLoginRouter(cred: Credential | null, secure: boolean): Route
   // POST /api/auth/login — exchange credentials for a cookie.
   router.post('/auth/login', (req: Request, res: Response): void => {
     if (cred === null) {
-      res.status(503).json({
-        error:
-          'Server has no credentials configured. ' +
-          'Set ONEFOLDER_AUTH_SECRET before starting the server.',
-      });
+      // Authentication is optional and none is configured: logging in is a
+      // no-op rather than an error, so a stale bookmark or a future login UI
+      // does not break against an open server. No cookie is issued because
+      // none is needed — every request is already served.
+      res.status(200).json({ ok: true, authRequired: false });
       return;
     }
 

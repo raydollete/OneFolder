@@ -30,6 +30,10 @@ let mainConfig = {
   externals: {
     fsevents: "require('fsevents')",
     'better-sqlite3': "require('better-sqlite3')",
+    // sharp ships native binaries that cannot be inlined. The main bundle now
+    // reaches it through the sidecar server (serve mode), so it must be
+    // require()'d at runtime from node_modules.
+    sharp: "require('sharp')",
   },
   module: {
     rules: [
@@ -85,6 +89,9 @@ let rendererConfig = {
   externals: {
     fsevents: "require('fsevents')",
     'better-sqlite3': "require('better-sqlite3')",
+    // Deliberately NO `sharp` here: only the main bundle loads it (serve mode).
+    // Listing it in the renderer would turn a stray renderer-side `import sharp`
+    // into a runtime require() instead of a build-time failure.
   },
   module: {
     rules: [

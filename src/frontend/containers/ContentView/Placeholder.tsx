@@ -32,7 +32,7 @@ export default Placeholder;
 import { IconSet, Button, ButtonGroup, SVG } from 'widgets';
 import { RendererMessenger } from 'src/ipc/renderer';
 import useMountState from 'src/frontend/hooks/useMountState';
-import { shell } from 'electron';
+import platform from 'src/frontend/platform';
 
 const PreviewWindowPlaceholder = observer(() => {
   const { fileStore } = useStore();
@@ -94,7 +94,7 @@ const Welcome = () => {
           <button
             className="figma_video-button "
             onClick={() => {
-              shell.openExternal('https://onefolder.app/getting-started');
+              platform.desktop.openExternal('https://onefolder.app/getting-started');
             }}
           >
             {/* <img src="/play.svg" alt="OneFolder logo" class="mr-1 fill-[#333]" /> */}

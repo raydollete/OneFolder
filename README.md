@@ -96,49 +96,57 @@ OneFolder builds from a single codebase to two different targets, selected at bu
 | Target | What it is | Build command(s) |
 | --- | --- | --- |
 | **Desktop (Electron)** | The full read/write app. `nodeIntegration` renderer talks to SQLite, the filesystem, and exiftool directly. | `yarn package` / `yarn package:portable` |
-| **Headless (web sidecar)** | A **read-only**, single-user Node server that serves a browser SPA so you can browse one library from another device. | `yarn package:headless` |
+| **Headless (web sidecar)** | A **read-only**, single-user web server that serves a browser SPA so you can browse one library from another device. It is a **mode of the same executable**, not a separate binary. | `yarn package:portable`, then `brave.exe --serve` |
 
-The headless target is **additive and experimental** — it does not affect the desktop app. It is read-only by design (no edits, tagging writeback, deletes, or media jobs). See [`docs/headless-web-build.md`](docs/headless-web-build.md) for the full architecture (seam, endpoints, packaging, security boundary).
+The headless mode is **additive** — it does not affect the desktop app. It is read-only by design (no edits, tagging writeback, deletes, or media jobs). See [`docs/headless-web-build.md`](docs/headless-web-build.md) for the full architecture (seam, endpoints, packaging, security boundary).
 
 ### Running Headless
 
-The headless build is a Node server (the "sidecar") that opens a library's SQLite database **read-only**, serves the SPA, and streams images/metadata over HTTP. It serves on **port `8666`** by default (`http://localhost:8666`).
+Serve mode opens the active library's SQLite database **read-only**, serves the SPA, and streams images/metadata over HTTP. It serves on **port `8666`** by default and binds every network interface, so other devices on your network can reach it.
+
+**From the portable build:**
+
+```bash
+brave.exe --serve                 # open, no authentication
+brave.exe --serve --port 9000     # custom port
+```
+
+Set `ONEFOLDER_AUTH_SECRET` (or `ONEFOLDER_AUTH_USER` + `ONEFOLDER_AUTH_PASSWORD`) before launching to require HTTP Basic authentication. Leave them unset and the server runs open — its startup banner says so, and lists every URL it is reachable on.
 
 **From source (development):**
 
 ```bash
-yarn dev:web                              # build the browser SPA into dist-web/ (watch mode)
-ONEFOLDER_AUTH_SECRET=changeme yarn dev:server   # run the server from source via ts-node
+yarn dev                                   # build main + renderer bundles (watch)
+yarn build:web                             # build the browser SPA into dist-web/
+electron ./build/main.bundle.js --serve     # run serve mode from source
 ```
 
-**Bundled build:**
+The startup banner is written to stdout **and** to `data\server.log`; on Windows the log file is the reliable record, because a GUI-subsystem binary's stdout does not consistently attach to the console that launched it.
 
-```bash
-yarn build:web        # production SPA  -> dist-web/
-yarn build:server     # Node server     -> dist-server/server.bundle.js
-ONEFOLDER_AUTH_SECRET=changeme node dist-server/server.bundle.js
-```
-
-**Single self-contained binary (no Node install required on the target machine):**
-
-```bash
-yarn package:headless     # -> dist-headless/onefolder-server.exe (+ dist-web/, native deps, exiftool)
-cd dist-headless && ONEFOLDER_AUTH_SECRET=changeme ./onefolder-server.exe
-```
-
-Then open `http://localhost:8666` from any device on the network.
+Then open the URL from the banner on any device on the network.
 
 **Configuration (environment variables):**
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `8666` | HTTP/HTTPS listening port |
-| `ONEFOLDER_AUTH_SECRET` | — | Shared secret used as both basic-auth username and password (required for the auth gate) |
+| `PORT` | `8666` | HTTP/HTTPS listening port (`--port` overrides it) |
+| `ONEFOLDER_AUTH_SECRET` | — | Shared secret used as both basic-auth username and password. **Optional** — unset means no authentication |
 | `ONEFOLDER_AUTH_USER` / `ONEFOLDER_AUTH_PASSWORD` | — | Explicit basic-auth credentials (take precedence over `ONEFOLDER_AUTH_SECRET`) |
 | `ONEFOLDER_TLS` | `0` | Set to `1` to serve HTTPS instead of HTTP |
 | `ONEFOLDER_TLS_CERT` / `ONEFOLDER_TLS_KEY` | — | Paths to the PEM cert/key when `ONEFOLDER_TLS=1` |
 
-The server serves real local files, so it requires the auth gate and only serves paths resolved from the library's registered locations (a path-traversal guard rejects anything outside). Run it behind TLS (or a reverse proxy / Tailscale) for remote access.
+Empty or whitespace-only credential values count as unset.
+
+Authentication is optional by design: the intended deployment is browsing your own library from your own phone on your own wifi, where a password is friction rather than protection. With no credential configured the server serves every request — so it prints exactly what it is exposing at startup:
+
+```
+[server] OneFolder serve mode — listening on port 8666
+[server]   http://127.0.0.1:8666
+[server]   http://192.168.1.42:8666   (reachable from your network)
+[server] Authentication: DISABLED — no credential configured
+```
+
+The library is read-only over HTTP and only paths resolved from the library's registered locations are served (a path-traversal guard rejects anything outside), so the exposure is disclosure of your photos, not modification of them. On an untrusted network, set a credential or put it behind TLS / a reverse proxy / Tailscale.
 
 ### Migrating from pre-SQLite backups
 

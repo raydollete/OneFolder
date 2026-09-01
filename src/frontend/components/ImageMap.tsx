@@ -1,6 +1,6 @@
 import React, { ReactNode, useRef, useCallback, useEffect, useState } from 'react';
 
-import { RendererMessenger } from '../../ipc/renderer';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
 import { AppToaster } from './Toaster';

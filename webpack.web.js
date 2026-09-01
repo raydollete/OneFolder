@@ -12,9 +12,11 @@
  *  - keeps asyncWebAssembly + WASM asset rules for the masonry layout module
  *
  * Output: dist-web/
- *   The sidecar server (src/server/index.ts) looks for the SPA at
- *   path.resolve(__dirname, '..', '..', 'dist-web') relative to its own
- *   build output (dist-server/).  Both output dirs sit at the repo root.
+ *   The sidecar server no longer resolves this path itself. It runs inside the
+ *   Electron main process (`brave.exe --serve`), which passes the directory in
+ *   as `spaDir` — `dist-web/` at the repo root when unpackaged, and
+ *   `{resourcesPath}/dist-web` when packaged, where electron-builder ships it
+ *   via extraResources. See src/main.ts and openspec add-portable-serve-mode.
  *
  * Scripts (see package.json):
  *   yarn build:web          one-shot production build
@@ -67,7 +69,8 @@ module.exports = (env, argv) => {
 
     output: {
       filename: 'renderer.bundle.js',
-      // The sidecar server (dist-server/) looks for this dir via '../../dist-web'.
+      // Serve mode receives this directory as `spaDir` from src/main.ts; it is
+      // also what electron-builder packs via extraResources.
       path: path.resolve(__dirname, 'dist-web'),
       // Needed so assets (WASM, images, fonts) are fetched from the right prefix
       // when the SPA is served by Express at the repo root.
@@ -257,7 +260,20 @@ module.exports = (env, argv) => {
       new webpack.NormalModuleReplacementPlugin(/common\/library-registry$/, EMPTY_STUB),
 
       // Electron IPC layer — imports ipcRenderer from electron.
+      //
+      // TWO patterns, because NormalModuleReplacementPlugin tests the request
+      // string before resolution and the resolved file path after it. The first
+      // catches `from 'src/ipc/renderer'`; the second catches the same module
+      // reached by a RELATIVE specifier (`from '../../ipc/renderer'`), which the
+      // request-shaped pattern cannot see. Eight files imported it that way and
+      // escaped the stub, so the browser bundle resolved the real module, pulled
+      // in the `electron` npm package (its launcher, not the runtime API), and
+      // threw `TypeError: i.join is not a function` before React mounted —
+      // `path` being stubbed is what turned it into that particular message.
       new webpack.NormalModuleReplacementPlugin(/src\/ipc\/renderer$/, EMPTY_STUB),
+      // The `.` before src/ipc/renderer stands for either path separator: this pattern
+      // is matched against the RESOLVED path, which is backslash-separated on Windows.
+      new webpack.NormalModuleReplacementPlugin(/.src.ipc.renderer\.ts$/, EMPTY_STUB),
 
       // SQLite backend modules — all import better-sqlite3 directly.
       new webpack.NormalModuleReplacementPlugin(/\/backend\/sqlite-backend$/, EMPTY_STUB),

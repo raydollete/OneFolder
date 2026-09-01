@@ -1,7 +1,7 @@
 import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
 
 import { MediaJobType } from '../../ipc/messages';
-import { RendererMessenger } from '../../ipc/renderer';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { ClientFile } from '../entities/File';
 import { mediaJobLabel } from '../data/mediaJobLabels';
 import RootStore from './RootStore';

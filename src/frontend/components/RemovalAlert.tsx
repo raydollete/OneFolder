@@ -4,7 +4,7 @@ import React from 'react';
 
 import { IconSet, Tag } from 'widgets';
 import { Alert, DialogButton } from 'widgets/popovers';
-import { RendererMessenger } from '../../ipc/renderer';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
 import { ClientLocation, ClientSubLocation } from '../entities/Location';

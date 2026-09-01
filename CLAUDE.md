@@ -53,15 +53,20 @@ Frontend code must import platform capabilities (filesystem, path, shell, Render
 
 A webpack alias selects `platform.electron.ts` (faithful pass-through) or `platform.web.ts` (HTTP-backed stubs + loud rejects for writes) at bundle time. The Electron desktop build is unaffected.
 
-Additional build targets for the headless sidecar web build (see `docs/headless-web-build.md`):
+Additional build targets for the web SPA (see `docs/headless-web-build.md`):
 
 ```bash
 yarn dev:web            # webpack --watch, web SPA (output: dist-web/)
-yarn dev:server         # ts-node src/server/index.ts (server from source)
-yarn build:web          # production web SPA build
-yarn build:server       # production Node server bundle
-yarn package:headless   # build both + produce dist-headless/ SEA binary
+yarn build:web          # production web SPA build (also run by `yarn build`)
 ```
+
+The sidecar server is **not a separate binary**. It runs inside the portable
+executable: `brave.exe --serve [--port <n>]` starts the read-only web server in
+the same portable context instead of opening the desktop GUI. Authentication is
+optional — with no `ONEFOLDER_AUTH_SECRET` / `ONEFOLDER_AUTH_USER` +
+`ONEFOLDER_AUTH_PASSWORD` configured the server runs open, binds all interfaces,
+and discloses that in its startup banner. Serve mode logs to `data\server.log`,
+because a GUI-subsystem binary's stdout does not reliably reach a console.
 
 # Documentation
 

@@ -1,4 +1,4 @@
-import { OpenDialogOptions } from 'electron';
+import type { OpenDialogOptions } from 'electron';
 import React, { ReactNode } from 'react';
 import { RendererMessenger } from 'src/ipc/renderer';
 

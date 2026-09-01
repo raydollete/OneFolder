@@ -1,0 +1,6 @@
+[     291ms] TypeError: i.join is not a function
+    at 1207 (http://127.0.0.1:8123/renderer.bundle.js:2:253815)
+    at n (http://127.0.0.1:8123/renderer.bundle.js:2:2386666)
+    at http://127.0.0.1:8123/renderer.bundle.js:2:2922172
+    at http://127.0.0.1:8123/renderer.bundle.js:2:4623680
+    at http://127.0.0.1:8123/renderer.bundle.js:2:4623684

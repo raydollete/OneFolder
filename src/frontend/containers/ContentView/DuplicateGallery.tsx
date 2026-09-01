@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { observer } from 'mobx-react-lite';
 import { action } from 'mobx';
-import { shell } from 'electron';
+import platform from 'src/frontend/platform';
 import { Tag, IconSet } from 'widgets';
 import { Menu, MenuItem, MenuDivider, useContextMenu } from 'widgets/menus';
 import { useStore } from '../../contexts/StoreContext';
@@ -295,7 +295,7 @@ const DuplicateItem = observer(({ group, select, onDismiss, isDismissing }: Dupl
                   className="duplicate-file__show-button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    shell.showItemInFolder(file.absolutePath);
+                    platform.desktop.showItemInFolder(file.absolutePath);
                   }}
                   title="Show in folder"
                 >
@@ -422,7 +422,7 @@ const DuplicateItem = observer(({ group, select, onDismiss, isDismissing }: Dupl
                       className="path-action-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        shell.showItemInFolder(file.absolutePath);
+                        platform.desktop.showItemInFolder(file.absolutePath);
                       }}
                       title="Show in folder"
                       style={{
@@ -1875,7 +1875,9 @@ const DuplicateGallery = observer(({ select }: GalleryProps) => {
                                       />
                                       <MenuDivider />
                                       <MenuItem
-                                        onClick={() => shell.showItemInFolder(file.absolutePath)}
+                                        onClick={() =>
+                                          platform.desktop.showItemInFolder(file.absolutePath)
+                                        }
                                         text="Reveal in File Browser"
                                         icon={IconSet.FOLDER_CLOSE}
                                       />

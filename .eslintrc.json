@@ -16,7 +16,11 @@
       "version": "detect"
     }
   },
-  "plugins": ["@typescript-eslint", "react-hooks", "prettier"],
+  "plugins": [
+    "@typescript-eslint",
+    "react-hooks",
+    "prettier"
+  ],
   "rules": {
     "@typescript-eslint/explicit-function-return-type": "off",
     "@typescript-eslint/interface-name-prefix": "off",
@@ -25,10 +29,20 @@
     "@typescript-eslint/explicit-module-boundary-types": "off",
     "@typescript-eslint/no-unused-vars": [
       "error",
-      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" }
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
     ],
-    "quotes": ["error", "single"],
-    "jsx-quotes": ["error", "prefer-double"],
+    "quotes": [
+      "error",
+      "single"
+    ],
+    "jsx-quotes": [
+      "error",
+      "prefer-double"
+    ],
     "no-trailing-spaces": "error",
     "react-hooks/rules-of-hooks": "error",
     "react-hooks/exhaustive-deps": "warn",
@@ -42,11 +56,42 @@
   },
   "overrides": [
     {
-      "files": ["src/backend/*.ts", "src/frontend/entities/*.ts", "src/frontend/stores/*.ts"],
+      "files": [
+        "src/backend/*.ts",
+        "src/frontend/entities/*.ts",
+        "src/frontend/stores/*.ts"
+      ],
       "rules": {
         "@typescript-eslint/explicit-module-boundary-types": "error"
       }
+    },
+    {
+      "files": [
+        "src/frontend/**/*.ts",
+        "src/frontend/**/*.tsx",
+        "widgets/**/*.ts",
+        "widgets/**/*.tsx"
+      ],
+      "excludedFiles": [
+        "src/frontend/platform/platform.electron.ts"
+      ],
+      "rules": {
+        "@typescript-eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "electron",
+                "message": "Import platform capabilities from 'src/frontend/platform' instead. A value import of 'electron' resolves to the npm launcher package in the web bundle and throws before React mounts. Type-only imports are allowed."
+              }
+            ],
+            "allowTypeImports": true
+          }
+        ]
+      }
     }
   ],
-  "ignorePatterns": ["declarations/*.d.ts"]
+  "ignorePatterns": [
+    "declarations/*.d.ts"
+  ]
 }

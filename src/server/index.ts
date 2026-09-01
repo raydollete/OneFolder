@@ -1,201 +1,118 @@
 /**
- * Sidecar server entry point — INV-034 / TASK-128, extended TASK-134.
+ * Sidecar server — the read-only web host, as a LIBRARY.
  *
- * Boots an Express HTTP (or HTTPS) server that:
- *  1. Re-derives the userData path the same way the portable Electron build does.
- *  2. Opens the active library's SQLite database strictly READ-ONLY.
- *  3. Applies COOP/COEP/CORP headers on every response (masonry SharedArrayBuffer).
- *  4. Gates ALL routes behind the auth middleware (TASK-134).
- *  5. Mounts the DataStorage REST routes (TASK-128, consumed by HttpBackend / TASK-127).
- *  6. Serves the compiled web SPA (produced by TASK-130) with COOP/COEP headers.
- *  7. Optionally starts an HTTPS listener when ONEFOLDER_TLS=1 (TASK-134).
+ * This module builds and starts the Express server. It derives NOTHING about
+ * its environment: userData, database path, thumbnail directory, exiftool
+ * binary, SPA directory, port, credential and TLS material are all supplied by
+ * the caller. Two independent derivations of the same path will eventually
+ * disagree, so there is exactly one deriver — the Electron main process — and
+ * this module is a pure consumer of what it resolved.
  *
- * The desktop Electron app is unaffected — this file is never imported by the
- * Electron main or renderer bundle; it is only run as a standalone Node process.
+ * The caller today is serve mode (`src/serve-mode.ts`), reached via
+ * `brave.exe --serve`. Startup failures REJECT the returned promise; this
+ * module never calls process.exit(), because the process it is running in may
+ * be the desktop application.
+ *
+ * What the server does:
+ *  1. Opens the active library's SQLite database strictly READ-ONLY.
+ *  2. Applies COOP/COEP/CORP headers on every response (masonry SharedArrayBuffer).
+ *  3. Gates all routes behind the auth middleware — which is a pass-through
+ *     when no credential is configured (authentication is optional).
+ *  4. Mounts the DataStorage REST routes consumed by HttpBackend.
+ *  5. Serves the compiled web SPA.
+ *  6. Listens over HTTP, or HTTPS when TLS material is supplied.
  *
  * ============================================================================
- * Auth & TLS env vars (TASK-134)
+ * Environment variables (read by the CALLER, not by this module)
  * ============================================================================
  *
- * Credential — ONE of the following:
+ * Credential — optional. When none is configured the server serves every
+ * request without an authentication gate.
  *
  *   ONEFOLDER_AUTH_SECRET=<shared-secret>
- *     Use the same string as both HTTP Basic username and password.
- *     Simplest option: set one var, share it with the browser.
+ *     Used as both HTTP Basic username and password.
  *
  *   ONEFOLDER_AUTH_USER=<user>  ONEFOLDER_AUTH_PASSWORD=<password>
- *     Explicit username + password pair.  Takes precedence over AUTH_SECRET.
+ *     Explicit pair. Takes precedence over ONEFOLDER_AUTH_SECRET.
  *
  * TLS — all optional:
  *
- *   ONEFOLDER_TLS=1            Enable HTTPS.  Without this the server uses
- *                              plain HTTP (fine for local loopback; use a
- *                              reverse proxy for TLS in production).
+ *   ONEFOLDER_TLS=1            Enable HTTPS.
+ *   ONEFOLDER_TLS_CERT=<path>  PEM certificate.
+ *   ONEFOLDER_TLS_KEY=<path>   Matching PEM private key.
  *
- *   ONEFOLDER_TLS_CERT=<path>  Path to a PEM certificate file.
- *   ONEFOLDER_TLS_KEY=<path>   Path to the matching PEM private key file.
- *
- *   When ONEFOLDER_TLS=1 but no cert/key paths are provided, the server
- *   auto-generates a self-signed certificate via `openssl req` and stores
- *   it in the userData directory for reuse across restarts.
- *
+ *   With ONEFOLDER_TLS=1 and no cert/key, a self-signed certificate is
+ *   generated via `openssl req` and cached in userData for reuse.
  *   Reverse-proxy alternative: leave ONEFOLDER_TLS unset and terminate TLS
- *   upstream (nginx / Caddy / Tailscale), forwarding plain HTTP to PORT.
- *   The auth middleware remains in effect regardless of TLS.
+ *   upstream (nginx / Caddy / Tailscale). Auth is unaffected by TLS.
  *
- * Other:
- *   PORT=<number>              Listening port (default: 8666).
+ *   PORT=<number>              Listening port (default 8666); --port overrides.
  */
 
 import path from 'path';
-import os from 'os';
 import fse from 'fs-extra';
 import http from 'http';
 import https from 'https';
 import { execSync } from 'child_process';
 import express, { Request, Response, NextFunction } from 'express';
 import Database from 'better-sqlite3';
-import {
-  LibraryRegistry,
-  getSqliteDbPath,
-  getDefaultThumbnailDir,
-} from '../../common/library-registry';
 import SQLiteBackend from '../backend/sqlite-backend';
 import { makeDataRouter } from './routes/data';
 import { makeImagesRouter } from './routes/images';
 import { makeMetadataRouter } from './routes/metadata';
 import { makeRescanRouter } from './routes/rescan';
 import ExifIO from '../../common/ExifIO';
-import { resolveCredential, makeAuthMiddleware, makeLoginRouter } from './auth';
+import { makeAuthMiddleware, makeLoginRouter, Credential } from './auth';
+import { ServerLogger, createConsoleLogger } from './logger';
+import { messages, buildStartupBanner } from './config';
 
-/**
- * Whether the current process is running as a Node SEA binary.
- * `node:sea` is available in Node v21.7+; it returns false when running as a
- * plain Node process (ts-node, `node server.bundle.js`).
- * We guard with a try/catch for forward-compat with older Node versions.
- */
-function isSea(): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const sea = require('node:sea') as { isSea: () => boolean };
-    return sea.isSea();
-  } catch {
-    return false;
-  }
-}
-const IS_SEA = isSea();
+// Re-exported so callers have a single import site for the server API.
+export { DEFAULT_PORT, messages, resolvePort, lanAddresses, buildStartupBanner } from './config';
+export type { BannerInput } from './config';
 
-// ---------------------------------------------------------------------------
-// SEA-aware binary directory resolution (INV-034 / TASK-133)
-//
-// In a Node SEA (Single Executable Application), __dirname is virtualised to
-// a path inside the injected blob (e.g. /snapshot/project/dist-server/).
-// It does NOT refer to the directory that contains the running binary.
-//
-// We detect the SEA environment via `node:sea` and, when packaged, resolve
-// resource paths relative to `path.dirname(process.execPath)` instead.
-//
-// In dev mode (ts-node or plain node dist-server/server.bundle.js) `isSea()`
-// returns false, so we fall back to __dirname-relative paths as before.
-// ---------------------------------------------------------------------------
-
-/**
- * Returns the directory that contains the running server binary (or script).
- *
- * - Packaged SEA binary: directory of process.execPath
- *   e.g. /Users/alice/onefolder-server/ → /Users/alice/onefolder-server/
- * - Dev (ts-node src/server/index.ts): two levels up from __dirname (= src/server/)
- *   → repo root
- * - Dev (node dist-server/server.bundle.js): two levels up from __dirname
- *   (= dist-server/) → repo root, which contains dist-web/ and resources/
- */
-function resolveExeDir(): string {
-  if (IS_SEA) {
-    // Packaged: binary lives in dist-headless/; all resources are siblings.
-    return path.dirname(process.execPath);
-  }
-  // Development: __dirname is src/server/ (ts-node) or dist-server/ (webpack).
-  // Two levels up reaches the repo root where dist-web/ and resources/ live.
-  return path.resolve(__dirname, '..', '..');
+export interface TlsMaterial {
+  cert: string;
+  key: string;
 }
 
-/**
- * Returns the absolute path to the exiftool runnable for the current platform,
- * resolved relative to the exe directory (SEA-safe).
- *
- * Packaged layout (mirrors asarUnpack/extraResources in the Electron build):
- *   <exeDir>/resources/exiftool/exiftool.exe   (Windows)
- *   <exeDir>/resources/exiftool/exiftool.pl    (macOS/Linux)
- *
- * Dev layout (ts-node / plain node server.bundle.js):
- *   <repoRoot>/resources/exiftool/exiftool.exe
- */
-function resolveExiftoolPath(exeDir: string): string {
-  const runnable = process.platform === 'win32' ? 'exiftool.exe' : 'exiftool.pl';
-  return path.join(exeDir, 'resources', 'exiftool', runnable);
+export interface ServeOptions {
+  /** Portable data directory — `app.getPath('userData')`, already remapped. */
+  userData: string;
+  /** Absolute path to the active library's SQLite file. */
+  dbPath: string;
+  /** Absolute path to the active library's thumbnail cache. */
+  thumbnailDir: string;
+  /** Absolute path to the bundled exiftool runnable. */
+  exiftoolPath: string;
+  /** Absolute path to the compiled web SPA directory. */
+  spaDir: string;
+  /** Validated listening port. */
+  port: number;
+  /** Library display name, for the startup banner. */
+  libraryName: string;
+  /** Resolved credential, or null for an open (unauthenticated) server. */
+  credential: Credential | null;
+  /** TLS material, or null for plain HTTP. */
+  tls: TlsMaterial | null;
+  /** Logger; falls back to console-only when omitted. */
+  logger?: ServerLogger;
 }
 
-// ---------------------------------------------------------------------------
-// Portable-path resolution
-//
-// The server binary ships alongside the portable Electron build.  The portable
-// build stores user data in a `data/` directory next to the executable.  We
-// re-derive that same path here so library/DB discovery works without Electron.
-//
-// Resolution order (mirrors src/main.ts):
-//   1. $PORTABLE_EXECUTABLE_DIR env-var  — set by electron-builder portable target
-//   2. exe directory (SEA: dirname of process.execPath; dev: repo root) with a
-//      portable.txt marker or data/ subdirectory present.
-//   3. Fall back to the standard OS userData location so development-mode runs
-//      against the same library as the desktop app.
-// ---------------------------------------------------------------------------
-
-function resolveUserDataPath(exeDir: string): string {
-  // Electron-builder portable sets this env var; respect it when present.
-  if (process.env.PORTABLE_EXECUTABLE_DIR !== undefined) {
-    return path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'data');
-  }
-
-  const portableDataDir = path.join(exeDir, 'data');
-  const isPortable =
-    fse.pathExistsSync(path.join(exeDir, 'portable.txt')) || fse.pathExistsSync(portableDataDir);
-
-  if (isPortable) {
-    return portableDataDir;
-  }
-
-  // Non-portable / development: mirror the OS-standard Electron userData path.
-  //   Windows: %APPDATA%\OneFolder
-  //   macOS:   ~/Library/Application Support/OneFolder
-  //   Linux:   ~/.config/OneFolder
-  switch (process.platform) {
-    case 'win32':
-      return path.join(process.env.APPDATA ?? os.homedir(), 'OneFolder');
-    case 'darwin':
-      return path.join(os.homedir(), 'Library', 'Application Support', 'OneFolder');
-    default:
-      return path.join(os.homedir(), '.config', 'OneFolder');
-  }
+export interface ServerHandle {
+  /** The port actually bound. */
+  port: number;
+  /** Close the listener, the database and exiftool. */
+  close(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
 // TLS — self-signed cert generation
 //
-// When ONEFOLDER_TLS=1 and no ONEFOLDER_TLS_CERT/KEY paths are provided,
-// a self-signed cert is generated via `openssl req` and cached in userData.
-// The cert is valid for 3650 days (10 years) and reused across restarts.
-//
-// Operators who need a trusted cert should either:
-//   a) Provide their own via ONEFOLDER_TLS_CERT + ONEFOLDER_TLS_KEY, or
-//   b) Use a reverse proxy (nginx / Caddy / Tailscale) for TLS termination.
+// Exported so the caller resolves TLS material explicitly and passes it in;
+// this module never reads the environment itself.
 // ---------------------------------------------------------------------------
 
-interface TlsMaterial {
-  cert: string;
-  key: string;
-}
-
-function ensureSelfSignedCert(userData: string): TlsMaterial {
+function ensureSelfSignedCert(userData: string, logger: ServerLogger): TlsMaterial {
   const certPath = path.join(userData, 'server-cert.pem');
   const keyPath = path.join(userData, 'server-key.pem');
 
@@ -206,7 +123,7 @@ function ensureSelfSignedCert(userData: string): TlsMaterial {
     };
   }
 
-  console.info('[server] Generating self-signed TLS certificate (valid 10 years)...');
+  logger.info('[server] Generating self-signed TLS certificate (valid 10 years)...');
 
   try {
     fse.mkdirsSync(userData);
@@ -222,11 +139,10 @@ function ensureSelfSignedCert(userData: string): TlsMaterial {
       { stdio: 'pipe', timeout: 30_000 },
     );
 
-    console.info('[server] Self-signed certificate written to:', certPath);
-    console.info('[server] Private key written to:', keyPath);
-    console.info(
-      '[server] NOTE: Your browser will show a security warning for self-signed certificates.',
-      'Add the cert to your browser trust store or use a reverse proxy with a trusted cert.',
+    logger.info(`[server] Self-signed certificate written to: ${certPath}`);
+    logger.info(
+      '[server] NOTE: Your browser will show a security warning for self-signed certificates. ' +
+        'Add the cert to your browser trust store or use a reverse proxy with a trusted cert.',
     );
 
     return {
@@ -241,215 +157,161 @@ function ensureSelfSignedCert(userData: string): TlsMaterial {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Bootstrap
-// ---------------------------------------------------------------------------
-
-async function main(): Promise<void> {
-  const port = Number(process.env.PORT ?? 8666);
-
-  // Resolve the binary's home directory first — all other resource paths derive from it.
-  const exeDir = resolveExeDir();
-  console.info('[server] exe directory:', exeDir);
-  console.info('[server] running as SEA binary:', IS_SEA);
-
-  const userData = resolveUserDataPath(exeDir);
-
-  console.info('[server] userData path:', userData);
-
-  // ---------------------------------------------------------------------------
-  // Auth credential — resolve at startup so misconfiguration is caught early.
-  // ---------------------------------------------------------------------------
-  const cred = resolveCredential();
-  if (cred === null) {
-    console.warn(
-      '[server] WARNING: No auth credential configured. ' +
-        'Set ONEFOLDER_AUTH_SECRET (or ONEFOLDER_AUTH_USER + ONEFOLDER_AUTH_PASSWORD). ' +
-        'ALL requests will be rejected with 401 until a credential is configured.',
-    );
-  } else {
-    console.info('[server] Auth credential configured (user:', cred.user, ').');
+/**
+ * Resolve TLS material from the environment, caching a self-signed cert in
+ * `userData` when TLS is requested without an explicit cert/key pair.
+ *
+ * @param userData  Directory used to cache a generated certificate.
+ * @param env       Environment to read (injected so this stays testable).
+ * @returns         TLS material, or null when TLS is not enabled.
+ */
+export function resolveTlsMaterial(
+  userData: string,
+  env: NodeJS.ProcessEnv = process.env,
+  logger: ServerLogger = createConsoleLogger(),
+): TlsMaterial | null {
+  const enabled = env.ONEFOLDER_TLS === '1' || env.ONEFOLDER_TLS === 'true';
+  if (!enabled) {
+    return null;
   }
 
-  // ---------------------------------------------------------------------------
-  // TLS configuration — optional.
-  // ---------------------------------------------------------------------------
-  const tlsEnabled = process.env.ONEFOLDER_TLS === '1' || process.env.ONEFOLDER_TLS === 'true';
-  const tlsSecure = tlsEnabled; // whether to add Secure flag to cookies
+  const certEnv = env.ONEFOLDER_TLS_CERT;
+  const keyEnv = env.ONEFOLDER_TLS_KEY;
 
-  let tlsMaterial: TlsMaterial | null = null;
-  if (tlsEnabled) {
-    const certEnv = process.env.ONEFOLDER_TLS_CERT;
-    const keyEnv = process.env.ONEFOLDER_TLS_KEY;
-
-    if (certEnv !== undefined && keyEnv !== undefined) {
-      // Operator-provided cert + key.
-      if (!fse.pathExistsSync(certEnv)) {
-        console.error('[server] ONEFOLDER_TLS_CERT path not found:', certEnv);
-        process.exit(1);
-      }
-      if (!fse.pathExistsSync(keyEnv)) {
-        console.error('[server] ONEFOLDER_TLS_KEY path not found:', keyEnv);
-        process.exit(1);
-      }
-      tlsMaterial = {
-        cert: fse.readFileSync(certEnv, 'utf8'),
-        key: fse.readFileSync(keyEnv, 'utf8'),
-      };
-      console.info('[server] Using operator-provided TLS certificate:', certEnv);
-    } else {
-      // Auto-generate a self-signed cert.
-      tlsMaterial = ensureSelfSignedCert(userData);
+  if (certEnv !== undefined && certEnv !== '' && keyEnv !== undefined && keyEnv !== '') {
+    if (!fse.pathExistsSync(certEnv)) {
+      throw new Error(`[server] ONEFOLDER_TLS_CERT path not found: ${certEnv}`);
     }
+    if (!fse.pathExistsSync(keyEnv)) {
+      throw new Error(`[server] ONEFOLDER_TLS_KEY path not found: ${keyEnv}`);
+    }
+    logger.info(`[server] Using operator-provided TLS certificate: ${certEnv}`);
+    return {
+      cert: fse.readFileSync(certEnv, 'utf8'),
+      key: fse.readFileSync(keyEnv, 'utf8'),
+    };
   }
 
-  // Resolve active library
-  const registry = new LibraryRegistry(userData);
-  const activeLibraryId = registry.getActiveLibraryId();
+  return ensureSelfSignedCert(userData, logger);
+}
 
-  if (!activeLibraryId) {
-    console.error(
-      '[server] No active library found at',
-      userData,
-      '— launch the desktop app at least once to create a library.',
-    );
-    process.exit(1);
+// ---------------------------------------------------------------------------
+// Server bootstrap
+// ---------------------------------------------------------------------------
+
+/**
+ * Release everything a (possibly only partially) started server owns.
+ *
+ * Safe to call at any point after the two handles exist: `exifIO.close()` on a
+ * child that never opened is a no-op, and closing a read-only sqlite handle
+ * twice is guarded by the caller.
+ */
+async function closeServerResources(
+  db: InstanceType<typeof Database>,
+  exifIO: ExifIO,
+): Promise<void> {
+  await exifIO.close().catch(() => undefined);
+  db.close();
+}
+
+/**
+ * Build and start the sidecar server.
+ *
+ * Rejects (never exits the process) when the database is missing, the port is
+ * taken, or the listener cannot start.
+ */
+export async function startServer(opts: ServeOptions): Promise<ServerHandle> {
+  const logger = opts.logger ?? createConsoleLogger();
+
+  if (!fse.pathExistsSync(opts.dbPath)) {
+    throw new Error(messages.dbNotFound(opts.dbPath));
   }
-
-  const dbPath = getSqliteDbPath(userData, activeLibraryId);
-
-  if (!fse.pathExistsSync(dbPath)) {
-    console.error('[server] Database not found at', dbPath);
-    process.exit(1);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Derive the thumbnail directory for the active library.
-  //
-  // The server runs alongside the portable build where userData is the portable
-  // data directory.  We detect portable mode the same way resolveUserDataPath()
-  // does: PORTABLE_EXECUTABLE_DIR env-var or presence of a portable.txt / data/
-  // directory next to the executable.
-  //
-  // In portable mode: thumbnails live at {userData}/thumbnails/{libraryId}
-  // In dev / non-portable: thumbnails live at {os.tmpdir()}/OneFolder/{libraryId}/thumbnails
-  // ---------------------------------------------------------------------------
-
-  // isPortable is determined by the same markers that resolveUserDataPath uses.
-  // exeDir already accounts for SEA vs dev mode.
-  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR ?? exeDir;
-  const isPortable =
-    process.env.PORTABLE_EXECUTABLE_DIR !== undefined ||
-    fse.pathExistsSync(path.join(portableDir, 'portable.txt')) ||
-    fse.pathExistsSync(path.join(portableDir, 'data'));
-
-  const tempPath = isPortable
-    ? userData // In portable mode temp is remapped to userData by RendererMessenger
-    : path.join(os.tmpdir());
-
-  const thumbnailDir = getDefaultThumbnailDir(userData, tempPath, isPortable, activeLibraryId);
-
-  console.info('[server] Thumbnail directory:', thumbnailDir);
 
   // Open strictly read-only — the sidecar must never write to the library.
-  const db = new Database(dbPath, { readonly: true });
+  //
+  // No journal_mode pragma is issued here. WAL is a property of the database
+  // FILE which readers detect automatically; a read-only connection cannot
+  // change it, so the previous `db.pragma('journal_mode = WAL')` either no-oped
+  // or threw SQLITE_READONLY depending on the file's current mode. Inside the
+  // Electron main process that would take serve mode down at startup.
+  const db = new Database(opts.dbPath, { readonly: true });
 
-  // WAL + foreign-key pragma set at connection time (read-only DB still needs WAL
-  // reader checkpoint mode so it sees the latest WAL frames written by the desktop).
-  db.pragma('journal_mode = WAL');
+  // ExifIO spawns a long-lived exiftool child process. From here on the server
+  // owns two OS resources, so EVERY failure path below must release them before
+  // it propagates — a rejected start that skips this leaves an orphaned
+  // exiftool.exe behind for the lifetime of the machine. Measured: launching a
+  // second serve process on a taken port left one exiftool child per attempt.
+  const exifIO = new ExifIO('|', opts.exiftoolPath);
+  try {
+    return await buildAndListen(opts, logger, db, exifIO);
+  } catch (err) {
+    await closeServerResources(db, exifIO);
+    throw err;
+  }
+}
 
+/**
+ * Wire up the Express app and open the listener.
+ *
+ * Split out of `startServer` so that the database handle and the exiftool child
+ * are owned by a scope that closes them when this rejects.
+ */
+async function buildAndListen(
+  opts: ServeOptions,
+  logger: ServerLogger,
+  db: InstanceType<typeof Database>,
+  exifIO: ExifIO,
+): Promise<ServerHandle> {
   // Construct SQLiteBackend with the read-only connection.
   // Pass a no-op notifyChange — the server never fires change notifications.
   const backend = new SQLiteBackend(db, () => {});
 
-  // ---------------------------------------------------------------------------
-  // ExifIO — read-only metadata service.
-  //
-  // We create a single shared ExifIO instance for the lifetime of the server
-  // process.  ExifIO holds a persistent exiftool child process (node-exiftool)
-  // that it reuses for all metadata reads, which avoids the startup overhead of
-  // launching exiftool per request.
-  //
-  // Only read methods are exposed via HTTP — there are no write endpoints in
-  // makeMetadataRouter, so the "overwrite_original_in_place" write args are
-  // never reached from the web path.
+  // ExifIO — read-only metadata service, one persistent exiftool child process
+  // reused for all reads. Only read methods are exposed over HTTP; there are no
+  // write endpoints in makeMetadataRouter.
   //
   // The hierarchical separator defaults to '|' (the OneFolder standard); the
-  // server doesn't have access to per-library localStorage preferences, so it
-  // always uses the default.  Tag hierarchy reads will parse correctly for any
-  // library using the default separator.
-  // ---------------------------------------------------------------------------
-  // Re-derive the exiftool path relative to the exe directory (SEA-safe).
-  // This replaces the getExtraResourcePath() call that ExifIO.ts uses at
-  // module-level — which works in dev/Electron but is virtualised in a SEA.
-  const exiftoolPath = resolveExiftoolPath(exeDir);
-  console.info('[server] exiftool path:', exiftoolPath);
-
-  const exifIO = new ExifIO('|', exiftoolPath);
+  // server has no access to per-library localStorage preferences.
   try {
     await exifIO.initialize();
-    console.info('[server] ExifIO (exiftool) initialized.');
+    logger.info('[server] ExifIO (exiftool) initialized.');
   } catch (exifErr) {
-    // Non-fatal: metadata routes will fail gracefully if exiftool cannot start,
-    // but image serving and DB reads are unaffected.
-    console.warn(
-      '[server] ExifIO initialization failed — metadata routes will be unavailable:',
-      exifErr,
+    // Non-fatal: metadata routes fail gracefully if exiftool cannot start, but
+    // image serving and DB reads are unaffected.
+    logger.warn(
+      `[server] ExifIO initialization failed — metadata routes will be unavailable: ${String(
+        exifErr,
+      )}`,
     );
   }
-
-  // ---------------------------------------------------------------------------
-  // Express app
-  // ---------------------------------------------------------------------------
 
   const app = express();
 
   // Parse JSON request bodies (needed by POST routes in the data router).
   app.use(express.json());
 
-  // ---------------------------------------------------------------------------
-  // COOP / COEP / CORP — applied first so they are present on EVERY response,
-  // including 401 auth rejections.  This ensures assets that are loaded after
-  // authentication still see the correct headers and masonry SharedArrayBuffer
-  // continues to work.
-  // ---------------------------------------------------------------------------
-
+  // COOP/COEP/CORP first, so they are present on EVERY response including auth
+  // rejections — assets loaded after authentication still see correct headers
+  // and masonry's SharedArrayBuffer keeps working.
   function coopCoepMiddleware(_req: Request, res: Response, next: NextFunction): void {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     next();
   }
-
   app.use(coopCoepMiddleware);
 
-  // ---------------------------------------------------------------------------
-  // Auth — applied globally after COOP/COEP/CORP (so 401 responses still carry
-  // the security headers) but before all route handlers, static files, and the
-  // SPA fallback.
-  //
-  // POST /api/auth/login is explicitly exempted inside makeAuthMiddleware so the
-  // browser can exchange credentials for a session cookie on first visit.
-  // ---------------------------------------------------------------------------
+  // Auth gate. With no credential configured this is a pass-through — see
+  // makeAuthMiddleware. Mounted after the security headers and before every
+  // route handler, static file and the SPA fallback.
+  const tlsActive = opts.tls !== null;
+  app.use(makeAuthMiddleware(opts.credential, tlsActive));
 
-  app.use(makeAuthMiddleware(cred, tlsSecure));
+  // Login / logout — mounted before static files so it takes precedence.
+  app.use('/api', makeLoginRouter(opts.credential, tlsActive));
 
-  // ---------------------------------------------------------------------------
-  // Login / logout router — must be mounted BEFORE static files and the API
-  // routers so it takes precedence.
-  // ---------------------------------------------------------------------------
-  app.use('/api', makeLoginRouter(cred, tlsSecure));
-
-  // ---------------------------------------------------------------------------
-  // SPA static files (from TASK-130's web webpack output).
-  // The directory may not exist yet during development; serve it conditionally.
-  // ---------------------------------------------------------------------------
-
-  // Resolve the SPA dist dir relative to the exe directory (SEA-safe).
-  // Packaged layout: dist-headless/dist-web/  (exeDir = dist-headless/)
-  // Dev layout:      repo-root/dist-web/       (exeDir = repo root)
-  const spaDir = path.join(exeDir, 'dist-web');
-
+  // SPA static files.
+  const spaDir = opts.spaDir;
   if (fse.pathExistsSync(spaDir)) {
     app.use(
       express.static(spaDir, {
@@ -462,76 +324,78 @@ async function main(): Promise<void> {
       }),
     );
   } else {
-    console.warn(
-      '[server] SPA dist-web directory not found at',
-      spaDir,
-      '— static serving disabled.',
-    );
+    logger.warn(`[server] SPA assets not found at ${spaDir} — static serving disabled.`);
   }
 
-  // ---------------------------------------------------------------------------
-  // API routes
-  // ---------------------------------------------------------------------------
-
+  // API routes.
   app.use('/api', makeDataRouter(backend, db));
-  app.use('/api', makeImagesRouter(db, thumbnailDir));
+  app.use('/api', makeImagesRouter(db, opts.thumbnailDir));
   app.use('/api', makeMetadataRouter(db, exifIO));
   app.use('/api', makeRescanRouter(db));
 
-  // ---------------------------------------------------------------------------
-  // SPA fallback — return index.html for any non-/api route so the React
-  // router handles client-side navigation.
-  // ---------------------------------------------------------------------------
-
+  // SPA fallback — index.html for any non-/api route so the client router
+  // handles navigation.
+  // A RegExp, not the string '*': Express 5 switched to path-to-regexp v8,
+  // where a bare '*' is a parse error ("Missing parameter name at index 1")
+  // rather than a wildcard. A RegExp means the same thing in both versions.
   const indexHtml = path.join(spaDir, 'index.html');
-
-  app.get('*', (_req: Request, res: Response) => {
+  app.get(/.*/, (_req: Request, res: Response) => {
     if (fse.pathExistsSync(indexHtml)) {
       res.sendFile(indexHtml);
     } else {
       res.status(503).json({
-        error: 'SPA not built yet. Run `yarn build:web` (TASK-130) to produce dist-web/.',
+        error: `SPA assets not found at ${spaDir}. Run \`yarn build\` to produce them.`,
       });
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Start listening — HTTP or HTTPS depending on ONEFOLDER_TLS.
-  // ---------------------------------------------------------------------------
+  const server =
+    opts.tls !== null
+      ? https.createServer({ cert: opts.tls.cert, key: opts.tls.key }, app)
+      : http.createServer(app);
 
-  if (tlsMaterial !== null) {
-    // HTTPS listener.
-    const server = https.createServer({ cert: tlsMaterial.cert, key: tlsMaterial.key }, app);
-    server.listen(port, () => {
-      console.info(`[server] OneFolder sidecar listening on https://localhost:${port}`);
-      console.info('[server] Active library id:', activeLibraryId);
-      console.info('[server] Database path:', dbPath);
-      console.info('[server] TLS: enabled');
-    });
-  } else {
-    // Plain HTTP listener.
-    http.createServer(app).listen(port, () => {
-      console.info(`[server] OneFolder sidecar listening on http://localhost:${port}`);
-      console.info('[server] Active library id:', activeLibraryId);
-      console.info('[server] Database path:', dbPath);
-      console.info('[server] TLS: disabled (plain HTTP)');
-    });
+  // Bind. No host argument: the server listens on every interface so other
+  // devices on the network can reach it — the banner discloses exactly that.
+  await new Promise<void>((resolve, reject) => {
+    function onError(err: NodeJS.ErrnoException): void {
+      server.removeListener('listening', onListening);
+      if (err.code === 'EADDRINUSE') {
+        reject(new Error(messages.portInUse(opts.port)));
+      } else {
+        reject(err);
+      }
+    }
+    function onListening(): void {
+      server.removeListener('error', onError);
+      resolve();
+    }
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(opts.port);
+  });
+
+  for (const line of buildStartupBanner({
+    port: opts.port,
+    protocol: opts.tls !== null ? 'https' : 'http',
+    authUser: opts.credential === null ? null : opts.credential.user,
+    authIsSharedSecret: opts.credential?.kind === 'secret',
+    libraryName: opts.libraryName,
+    logFilePath: logger.filePath,
+  })) {
+    logger.info(line);
   }
 
-  // Graceful shutdown: close the DB on SIGTERM/SIGINT so better-sqlite3
-  // checkpoints the WAL before the process exits.
-  function shutdown(signal: string): void {
-    console.info(`[server] ${signal} received — closing database and exiftool...`);
-    exifIO.close().catch(console.warn);
-    db.close();
-    process.exit(0);
-  }
-
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
-  process.once('SIGINT', () => shutdown('SIGINT'));
+  let closed = false;
+  return {
+    port: opts.port,
+    async close(): Promise<void> {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      logger.info(messages.shuttingDown());
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeServerResources(db, exifIO);
+    },
+  };
 }
-
-main().catch((err: unknown) => {
-  console.error('[server] Fatal error during startup:', err);
-  process.exit(1);
-});

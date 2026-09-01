@@ -3,9 +3,8 @@ import { observer } from 'mobx-react-lite';
 
 import { IconSet, KeyCombo } from 'widgets';
 import { MenuButton, MenuItem } from 'widgets/menus';
-import { RendererMessenger } from 'src/ipc/renderer';
 import { useStore } from 'src/frontend/contexts/StoreContext';
-import { shell } from 'electron';
+import platform from 'src/frontend/platform';
 
 const SecondaryCommands = observer(() => {
   const { uiStore } = useStore();
@@ -38,7 +37,7 @@ const SecondaryCommands = observer(() => {
       <MenuItem
         icon={IconSet.HELPCENTER}
         onClick={() => {
-          shell.openExternal(
+          platform.desktop.openExternal(
             'https://foul-channel-e2c.notion.site/Photo-Folder-71473f9595304d4fb7832237a787c56b?pvs=4',
           );
         }}

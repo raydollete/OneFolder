@@ -86,13 +86,17 @@ export const CustomThemeProvider = ({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     // Load options and previously selected theme on startup
-    platform.desktop.getThemesDirectory().then((dir) => {
-      setThemeDir(dir);
-      loadThemeFiles(dir).then(setOptions);
-      if (theme) {
-        applyTheme(dir, theme);
-      }
-    });
+    // Desktop only — custom themes are read from a directory on disk, which the
+    // web build has no access to (getThemesDirectory rejects there by design).
+    if (!platform.isWebBuild) {
+      platform.desktop.getThemesDirectory().then((dir) => {
+        setThemeDir(dir);
+        loadThemeFiles(dir).then(setOptions);
+        if (theme) {
+          applyTheme(dir, theme);
+        }
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

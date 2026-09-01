@@ -2,7 +2,7 @@ import React, { ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { humanFileSize } from 'common/fmt';
 import { isFileExtensionVideo } from 'common/fs';
-import { RendererMessenger } from '../../ipc/renderer';
+import { RendererMessenger } from 'src/ipc/renderer';
 import { useStore } from '../contexts/StoreContext';
 import { ClientFile } from '../entities/File';
 import { usePromise } from '../hooks/usePromise';

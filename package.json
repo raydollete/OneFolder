@@ -15,17 +15,14 @@
     "package:portable": "yarn build && electron-builder --win portable",
     "package:appimage": "yarn build && electron-builder --linux AppImage",
     "logo": "ncp ./resources/logo/icns/onefolder-logomark-fc.icns ./build/icon.icns && ncp ./resources/logo/ico/onefolder-logomark-fc-256x256.ico ./build/icon.ico",
-    "build": "rimraf dist && yarn production && yarn logo",
+    "build": "rimraf dist && yarn production && yarn build:web && yarn logo",
     "convert-backup": "electron scripts/convert-dexie-backup.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "build:masonry": "cd wasm/wasm-build && cargo run masonry masonry/masonry-scalar && cargo run masonry masonry/masonry-simd -- -C target-feature=+simd128",
     "build:exr": "cd wasm/wasm-build && cargo run exr-decoder exr",
-    "dev:server": "ts-node --transpile-only src/server/index.ts",
     "build:web": "webpack --config ./webpack.web.js --mode production",
-    "build:server": "webpack --config ./webpack.server.js --mode production",
-    "dev:web": "webpack --watch --config ./webpack.web.js --mode development --progress --color",
-    "package:headless": "node scripts/package-headless.js"
+    "dev:web": "webpack --watch --config ./webpack.web.js --mode development --progress --color"
   },
   "build": {
     "appId": "com.onefolder-app.onefolder",
@@ -70,7 +67,15 @@
       ]
     },
     "extraResources": [
-      "resources/themes"
+      "resources/themes",
+      {
+        "from": "dist-web",
+        "to": "dist-web"
+      },
+      {
+        "from": "wasm/packages/exr",
+        "to": "wasm/packages/exr"
+      }
     ],
     "portable": {
       "artifactName": "brave.${ext}",
@@ -82,7 +87,9 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/better-sqlite3/**"
+      "node_modules/better-sqlite3/**",
+      "node_modules/sharp/**",
+      "node_modules/@img/**"
     ],
     "nodeGypRebuild": false,
     "npmRebuild": true

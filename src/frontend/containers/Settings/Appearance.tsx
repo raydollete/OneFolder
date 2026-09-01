@@ -1,5 +1,4 @@
 // import { WINDOW_STORAGE_KEY } from 'common/window';
-import { shell } from 'electron';
 import { observer } from 'mobx-react-lite';
 import React, { useEffect, useState } from 'react';
 import useCustomTheme from 'src/frontend/hooks/useCustomTheme';

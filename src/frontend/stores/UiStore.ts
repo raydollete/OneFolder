@@ -1212,12 +1212,20 @@ class UiStore {
     // invalid location. Re-deriving here (overriding any stale persisted value)
     // keeps thumbnails relative to the executable. Pass the library ID so each
     // library gets its own thumbnail subdirectory.
-    platform.desktop
-      .getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined)
-      .then((defaultThumbDir) => {
-        this.setThumbnailDirectory(defaultThumbDir);
-        platform.fs.ensureDirSync(this.thumbnailDirectory);
-      });
+    //
+    // Desktop only. The web build has no local thumbnail cache — the sidecar
+    // server generates and serves them — and getDefaultThumbnailDirectory
+    // rejects loudly there by design. Guarding on the build is deliberate:
+    // a .catch() here would also swallow a REAL desktop failure, which is the
+    // one case that must still shout.
+    if (!platform.isWebBuild) {
+      platform.desktop
+        .getDefaultThumbnailDirectory(this.storageKeyPrefix || undefined)
+        .then((defaultThumbDir) => {
+          this.setThumbnailDirectory(defaultThumbDir);
+          platform.fs.ensureDirSync(this.thumbnailDirectory);
+        });
+    }
   }
 
   getPersistentPreferences(): Partial<Record<keyof UiStore, unknown>> {

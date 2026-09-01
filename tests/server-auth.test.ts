@@ -87,18 +87,50 @@ function basicAuthHeader(user: string, pass: string): string {
 // ---------------------------------------------------------------------------
 
 describe('makeAuthMiddleware', () => {
-  describe('no credential configured (cred = null)', () => {
+  describe('no credential configured (cred = null) — authentication is optional', () => {
     const mw = makeAuthMiddleware(null, false);
 
-    it('rejects any request with 401', () => {
+    it('serves a request that carries no credential at all', () => {
       const req = makeReq();
       const res = makeRes();
       const next = jest.fn();
 
       mw(req, res as unknown as Response, next as unknown as NextFunction);
 
-      expect(res._status).toBe(401);
-      expect(next).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('does not issue a WWW-Authenticate challenge', () => {
+      const req = makeReq();
+      const res = makeRes();
+
+      mw(req, res as unknown as Response, jest.fn() as unknown as NextFunction);
+
+      expect(res._headers['WWW-Authenticate']).toBeUndefined();
+    });
+
+    it('serves an API route, not just the SPA', () => {
+      const req = makeReq({ path: '/api/files' });
+      const res = makeRes();
+      const next = jest.fn();
+
+      mw(req, res as unknown as Response, next as unknown as NextFunction);
+
+      expect(next).toHaveBeenCalled();
+      expect(res._status).toBe(200);
+    });
+
+    it('ignores a bogus Authorization header rather than rejecting it', () => {
+      const req = makeReq({
+        headers: { authorization: 'Basic ' + Buffer.from(':').toString('base64') },
+      });
+      const res = makeRes();
+      const next = jest.fn();
+
+      mw(req, res as unknown as Response, next as unknown as NextFunction);
+
+      expect(next).toHaveBeenCalled();
     });
   });
 
@@ -310,13 +342,21 @@ describe('resolveCredential', () => {
 
   it('returns { user: secret, password: secret } when ONEFOLDER_AUTH_SECRET is set', () => {
     process.env.ONEFOLDER_AUTH_SECRET = 'mysecret';
-    expect(resolveCredential()).toEqual({ user: 'mysecret', password: 'mysecret' });
+    expect(resolveCredential()).toEqual({
+      user: 'mysecret',
+      password: 'mysecret',
+      kind: 'secret',
+    });
   });
 
   it('returns explicit user/password when ONEFOLDER_AUTH_USER + ONEFOLDER_AUTH_PASSWORD are set', () => {
     process.env.ONEFOLDER_AUTH_USER = 'bob';
     process.env.ONEFOLDER_AUTH_PASSWORD = 'secretpass';
-    expect(resolveCredential()).toEqual({ user: 'bob', password: 'secretpass' });
+    expect(resolveCredential()).toEqual({
+      user: 'bob',
+      password: 'secretpass',
+      kind: 'explicit',
+    });
   });
 
   it('prefers ONEFOLDER_AUTH_USER/PASSWORD over AUTH_SECRET when both are set', () => {
@@ -326,5 +366,45 @@ describe('resolveCredential', () => {
     const cred = resolveCredential();
     expect(cred?.user).toBe('explicit-user');
     expect(cred?.password).toBe('explicit-pass');
+  });
+
+  // An empty value must be ABSENT, not a credential. Accepting '' would make
+  // `Authorization: Basic Og==` (base64 of ":") a valid login while the startup
+  // banner reported authentication as enabled — a fail-open dressed as a
+  // fail-closed. Harmless while the absent case rejected everything; dangerous
+  // now that the absent case serves everything.
+  it('treats an empty ONEFOLDER_AUTH_SECRET as not configured', () => {
+    process.env.ONEFOLDER_AUTH_SECRET = '';
+    expect(resolveCredential()).toBeNull();
+  });
+
+  it('treats a whitespace-only ONEFOLDER_AUTH_SECRET as not configured', () => {
+    process.env.ONEFOLDER_AUTH_SECRET = '   ';
+    expect(resolveCredential()).toBeNull();
+  });
+
+  it('treats an empty ONEFOLDER_AUTH_USER/PASSWORD pair as not configured', () => {
+    process.env.ONEFOLDER_AUTH_USER = '';
+    process.env.ONEFOLDER_AUTH_PASSWORD = '';
+    expect(resolveCredential()).toBeNull();
+  });
+
+  it('falls back to AUTH_SECRET when only an empty USER is set', () => {
+    process.env.ONEFOLDER_AUTH_USER = '';
+    process.env.ONEFOLDER_AUTH_SECRET = 'realsecret';
+    expect(resolveCredential()).toEqual({
+      user: 'realsecret',
+      password: 'realsecret',
+      kind: 'secret',
+    });
+  });
+
+  it('reads from an injected environment rather than only process.env', () => {
+    expect(resolveCredential({ ONEFOLDER_AUTH_SECRET: 'injected' })).toEqual({
+      user: 'injected',
+      password: 'injected',
+      kind: 'secret',
+    });
+    expect(resolveCredential({})).toBeNull();
   });
 });

@@ -18,7 +18,12 @@
       "Bash(npx eslint *)",
       "Bash(npx jest *)",
       "Bash(npx tsc *)",
-      "Bash(grep -E \"src[\\\\\\\\/]\\(main|ipc|frontend\\)\")"
+      "Bash(grep -E \"src[\\\\\\\\/]\\(main|ipc|frontend\\)\")",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-CimInstance *)",
+      "PowerShell(Get-ChildItem -Path D:\\\\Dev\\\\OneFolder\\\\dist\\\\data -Recurse -Depth 2 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'onefolder|\\\\.db|\\\\.log|\\\\.json' } | Select-Object FullName, Length, LastWriteTime | Sort-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path X:\\\\_OneFolder\\\\data -Recurse -Depth 3 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'onefolder|\\\\.db|\\\\.wal|\\\\.shm|\\\\.log|libraries|active-library' } | Select-Object FullName, Length, LastWriteTime | Sort-Object FullName | Format-Table -AutoSize -Wrap)",
+      "PowerShell(Get-Volume *)"
     ]
   },
   "enabledPlugins": {

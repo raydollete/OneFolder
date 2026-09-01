@@ -3,15 +3,15 @@ import React, { useEffect, useState } from 'react';
 
 import { IS_MAC } from 'common/process';
 import { WindowSystemButtonPress } from 'src/ipc/messages';
-import { RendererMessenger } from 'src/ipc/renderer';
+import platform from 'src/frontend/platform';
 import { IconSet } from 'widgets/icons';
 import { useStore } from '../contexts/StoreContext';
 
 const WindowsTitlebar = () => {
   const [isFocused, setIsFocused] = useState(true);
   useEffect(() => {
-    const removeFocusHandler = RendererMessenger.onFocus(() => setIsFocused(true));
-    const removeBlurHandler = RendererMessenger.onBlur(() => setIsFocused(false));
+    const removeFocusHandler = platform.desktop.onFocus(() => setIsFocused(true));
+    const removeBlurHandler = platform.desktop.onBlur(() => setIsFocused(false));
 
     return () => {
       removeFocusHandler();
@@ -46,10 +46,10 @@ const WindowTitlebar = observer(() => {
 export default WindowsTitlebar;
 
 const WindowSystemButtons = () => {
-  const [isMaximized, setMaximized] = useState(() => RendererMessenger.isMaximized());
+  const [isMaximized, setMaximized] = useState(() => platform.desktop.isMaximized());
   useEffect(() => {
-    const removeUnmaximizeHandler = RendererMessenger.onUnmaximize(() => setMaximized(false));
-    const removeMaximizeHandler = RendererMessenger.onMaximize(() => setMaximized(true));
+    const removeUnmaximizeHandler = platform.desktop.onUnmaximize(() => setMaximized(false));
+    const removeMaximizeHandler = platform.desktop.onMaximize(() => setMaximized(true));
 
     return () => {
       removeUnmaximizeHandler();
@@ -60,13 +60,13 @@ const WindowSystemButtons = () => {
   return (
     <div id="window-system-buttons">
       <button
-        onClick={() => RendererMessenger.pressWindowSystemButton(WindowSystemButtonPress.Minimize)}
+        onClick={() => platform.desktop.pressWindowSystemButton(WindowSystemButtonPress.Minimize)}
       >
         {IconSet.CHROME_MINIMIZE}
       </button>
       <button
         onClick={() =>
-          RendererMessenger.pressWindowSystemButton(
+          platform.desktop.pressWindowSystemButton(
             isMaximized ? WindowSystemButtonPress.Restore : WindowSystemButtonPress.Maximize,
           )
         }
@@ -74,7 +74,7 @@ const WindowSystemButtons = () => {
         {isMaximized ? IconSet.CHROME_RESTORE : IconSet.CHROME_MAXIMIZE}
       </button>
       <button
-        onClick={() => RendererMessenger.pressWindowSystemButton(WindowSystemButtonPress.Close)}
+        onClick={() => platform.desktop.pressWindowSystemButton(WindowSystemButtonPress.Close)}
       >
         {IconSet.CHROME_CLOSE}
       </button>

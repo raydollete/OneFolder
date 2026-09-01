@@ -8,13 +8,21 @@ aliases: ["headless", "sidecar", "web-build", "remote-browse", "INV-034"]
 
 # Headless / Sidecar Web Build
 
-OneFolder can run headless — without an Electron window — as a local Node HTTP server that serves the same gallery UI to a web browser on another device. The library remains read-only from the browser: browse, search, filter, view tags, and inspect metadata, but no writes, deletes, or media jobs.
+OneFolder can run headless — without an Electron window — as a local HTTP server that serves the same gallery UI to a web browser on another device. The library remains read-only from the browser: browse, search, filter, view tags, and inspect metadata, but no writes, deletes, or media jobs.
 
-See [INV-034](TODO/backlog/investigations/INV-034_MEDIUM_OTHER_headless-sidecar-web-build.md) for the root-cause analysis and design decisions. The spawned implementation tasks are TASK-126 through TASK-137.
+Headless is a **mode of the portable executable**, not a separate binary:
+
+```bash
+brave.exe --serve              # serve instead of opening the GUI
+brave.exe --serve --port 9000  # custom port
+```
+
+See [INV-034](TODO/backlog/investigations/INV-034_MEDIUM_OTHER_headless-sidecar-web-build.md) for the original root-cause analysis (TASK-126 through TASK-137), and the OpenSpec change `add-portable-serve-mode` for the move into the portable executable and the optional-authentication contract.
 
 ## Overview
 
 - **Single codebase, build-time seam.** A webpack alias selects one of two platform implementations at bundle time. The Electron build gets the pass-through; the web build gets HTTP-backed stubs. No code is forked.
+- **One server, one host.** The server is a library (`startServer(opts)`) that derives nothing about its environment. The Electron main process resolves userData, the database, the thumbnail cache, exiftool and the SPA directory once, and passes them in. There is no second implementation to keep at parity.
 - **`DataStorage` reuse.** The entire MobX store and component tree talks to the `DataStorage` interface. `HttpBackend` is a second implementation that `fetch()`es the sidecar's REST API. Stores and components are unchanged.
 - **Read-only everywhere.** The server opens SQLite strictly `readonly: true`. Every write method in `HttpBackend` and the web platform seam throws immediately with a loud error message so broken call sites surface at development time rather than silently no-oping.
 - **Desktop app unchanged.** The Electron seam is a literal, zero-logic delegation to the same APIs that existed before the seam was introduced. No desktop behaviour changes.
@@ -150,16 +158,33 @@ Response: `{ ok: true, fileCount, locationCount, scannedAt: <ISO 8601> }`
 
 ## Security Boundary
 
-### Authentication
+### Authentication is optional
 
-All routes (except `POST /api/auth/login`) require a valid credential. Two delivery paths:
+**If no credential is configured, there is no authentication gate** — every request is served, and `POST /api/auth/login` is a successful no-op. This is deliberate: the intended deployment is browsing your own library from your own phone on your own wifi.
+
+An empty or whitespace-only environment variable counts as *not configured*. (Treating `''` as a credential would have accepted `Authorization: Basic Og==` — base64 of `":"` — while the startup banner claimed authentication was enabled.)
+
+When a credential **is** configured, all routes except `POST /api/auth/login` require it, via two delivery paths:
 
 1. **`Authorization: Basic <base64(user:password)>`** — used by `HttpBackend` for all `fetch()` calls.
 2. **Signed session cookie `of_auth`** — issued by `POST /api/auth/login`. Allows `<img src>` tags and browser navigation to carry auth without custom headers. The cookie is `HttpOnly; SameSite=Strict; Secure` (when TLS is active).
 
 The cookie value is an HMAC-SHA256 token derived from the credentials; comparison uses `timingSafeEqual` to prevent timing attacks.
 
-If no credential is configured at startup, the server rejects every request with HTTP 401 and logs a warning.
+### Exposure is disclosed, not restricted
+
+The listener binds **every network interface** so other devices can reach it. Because that combines with optional authentication, the server states what it resolved at startup — to the log file and to stdout:
+
+```
+[server] OneFolder serve mode — listening on port 8666
+[server]   http://127.0.0.1:8666
+[server]   http://192.168.1.42:8666   (reachable from your network)
+[server] Authentication: DISABLED — no credential configured
+[server] Library: My Library
+[server] Log file: D:\OneFolder\data\server.log
+```
+
+The credential value is never logged; only the resolved user name, and only when authentication is enabled.
 
 ### Location-Scoped Path Resolver (`src/server/path-resolver.ts`)
 
@@ -196,21 +221,28 @@ When `ONEFOLDER_TLS=1` but no cert/key paths are provided, the server auto-gener
 
 ## The Sidecar Server (`src/server/`)
 
-`src/server/index.ts` is the entry point. It is never imported by the Electron main or renderer bundle — it runs as a standalone Node process.
+`src/server/index.ts` exports `startServer(opts)`. It is a **library, not a script**: it derives nothing about its environment, never reads `process.argv` or `process.env`, and never calls `process.exit()` — the process it runs in may be the desktop application. Startup failures reject the returned promise.
+
+`src/serve-mode.ts` is the only glue between Electron and that library. `src/main.ts` parses `--serve` at module scope (before the single-instance lock, which also runs at module scope) and calls it.
 
 ### Startup sequence
 
-1. Detect SEA vs. dev mode via `node:sea`; derive `exeDir` accordingly.
-2. Re-derive `userData` (same logic as the portable Electron build: `PORTABLE_EXECUTABLE_DIR` env var, then portable markers, then OS-standard path).
-3. Resolve auth credentials from env vars (`resolveCredential()`). Warn loudly if none are set.
-4. Optionally load TLS material.
-5. Open the active library's SQLite database **read-only** (`new Database(path, { readonly: true })`).
-6. Derive the thumbnail directory for the active library.
-7. Construct `SQLiteBackend` with a no-op `notifyChange`.
-8. Initialize a shared `ExifIO` instance (single persistent exiftool child process reused for all metadata reads).
-9. Build the Express app: COOP/COEP/CORP middleware → auth middleware → login router → SPA static files → API routers → SPA fallback.
-10. Start HTTP or HTTPS listener on `PORT` (default: 8666).
-11. Register `SIGTERM`/`SIGINT` handlers to close DB + exiftool cleanly.
+1. `src/main.ts` resolves portable mode and remaps `userData`/`temp` — this already happens for the GUI, before any flag is read.
+2. `parseServeArgs(process.argv)` detects `--serve` and `--port`.
+3. Serve mode **skips** the single-instance lock, window creation, and ffmpeg temp staging. The lock is keyed on the `userData` directory the GUI and the server share, so taking it would make them mutually exclusive; a second server is stopped by `EADDRINUSE` instead.
+4. `startServeMode()` opens the log file, validates the port, looks up the active library, and resolves the database, thumbnail directory, exiftool path and SPA directory from what Electron already knew.
+5. `resolveCredential(env)` — absent, empty or whitespace-only means no authentication.
+6. `resolveTlsMaterial(userData, env)` — only when `ONEFOLDER_TLS` is set.
+7. `startServer(opts)` opens the database **read-only**, constructs `SQLiteBackend` with a no-op `notifyChange`, initializes a shared `ExifIO` (one persistent exiftool child process), and builds the Express app: COOP/COEP/CORP middleware → auth middleware → login router → SPA static files → API routers → SPA fallback.
+8. The listener binds all interfaces on the resolved port; `EADDRINUSE` becomes an operator-facing message rather than a stack trace.
+9. The startup banner is written to the log file and stdout.
+10. `SIGINT`/`SIGTERM` close the listener, exiftool and the database.
+
+**No `journal_mode` pragma is issued.** WAL is a property of the database *file* that readers detect automatically, and a read-only connection cannot change it — the previous `db.pragma('journal_mode = WAL')` either no-oped or threw `SQLITE_READONLY`.
+
+### Logging
+
+Serve mode writes to `{userData}\server.log` as well as stdout, and the **file is the record**. The portable executable is a Windows GUI-subsystem binary, so its stdout does not reliably attach to the console that launched it: in testing, probe output vanished entirely on some runs and on others arrived late, interleaved with a later command's output.
 
 ### Express middleware stack (in order)
 
@@ -241,91 +273,82 @@ Key differences from the Electron renderer config:
 - `resolve.fallback`: all Node built-ins set to `false` (hard error if any escape the stubs)
 - No `externals` — the browser bundle must be self-contained
 
-### Node Server (`webpack.server.js`)
+### Electron main bundle (`webpack.prod.js` / `webpack.dev.js`)
 
-Target: `['node', 'es2022']`. Output: `dist-server/server.bundle.js`.
+The server now lives inside the Electron main bundle, so its native dependency is externalised there too:
 
-- `node: { __dirname: false }` — preserves real filesystem `__dirname` so the server can locate `dist-web/` at runtime
-- `externals`: `better-sqlite3`, `sharp`, `fsevents`, and any `*.node` file are kept as `require()` calls (native modules cannot be inlined)
+- `externals`: `better-sqlite3`, `sharp`, `fsevents` are kept as `require()` calls (native modules cannot be inlined)
+- `asarUnpack`: `better-sqlite3`, `sharp` and `@img/*` — the native binaries must exist on disk, not inside the archive
+- `extraResources`: `dist-web` (the SPA) and `wasm/packages/exr` (the EXR decoder), both beside the asar so `express.static` does not read image bytes through it
+
+There is no separate Node server bundle. `webpack.server.js`, `scripts/package-headless.js` and the `build:server` / `dev:server` / `package:headless` scripts were removed when serve mode moved into the portable executable — one implementation in one host means parity is structural rather than something QA re-verifies each release.
 
 ### Development Commands
 
 ```bash
 yarn dev:web            # webpack --watch, web SPA in development mode (output: dist-web/)
-yarn dev:server         # ts-node src/server/index.ts (runs server from source directly)
-yarn build:web          # one-shot production web SPA build
-yarn build:server       # one-shot production server bundle build
-yarn package:headless   # build both + produce dist-headless/ SEA binary
+yarn build:web          # one-shot production web SPA build (also run by `yarn build`)
 ```
 
-The Electron development commands (`yarn dev`, `yarn start`) are unchanged.
-
-## Packaging — Node SEA (`scripts/package-headless.js`)
-
-Produces a self-contained `dist-headless/` directory using Node SEA (Single Executable Application, Node v20+). No Node installation is required on the target machine.
-
-### Output layout
-
-```
-dist-headless/
-  onefolder-server[.exe]          ← SEA binary (copy of node binary + injected blob)
-  dist-web/                       ← compiled SPA assets
-  resources/
-    exiftool/
-      exiftool[.exe|.pl]
-      .Exiftool_config
-      lib/                        ← (macOS/Linux: perl lib tree)
-  node_modules/
-    better-sqlite3/
-      build/Release/
-        better_sqlite3.node
-    @img/
-      sharp-<platform>/
-        lib/
-          sharp-<platform>-<ver>.node
-          *.dll                   ← (Windows: libvips + friends)
-  portable.txt                    ← packaged-mode marker
-```
-
-Native modules (`better-sqlite3`, `sharp`) cannot be inlined into the JS bundle. They ship alongside in a `node_modules/` subtree that mirrors the `require()` paths emitted by the webpack bundle.
-
-### SEA build process
-
-1. Run `yarn build:server` and `yarn build:web`.
-2. Write `sea-config.json` pointing at `dist-server/server.bundle.js`.
-3. Run `node --experimental-sea-config sea-config.json` to produce a blob.
-4. Copy the running `node` binary to `dist-headless/onefolder-server[.exe]`.
-5. On Windows: strip the Authenticode signature with `signtool` (required before `postject`).
-6. Inject the blob via `npx postject`.
-7. Write `portable.txt` so the server detects packaged mode.
-
-### Path re-derivation in SEA mode
-
-Inside a SEA binary, `__dirname` is virtualised to a path inside the injected blob — it does not refer to the directory containing the binary. `src/server/index.ts` detects SEA mode via `require('node:sea').isSea()` and when true resolves all resource paths relative to `path.dirname(process.execPath)` instead. This is the same "re-derive at launch" pattern used by the portable Electron build.
-
-### Running the packaged binary
+The Electron development commands (`yarn dev`, `yarn start`) are unchanged. To run serve mode from source:
 
 ```bash
-cd dist-headless/
+yarn dev                                  # build main + renderer bundles
+yarn build:web                            # build the SPA into dist-web/
+electron ./build/main.bundle.js --serve
+```
 
-# Simplest — one shared secret used as both user and password:
-ONEFOLDER_AUTH_SECRET=changeme ./onefolder-server
+## Packaging
+
+Serve mode ships inside the normal portable build — `yarn build && yarn package:portable`. There is no separate packaging step, no SEA binary, and no hand-copied native-module tree.
+
+`yarn build` runs `yarn build:web`, so packaging cannot silently ship without the SPA.
+
+### Packaged layout (the parts serve mode uses)
+
+```
+<portable dir>/
+  brave.exe
+  data/                             ← userData: libraries, thumbnails, server.log
+  resources/
+    app.asar                        ← main + renderer bundles
+    app.asar.unpacked/
+      node_modules/
+        better-sqlite3/…            ← native .node
+        sharp/… , @img/…            ← native .node + libvips DLLs
+    dist-web/                       ← SPA assets (extraResources)
+    wasm/packages/exr/              ← EXR decoder wasm (extraResources)
+    resources/exiftool/             ← exiftool binary (extraResources)
+```
+
+Paths are resolved from Electron (`app.getPath('userData')`, `process.resourcesPath`), never from `process.execPath`: on the Windows portable target that points at the NSIS temp extraction directory, which is wiped on exit.
+
+### Running serve mode
+
+```bash
+# Simplest — no credential, open on the local network:
+brave.exe --serve
+
+# One shared secret used as both user and password:
+set ONEFOLDER_AUTH_SECRET=changeme && brave.exe --serve
 
 # Explicit user + password:
-ONEFOLDER_AUTH_USER=alice ONEFOLDER_AUTH_PASSWORD=secret ./onefolder-server
+set ONEFOLDER_AUTH_USER=alice && set ONEFOLDER_AUTH_PASSWORD=secret && brave.exe --serve
 
-# With HTTPS (auto-generates self-signed cert on first run):
-ONEFOLDER_AUTH_SECRET=changeme ONEFOLDER_TLS=1 ./onefolder-server
+# With HTTPS (auto-generates a self-signed cert on first run):
+set ONEFOLDER_TLS=1 && brave.exe --serve
 
 # Custom port:
-PORT=8080 ONEFOLDER_AUTH_SECRET=changeme ./onefolder-server
+brave.exe --serve --port 8080
 ```
+
+Serve mode coexists with a running desktop instance: it does not take the single-instance lock (which is keyed on the shared `userData` directory), and the database is opened read-only. A second serve process on the same port exits with a port-in-use message.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8666` | HTTP/HTTPS listening port |
+| `PORT` | `8666` | HTTP/HTTPS listening port. `--port <n>` takes precedence. Must be a whole number in 1-65535 — anything else is a startup error, not a coerced value |
 | `ONEFOLDER_AUTH_SECRET` | (none) | Shared secret used as both username and password for HTTP Basic auth |
 | `ONEFOLDER_AUTH_USER` | (none) | Explicit username (takes precedence over `AUTH_SECRET`) |
 | `ONEFOLDER_AUTH_PASSWORD` | (none) | Explicit password (used with `AUTH_USER`) |
@@ -334,7 +357,21 @@ PORT=8080 ONEFOLDER_AUTH_SECRET=changeme ./onefolder-server
 | `ONEFOLDER_TLS_KEY` | (auto) | Path to matching PEM private key |
 | `PORTABLE_EXECUTABLE_DIR` | (derived) | Override the userData base directory (set automatically by electron-builder portable target) |
 
-If neither `ONEFOLDER_AUTH_SECRET` nor `ONEFOLDER_AUTH_USER`+`ONEFOLDER_AUTH_PASSWORD` is set, the server starts but rejects every request with HTTP 401 and logs a warning at startup.
+Credential variables are optional, and empty or whitespace-only values count as unset. With none configured the server runs **without** an authentication gate and says so in its startup banner.
+
+### Operator-facing failures
+
+Each is written to `server.log` and stdout, then the process exits non-zero:
+
+```
+[server] Port 8666 is already in use. Another OneFolder server may already be running. Use --port <n> to choose a different port.
+[server] No library found in <path>. Launch OneFolder normally at least once to create a library.
+[server] Database not found at <path>.
+[server] The library is registered but its database has not been created yet. Launch OneFolder normally once, then try --serve again.
+[server] --port requires a whole number between 1 and 65535 (got '<value>').
+```
+
+The database hint matters on a **fresh portable install**: first launch registers a default library, but the SQLite file is created by the renderer on its first GUI run. Until the desktop app has been opened once, there is nothing for serve mode to read.
 
 ## Key Files
 
@@ -344,8 +381,10 @@ If neither `ONEFOLDER_AUTH_SECRET` nor `ONEFOLDER_AUTH_USER`+`ONEFOLDER_AUTH_PAS
 | `src/frontend/platform/platform.electron.ts` | Electron seam implementation — faithful pass-through |
 | `src/frontend/platform/platform.web.ts` | Web seam implementation — HTTP reads, loud rejects for writes, ExifIO HTTP shim, `triggerRescan()` |
 | `src/backend/http-backend.ts` | `HttpBackend implements DataStorage` — all reads over `fetch()`, all writes throw |
-| `src/server/index.ts` | Sidecar server entry point — SEA detection, userData derivation, DB open, Express bootstrap |
-| `src/server/auth.ts` | Auth middleware — dual header+cookie, HMAC signing, login/logout router |
+| `src/server/index.ts` | `startServer(opts)` — the server as a library: DB open, Express bootstrap, listener, startup banner. Derives nothing, never exits the process |
+| `src/serve-mode.ts` | Electron glue — `parseServeArgs`, path resolution from what main.ts already knew, operator-facing failures |
+| `src/server/logger.ts` | File + stdout logger for serve mode (`data\server.log`) |
+| `src/server/auth.ts` | Auth middleware — optional gate, dual header+cookie, HMAC signing, login/logout router |
 | `src/server/path-resolver.ts` | Location-scoped path guard — ID→path lookup with location containment assertion |
 | `src/server/thumbnails.ts` | Sharp-based thumbnail generation and preview cache path helpers |
 | `src/server/decode.ts` | DOM-less image decoders — Sharp (HEIC/TIFF), ag-psd (PSD), WASM (EXR) |
@@ -354,8 +393,6 @@ If neither `ONEFOLDER_AUTH_SECRET` nor `ONEFOLDER_AUTH_USER`+`ONEFOLDER_AUTH_PAS
 | `src/server/routes/metadata.ts` | ExifIO read endpoints (ID-based and by-path) |
 | `src/server/routes/rescan.ts` | `POST /api/rescan` — on-demand DB count refresh |
 | `webpack.web.js` | Web SPA webpack config — platform alias, Node stubs, `IS_WEB_BUILD=true` |
-| `webpack.server.js` | Node server webpack config — externals for native modules |
-| `scripts/package-headless.js` | Node SEA packaging script → `dist-headless/` |
 
 ## Scope and Explicit Rejections
 
@@ -367,4 +404,6 @@ The following are explicitly out of scope:
 - Multi-tenancy, sandboxing, per-user isolation
 - Chokidar live file watching — replaced by the on-demand `POST /api/rescan` endpoint
 - Raw client-supplied filesystem paths — all image and metadata endpoints are ID-based
-- Codebase fork — the desktop Electron app is completely unchanged by this feature
+- Codebase fork — the desktop Electron app is unchanged when `--serve` is absent
+- Starting or stopping the server from the desktop UI — serve mode is a launch flag; `startServer` is a fire-once bootstrap
+- A tray icon or any other visible affordance for the running server

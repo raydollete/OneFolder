@@ -169,7 +169,19 @@ function exrTakeObject(idx: number): unknown {
  * We search a few candidate locations and return the first one that exists.
  */
 function resolveWasmPath(): string {
+  // In serve mode this code runs inside the Electron main bundle, so
+  // __dirname is `build/` in development and `…/resources/app.asar/build`
+  // in the packaged app — neither of which the original candidates matched.
+  // process.resourcesPath exists only under Electron; guard it for plain Node.
+  const electronResources = (process as { resourcesPath?: string }).resourcesPath;
+
   const candidates = [
+    // Packaged Electron: shipped as an extraResource beside the asar.
+    ...(electronResources !== undefined
+      ? [path.join(electronResources, 'wasm', 'packages', 'exr', 'exr_decoder_bg.wasm')]
+      : []),
+    // Electron main bundle in development (__dirname = <repo>/build).
+    path.resolve(__dirname, '..', 'wasm', 'packages', 'exr', 'exr_decoder_bg.wasm'),
     // Relative to this compiled file in dist/server/
     path.resolve(__dirname, '..', '..', 'wasm', 'packages', 'exr', 'exr_decoder_bg.wasm'),
     // Relative to project root when running ts-node from src/server/
