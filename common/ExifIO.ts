@@ -82,7 +82,15 @@ const defaultWriteArgs = [
 class ExifIO {
   @observable hierarchicalSeparator: string;
 
-  private isOpening = false;
+  // A single in-flight initialization promise shared by all concurrent callers.
+  //
+  // Replaces the previous `isOpening` boolean + `setInterval` polling, which had
+  // two defects: (1) if `_ep.open()` rejected, `isOpening` stayed `true` forever
+  // so every later `initialize()` polled an interval that never resolved and was
+  // never cleared (permanent hang, no retry); (2) the interval leaked even on
+  // success. Now: concurrent callers await this SAME promise, and it is cleared
+  // on both settle outcomes so a corrected later attempt can retry `_ep.open()`.
+  private initPromise?: Promise<ExifIO>;
 
   // For accented characters and foreign alphabets, an extra arg is needed on Windows
   // https://www.npmjs.com/package/node-exiftool#reading-utf8-encoded-filename-on-windows
@@ -166,20 +174,23 @@ class ExifIO {
     if (this._ep._open) {
       return this;
     }
-    if (!this.isOpening) {
-      this.isOpening = true;
-      const pid = await this._ep.open();
-      console.log('Started exiftool process %s', pid);
-    } else {
-      await new Promise<void>((resolve) =>
-        setInterval(() => {
-          if (this._ep._open) {
-            resolve();
-          }
-        }, 50),
-      );
+    // If an initialization is already in flight, every concurrent caller awaits
+    // the SAME promise: no second `_ep.open()`, no timer.
+    if (this.initPromise === undefined) {
+      this.initPromise = this._ep
+        .open()
+        .then((pid) => {
+          console.log('Started exiftool process %s', pid);
+          return this;
+        })
+        .finally(() => {
+          // Clear on both success and rejection. On success subsequent callers
+          // short-circuit via `_ep._open`; on rejection this lets a later,
+          // corrected attempt call `_ep.open()` again (retryable).
+          this.initPromise = undefined;
+        });
     }
-    return this;
+    return this.initPromise;
   }
 
   async close(): Promise<void> {

@@ -15,6 +15,37 @@ import platform from 'src/frontend/platform';
 import { RendererMessenger } from 'src/ipc/renderer';
 import SearchStore from './SearchStore';
 import { MediaReleaseCoordinator } from '../image/MediaReleaseCoordinator';
+import { probeFilesystemCaseSensitive, setPathIdentityFoldCase } from 'src/frontend/platform';
+
+/**
+ * Determine the library filesystem's case-sensitivity empirically and set the
+ * path-identity fold policy from it, BEFORE any location reconciliation runs
+ * (reconciliation compares paths through platform.path.normalizePathIdentity).
+ *
+ * A shared dual-boot tree's case-sensitivity is a property of the filesystem,
+ * not the running OS, so this must not be inferred from IS_WIN. Desktop only —
+ * the web build has no local filesystem and keeps its POSIX (never-fold) policy.
+ * Any probe failure is non-fatal: the OS-default policy stays in place.
+ */
+async function configurePathIdentityCasePolicy(): Promise<void> {
+  if (platform.isWebBuild) {
+    return;
+  }
+  try {
+    const userData = await platform.desktop.getPath('userData');
+    const caseSensitive = await probeFilesystemCaseSensitive(
+      userData,
+      platform.fs,
+      platform.path.join,
+    );
+    setPathIdentityFoldCase(!caseSensitive);
+  } catch (e) {
+    console.warn(
+      '[RootStore] filesystem case-sensitivity probe failed; using OS-default path-identity policy',
+      e,
+    );
+  }
+}
 
 // This will throw exceptions whenever we try to modify the state directly without an action
 // Actions will batch state modifications -> better for performance
@@ -102,6 +133,10 @@ class RootStore {
       libraryId,
     );
 
+    // Choose the path-identity case-fold policy from the library filesystem
+    // before locations reconcile (they compare paths through the seam).
+    await configurePathIdentityCasePolicy();
+
     await Promise.all([
       // The location store must be initiated because the file entity constructor
       // uses the location reference to set values.
@@ -186,6 +221,9 @@ class RootStore {
       },
       libraryId,
     );
+
+    // Match the main window's path-identity case policy (its own renderer process).
+    await configurePathIdentityCasePolicy();
 
     await Promise.all([
       // The location store must be initiated because the file entity constructor

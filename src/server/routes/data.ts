@@ -274,19 +274,20 @@ export function makeDataRouter(backend: SQLiteBackend, _db: Database.Database): 
   });
 
   // -------------------------------------------------------------------------
-  // POST /api/visual-hashes/by-paths    body: { absolutePaths: string[] }
+  // POST /api/visual-hashes/by-keys    body: { fileKeys: string[] }
+  // Keyed on the portable fileKey (portableFileKey), not absolutePath.
   // -------------------------------------------------------------------------
-  router.post('/visual-hashes/by-paths', async (req: Request, res: Response) => {
+  router.post('/visual-hashes/by-keys', async (req: Request, res: Response) => {
     try {
-      const { absolutePaths } = req.body as { absolutePaths: string[] };
-      if (!Array.isArray(absolutePaths)) {
-        res.status(400).json({ error: '`absolutePaths` must be an array' });
+      const { fileKeys } = req.body as { fileKeys: string[] };
+      if (!Array.isArray(fileKeys)) {
+        res.status(400).json({ error: '`fileKeys` must be an array' });
         return;
       }
-      const hashes = await backend.fetchVisualHashes(absolutePaths);
+      const hashes = await backend.fetchVisualHashes(fileKeys);
       res.json({ hashes: hashes.map(visualHashToWire) });
     } catch (err) {
-      console.error('[data] POST /visual-hashes/by-paths error:', err);
+      console.error('[data] POST /visual-hashes/by-keys error:', err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });

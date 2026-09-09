@@ -165,6 +165,22 @@ const dbConfig: DBVersioningConfig[] = [
       },
     ],
   },
+  {
+    // Version 13 (portable-shared-library-caches): re-key the visual-hash cache on
+    // the portable fileKey (portableFileKey) instead of the per-OS absolutePath.
+    // The legacy rows were keyed on absolutePath and cannot be translated without
+    // the files table here, so the cache is cleared and regenerates lazily under
+    // the portable key. (The Dexie backend is the migration-source/test backend;
+    // production runs on SQLite, whose existing-library migration re-keys in place.)
+    version: 13,
+    collections: [
+      {
+        name: 'visualHashes',
+        schema: '++id, &fileKey, fileSize, dateModified, hashType, hash, dateComputed',
+      },
+    ],
+    upgrade: (tx: Transaction): Promise<void> => tx.table('visualHashes').clear(),
+  },
 ];
 
 type DBVersioningConfig = {

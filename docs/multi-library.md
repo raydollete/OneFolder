@@ -50,6 +50,37 @@ Thumbnails are written to the system temp directory, namespaced per library:
 
 **Portable mode:** When OneFolder runs in portable mode, `app.setPath('userData', ...)` and `app.setPath('temp', ...)` both point to `{appDir}/data/`. The `libraries/` tree then lives at `{appDir}/data/libraries/` and thumbnails at `{appDir}/data/OneFolder/{libraryId}/thumbnails/`. No code changes are required; the path-building functions receive the already-remapped paths.
 
+**Portable unit on each platform.** The portable unit is the executable **plus a sibling `data/` directory** created beside it on first launch:
+
+- **Windows** — the portable `brave.exe` and its sibling `data/`.
+- **Linux** — the `OneFolder-<version>-x86_64.AppImage` file and its sibling `data/`.
+
+`data/` holds the per-library `libraries/` tree, `backups/`, `thumbnails/`, `themes/`, and the app temp. To relocate the app, move the executable **and** its sibling `data/` together, and only **while the app is CLOSED** — SQLite (`better-sqlite3`) holds file locks and helper (ExifTool / ffmpeg) processes must be released first. On Linux the AppImage plus `data/` must live in a **writable and executable** location; launched from a read-only or `noexec` path, startup fails loud naming the directory, with **no** fallback to the system user-data dir (state always stays beside the artifact). See the [README Linux build notes](../README.md#linux-appimage) for the full launch/troubleshooting checklist.
+
+**Case-sensitive library paths on Linux.** Library file paths are **case-sensitive** on Linux — `Clip.mp4` and `clip.mp4` are distinct files — whereas Windows treats them as the same file.
+
+## Dual-boot shared library (one library, two OSes)
+
+A single OneFolder library can be **shared across a dual-boot machine**: put both portable executables and one shared `data/` in the same portable directory, and the same library opens from either OS with **no per-boot Location Recovery and no thumbnail/preview/visual-hash re-derivation**.
+
+```
+<portable dir>/
+├── brave.exe                          # Windows portable
+├── OneFolder-<version>-x86_64.AppImage # Linux portable
+├── data/                               # ONE shared data dir (both exes)
+└── Photos/                             # a location under the portable dir
+```
+
+How it works:
+
+- **Portable identity, not absolute path.** A file's durable identity is `(locationId, relativePath)`, not its absolute path (which differs per OS — `D:\…` vs `/mnt/…`). Reconciliation and every path-derived cache (thumbnails, previews, perceptual visual-hashes) key on this identity, so a cross-OS boot matches existing entries instead of re-inserting or regenerating them.
+- **Anchored location roots.** A location whose root lies **inside the portable directory** is stored as a root-relative segment (its *portable anchor*) and resolved per-OS at load as `join(<portable dir>, segment)`. Locations on an external drive (outside the portable directory) keep their fixed absolute path and are **not** shared across OSes.
+- **One-time migration.** An existing single-OS library upgrades in place on first launch: the DB is backed up first, locations under the portable directory are auto-anchored, and existing caches are **renamed** (not rebuilt) to the portable key. The migration is idempotent and safe to run from either OS of the shared `data/`.
+
+**Case-sensitivity caveat.** The case-fold policy is chosen from the **library filesystem** (probed empirically at open), not the running OS. On a case-sensitive shared tree, `A.jpg` and `a.jpg` stay distinct even when the library is opened from Windows — so no sibling is shadowed or has its tags merged. Keep a shared library on a filesystem whose case-sensitivity is consistent between boots; do not, for example, expose a case-sensitive Linux tree to Windows and then create case-only-distinct siblings.
+
+**Not supported:** simultaneous access from both OSes (SQLite holds a single-writer lock — one OS at a time), and cross-*library* portability (two separate databases). Windows drive-letter paths are not rewritten into Linux mount paths for **unanchored** (external-drive) locations.
+
 ## localStorage Namespacing
 
 Renderer-side preferences are stored in `localStorage`. Keys that vary by library are prefixed with `{libraryId}:` so that switching libraries always reads the correct set of preferences. Keys that are installation-wide remain unprefixed.

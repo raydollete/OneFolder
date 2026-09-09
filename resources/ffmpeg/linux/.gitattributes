@@ -1,0 +1,3 @@
+# Mark ffmpeg binaries as vendored so they don't skew GitHub's language statistics
+ffmpeg linguist-vendored
+ffprobe linguist-vendored

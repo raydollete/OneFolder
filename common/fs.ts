@@ -5,13 +5,57 @@ import fse from 'fs-extra';
 import { thumbnailFormat } from '../common/config';
 import { IS_DEV } from './process';
 
-export function getThumbnailPath(filePath: string, thumbnailDirectory: string): string {
-  const baseFilename = path.basename(filePath, path.extname(filePath));
+/**
+ * Portable, OS-independent identity of a file within its library, used as the
+ * key for every path-derived cache (thumbnails, previews, visual hashes).
+ *
+ * The key is `(locationId, relativePath)` — stable across operating systems,
+ * drive/mount prefixes, and location re-points — NOT the absolute path, which
+ * differs per OS on a shared library. `relativePath` is normalized to
+ * forward slashes (its canonical form in the app; see entities/File.ts) so the
+ * same file yields byte-identical keys on Windows and Linux, and any leading
+ * separators are trimmed so `join`-style relative paths cannot shift the key.
+ *
+ * Case is preserved: two case-distinct siblings (`A.jpg`/`a.jpg`) must resolve
+ * to distinct cache entries, so folding happens in path-identity comparison, not
+ * here.
+ */
+export function portableFileKey(locationId: string, relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return `${locationId}/${normalized}`;
+}
+
+/**
+ * On-disk thumbnail cache path for a source file.
+ *
+ * `fileKey` MUST be the portable identity from {@link portableFileKey}, not the
+ * absolute path — keying on the absolute path regenerates the whole cache when
+ * the same shared library is opened on the other OS or the location is re-pointed.
+ */
+export function getThumbnailPath(fileKey: string, thumbnailDirectory: string): string {
+  const baseFilename = path.basename(fileKey, path.extname(fileKey));
 
   // Hash is needed to avoid files with the same name to clash with each other, when they come from different paths
-  const hash = hashString(filePath);
+  const hash = hashString(fileKey);
 
   return path.join(thumbnailDirectory, `${baseFilename}-${hash}.${thumbnailFormat}`);
+}
+
+/**
+ * On-disk full-size preview cache path for a source file. Previews live in a
+ * `previews/` sibling of the thumbnail directory and are always webp. Mirrors
+ * {@link getThumbnailPath}: same portable `fileKey` and same hash, differing only
+ * by directory and extension — so preview and thumbnail caches stay consistent.
+ *
+ * `fileKey` MUST be the portable identity from {@link portableFileKey}, not the
+ * absolute path. Lives here (not the server) so both the sidecar and the desktop
+ * renderer (cache migration) derive preview names identically.
+ */
+export function getPreviewPath(fileKey: string, thumbnailDir: string): string {
+  const baseFilename = path.basename(fileKey, path.extname(fileKey));
+  const hash = hashString(fileKey);
+  const previewDir = path.join(path.dirname(thumbnailDir), 'previews');
+  return path.join(previewDir, `${baseFilename}-${hash}.webp`);
 }
 
 /** Use this for any <img src attribute! */
@@ -65,7 +109,12 @@ export function mediaTypeMatches(filter: MediaTypeFilter, fileExtension: string)
   }
 }
 
-function hashString(s: string) {
+/**
+ * Deterministic 32-bit hash of a string, the single hash implementation used
+ * for every cache key (thumbnails, previews, visual hashes) across the desktop
+ * and sidecar server, so both agree on the same on-disk name.
+ */
+export function hashString(s: string) {
   let hash = 0;
   let chr = 0;
   if (s.length === 0) {

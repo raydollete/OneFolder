@@ -90,6 +90,15 @@ export class ClientLocation {
   readonly id: ID;
   readonly path: string;
   readonly dateAdded: Date;
+  /**
+   * Portable-anchor segment (root-relative). Present → this location is
+   * portable-anchored and `path` was resolved per-OS from the portable root;
+   * undefined → unanchored (fixed absolute `path`). See LocationDTO.portableRoot.
+   * Per-OS resolution of `path` from this segment happens at construction time
+   * in LocationStore (the portable-root provider); this field records the intent
+   * so it round-trips through serialize/hydration.
+   */
+  readonly portableRoot?: string;
 
   constructor(
     store: LocationStore,
@@ -99,6 +108,7 @@ export class ClientLocation {
     subLocations: SubLocationDTO[],
     extensions: IMG_EXTENSIONS_TYPE[],
     index: number,
+    portableRoot?: string,
   ) {
     this.store = store;
     this.id = id;
@@ -106,6 +116,7 @@ export class ClientLocation {
     this.dateAdded = dateAdded;
     this.extensions = extensions;
     this.index = index;
+    this.portableRoot = portableRoot;
 
     this.subLocations = observable(
       subLocations
@@ -215,13 +226,19 @@ export class ClientLocation {
 
   @action.bound
   serialize(): LocationDTO {
-    return {
+    const dto: LocationDTO = {
       id: this.id,
       path: this.path,
       dateAdded: this.dateAdded,
       subLocations: this.subLocations.map((sl) => sl.serialize()),
       index: this.index,
     };
+    // Only emit the anchor when present so unanchored locations serialize
+    // byte-identically to before this change (no stray `portableRoot` key).
+    if (this.portableRoot !== undefined) {
+      dto.portableRoot = this.portableRoot;
+    }
+    return dto;
   }
 
   @action.bound setIndex(index: number): void {

@@ -275,13 +275,13 @@ export class HttpBackend implements DataStorage {
     return groups.map(dismissedGroupFromWire);
   }
 
-  async fetchVisualHashes(absolutePaths: string[]): Promise<VisualHashDTO[]> {
-    if (absolutePaths.length === 0) {
+  async fetchVisualHashes(fileKeys: string[]): Promise<VisualHashDTO[]> {
+    if (fileKeys.length === 0) {
       return [];
     }
     const { hashes } = await this.#post<{ hashes: VisualHashWire[] }>(
-      '/api/visual-hashes/by-paths',
-      { absolutePaths },
+      '/api/visual-hashes/by-keys',
+      { fileKeys },
     );
     return hashes.map(visualHashFromWire);
   }
@@ -368,7 +368,7 @@ export class HttpBackend implements DataStorage {
     readOnlyReject('saveVisualHashes');
   }
 
-  async removeVisualHashes(_absolutePaths: string[]): Promise<void> {
+  async removeVisualHashes(_fileKeys: string[]): Promise<void> {
     readOnlyReject('removeVisualHashes');
   }
 

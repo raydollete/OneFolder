@@ -30,7 +30,7 @@ takes more than ~1 second, or mutates the watched filesystem needs the full
 
 | Layer | Where | What it provides |
 |---|---|---|
-| 1. Binary bundling | `package.json` `build.win.extraResources`, `resources/<binary>/` | Ship the executable with the portable build |
+| 1. Binary bundling | `package.json` `build.win.extraResources` / `build.linux.extraResources`, `resources/<binary>/` | Ship the executable with the portable build (Windows `.exe`) and the Linux AppImage (see [Linux helper binaries](#linux-helper-binaries)) |
 | 2. Path resolution | `common/fs.ts` (`getExtraResourcePath` delegate) | Same path logic in dev and packaged modes |
 | 3a. ffmpeg runner | `src/media/FfmpegRunner.ts` | The ONLY ffmpeg/ffprobe spawn site: run + progress + cancel (`AbortSignal`) |
 | 3b. Job service | `src/media/MediaJobService.ts` | Path planning, temp staging, single-`move` place, job registry, killAll |
@@ -116,6 +116,37 @@ retired** by INV-035. Jobs no longer run in the viewer; they run in a session-sc
 other input are unrestricted while jobs run. The `isMediaProcessing` lock,
 `beginMediaProcessing` / `endMediaProcessing`, and the `mediaProcessingFile` pin in `UiStore`
 have been removed.
+
+---
+
+## Linux helper binaries
+
+The media-job stack runs the same way on the Linux AppImage as on the Windows
+portable build; only the bundled helper binaries and their host prerequisites
+differ.
+
+- **ffmpeg / ffprobe** — On Linux the AppImage bundles GPLv3 static builds from
+  BtbN (declared under `build.linux.extraResources` as
+  `resources/ffmpeg/linux/ffmpeg` → `resources/ffmpeg/ffmpeg`, likewise
+  `ffprobe`), whereas Windows ships `resources/ffmpeg/ffmpeg.exe`. Provenance,
+  SHA-256, license/redistribution obligations, and build flags are recorded in
+  [`resources/THIRD_PARTY.md`](../resources/THIRD_PARTY.md).
+- **NVENC only** — Every video-encoding job uses `h264_nvenc`
+  (`NVENC_H264_VIDEO_ARGS`), which requires compatible NVIDIA hardware and
+  drivers. There is **no software-encoder fallback** on any platform; jobs fail
+  loud on a host without NVENC. Do not imply universal Linux encoding.
+  `yarn verify:appimage` runs an `ffmpeg h264_nvenc` smoke test against the
+  extracted payload.
+- **ExifTool needs Perl** — On Linux ExifTool ships as the Perl script
+  `exiftool.pl` (with `resources/exiftool/lib`) and requires `/usr/bin/perl` on
+  the host. The Ubuntu/GNOME baseline includes it; install the `perl` package if
+  it is missing. A missing Perl surfaces as a concrete startup/feature error,
+  never a silent fallback — the exact error text is recorded in
+  [`resources/THIRD_PARTY.md`](../resources/THIRD_PARTY.md). Windows bundles a
+  self-contained `exiftool.exe` and has no Perl prerequisite.
+
+There is no bundled Perl runtime and no software-encoding fallback on Linux — do
+not document either as available.
 
 ---
 

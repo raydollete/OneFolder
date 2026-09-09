@@ -88,6 +88,121 @@ export interface PlatformPath {
   normalize(p: string): string;
   /** Platform-specific path separator character. */
   sep: string;
+  /**
+   * Normalize an absolute path to a stable comparison key ("path identity").
+   *
+   * The SINGLE shared formatter for every path-identity comparison in the
+   * frontend (video-release registry keys, ingest/suppression matching, and
+   * `waitForIngestedFile`). Consumers MUST route through this seam member rather
+   * than hand-rolling their own `replace(/\\/g, '/').toLowerCase()` clone so the
+   * case policy stays consistent across the codebase.
+   *
+   * Policy:
+   *   - Separators are always folded to forward slashes on every desktop
+   *     platform (Windows emits backslashes; the folder watcher emits `/`).
+   *   - Case is folded ONLY on Windows (a case-insensitive filesystem). On
+   *     Linux/macOS the case is preserved so `Clip.mp4` and `clip.mp4` stay
+   *     DISTINCT identities.
+   *
+   * This does NOT resolve `..`, collapse duplicate slashes, or touch the
+   * `encodeFilePath` `?`-query contract — it is purely separator + case folding.
+   */
+  normalizePathIdentity(p: string): string;
+}
+
+/**
+ * Pure path-identity normalizer shared by BOTH platform implementations.
+ *
+ * This is the ONE implementation of the path-identity policy; the electron and
+ * web seam members delegate to it, differing only in the `foldCase` flag they
+ * pass (Windows folds case; POSIX/web does not). Exported so the platform impls
+ * and unit tests can exercise both policies without a live filesystem.
+ *
+ * @param p        Absolute path in any separator form.
+ * @param foldCase When true (Windows), lower-case the result; otherwise keep
+ *                 the original case so case-distinct POSIX paths stay distinct.
+ */
+export function normalizePathIdentity(p: string, foldCase: boolean): string {
+  const forwardSlashed = p.replace(/\\/g, '/');
+  return foldCase ? forwardSlashed.toLowerCase() : forwardSlashed;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime case-fold policy
+//
+// Case-sensitivity is a property of the FILESYSTEM hosting the library, not of
+// the running OS: a shared dual-boot tree opened from Windows is still the same
+// case-sensitive (or case-insensitive) filesystem it is on Linux. Folding case
+// by `IS_WIN` lets a Windows boot merge `A.jpg`/`a.jpg` on a case-sensitive
+// share and transfer/drop tags between distinct files. So the fold flag passed
+// to `normalizePathIdentity` is overridable: at library open an empirical probe
+// of the library filesystem sets it; until then the OS default applies.
+// ---------------------------------------------------------------------------
+
+let _foldCaseOverride: boolean | undefined;
+
+/** Set the path-identity case-fold policy from the library filesystem probe. */
+export function setPathIdentityFoldCase(foldCase: boolean): void {
+  _foldCaseOverride = foldCase;
+}
+
+/** Clear the override so the OS default applies again (used between libraries and in tests). */
+export function resetPathIdentityFoldCase(): void {
+  _foldCaseOverride = undefined;
+}
+
+/**
+ * The effective fold policy: the library-filesystem override when one has been
+ * probed, else the caller's OS default (`IS_WIN` on desktop, `false` on web).
+ */
+export function getPathIdentityFoldCase(osDefault: boolean): boolean {
+  return _foldCaseOverride ?? osDefault;
+}
+
+/** Flip the ASCII case of every letter; non-letters pass through unchanged. */
+function flipAsciiCase(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    if (ch >= 'a' && ch <= 'z') {
+      out += ch.toUpperCase();
+    } else if (ch >= 'A' && ch <= 'Z') {
+      out += ch.toLowerCase();
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Empirically determine whether the filesystem hosting `dir` is case-SENSITIVE,
+ * by writing a probe file and testing whether its case-flipped name resolves to
+ * the same file. Returns `true` when case-sensitive (`A.jpg` !== `a.jpg`),
+ * `false` when case-insensitive.
+ *
+ * Probing beats inferring from the OS because exotic mounts (exFAT, case-folded
+ * NTFS, a case-sensitive share mounted on Windows) do not follow the OS default.
+ * The probe file is a hidden zero-byte temp always cleaned up. Callers handle a
+ * thrown error (permission/missing dir) by keeping the OS default.
+ */
+export async function probeFilesystemCaseSensitive(
+  dir: string,
+  fs: Pick<PlatformFs, 'ensureDir' | 'writeFile' | 'existsSync' | 'remove'>,
+  join: (...segments: string[]) => string,
+): Promise<boolean> {
+  // The token MUST contain letters so its case-flip is a different string.
+  const token = `.onefolder-case-probe-ABC-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const probePath = join(dir, token);
+  const flippedPath = join(dir, flipAsciiCase(token));
+  await fs.ensureDir(dir);
+  await fs.writeFile(probePath, new ArrayBuffer(0));
+  try {
+    // The flipped-case name resolving to our file means the filesystem folds
+    // case (case-INSENSITIVE); not resolving means it is case-SENSITIVE.
+    return !fs.existsSync(flippedPath);
+  } finally {
+    await fs.remove(probePath).catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------

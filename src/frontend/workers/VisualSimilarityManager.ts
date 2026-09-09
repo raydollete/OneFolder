@@ -6,6 +6,7 @@ import type {
 } from './visualSimilarity.worker';
 import type { VisualHashDTO, VisualHashCache } from '../../api/visual-hash';
 import type { ClientFile } from '../entities/File';
+import { portableFileKey } from 'common/fs';
 
 interface ProgressCallback {
   (data: {
@@ -209,26 +210,28 @@ export class VisualSimilarityManager {
 
     try {
       // Step 1: Check cache for existing hashes
+      // Cache is keyed on the portable fileKey (portableFileKey), OS-independent,
+      // so a shared cache is reused across a dual-boot install rather than recomputed.
       const cachedHashes: Map<string, string> = new Map();
       const filesToProcess: Array<{
         id: string;
         thumbnailPath: string;
         name: string;
         extension: string;
-        absolutePath: string;
+        fileKey: string;
         fileSize: number;
         dateModified: Date;
       }> = [];
 
       if (cacheManager) {
         console.log('🗄️ Checking cache for existing hashes...');
-        const filePaths = files.map((f) => f.absolutePath);
-        const cached = await cacheManager.fetchCachedHashes(filePaths);
+        const fileKeys = files.map((f) => portableFileKey(f.locationId, f.relativePath));
+        const cached = await cacheManager.fetchCachedHashes(fileKeys);
 
         // Build cache map
         for (const cache of cached) {
           if (cache.isValid) {
-            cachedHashes.set(cache.absolutePath, cache.hash);
+            cachedHashes.set(cache.fileKey, cache.hash);
           }
         }
 
@@ -244,13 +247,14 @@ export class VisualSimilarityManager {
           continue;
         }
 
-        if (!cachedHashes.has(file.absolutePath)) {
+        const fileKey = portableFileKey(file.locationId, file.relativePath);
+        if (!cachedHashes.has(fileKey)) {
           filesToProcess.push({
             id: file.id,
             thumbnailPath: file.thumbnailPath,
             name: file.name,
             extension: file.extension,
-            absolutePath: file.absolutePath,
+            fileKey,
             fileSize: file.size,
             dateModified: file.dateModified,
           });
@@ -265,7 +269,7 @@ export class VisualSimilarityManager {
       let newHashes: Array<{
         fileId: string;
         hash: string;
-        absolutePath: string;
+        fileKey: string;
         fileSize: number;
         dateModified: Date;
       }> = [];
@@ -315,7 +319,7 @@ export class VisualSimilarityManager {
           return {
             fileId: r.fileId,
             hash: r.hash,
-            absolutePath: fileData.absolutePath,
+            fileKey: fileData.fileKey,
             fileSize: fileData.fileSize,
             dateModified: fileData.dateModified,
           };
@@ -324,7 +328,7 @@ export class VisualSimilarityManager {
         // Save new hashes to cache
         if (cacheManager && newHashes.length > 0) {
           const hashesToSave: VisualHashDTO[] = newHashes.map((h) => ({
-            absolutePath: h.absolutePath,
+            fileKey: h.fileKey,
             fileSize: h.fileSize,
             dateModified: h.dateModified,
             hashType: 'dctHash',
@@ -342,7 +346,7 @@ export class VisualSimilarityManager {
 
       // Add cached hashes
       for (const file of files) {
-        const cachedHash = cachedHashes.get(file.absolutePath);
+        const cachedHash = cachedHashes.get(portableFileKey(file.locationId, file.relativePath));
         if (cachedHash) {
           allHashes.push({ fileId: file.id, hash: cachedHash });
         }

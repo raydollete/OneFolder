@@ -51,10 +51,9 @@ import { Router, Request, Response } from 'express';
 import Database from 'better-sqlite3';
 
 import { resolveFilePathSafe } from '../path-resolver';
-import { getThumbnailPath } from '../../../common/fs';
+import { getThumbnailPath, getPreviewPath, portableFileKey } from '../../../common/fs';
 import {
   generateThumbnail,
-  getPreviewPath,
   SERVER_THUMBNAIL_FORMAT,
   SERVER_THUMBNAIL_MAX_SIZE,
 } from '../thumbnails';
@@ -99,6 +98,19 @@ function setImageHeaders(res: Response, mimeType: string, options: { cache?: boo
     // Originals: validate on each request.
     res.setHeader('Cache-Control', 'public, max-age=3600');
   }
+}
+
+/**
+ * Compute a file's portable cache key `(locationId, relativePath)` for the given
+ * id, so the sidecar names thumbnails/previews IDENTICALLY to the desktop build
+ * (both import the shared portableFileKey). Returns undefined only if the id is
+ * absent (the caller has already resolved the path, so this normally hits).
+ */
+function portableFileKeyForId(db: Database.Database, id: string): string | undefined {
+  const row = db
+    .prepare('SELECT locationId, relativePath FROM files WHERE id = ?')
+    .get(id) as { locationId: string; relativePath: string } | undefined;
+  return row ? portableFileKey(row.locationId, row.relativePath) : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +190,9 @@ export function makeImagesRouter(db: Database.Database, thumbnailDir: string): R
       return;
     }
 
-    const thumbPath = getThumbnailPath(absolutePath, thumbnailDir);
+    // Key the cache on the portable identity so a shared cache dir is reused
+    // across OSes (fall back to absolutePath only if the row vanished mid-request).
+    const thumbPath = getThumbnailPath(portableFileKeyForId(db, id) ?? absolutePath, thumbnailDir);
     const thumbMime = 'image/' + SERVER_THUMBNAIL_FORMAT; // 'image/webp'
 
     // Fast path: cached thumbnail already exists.
@@ -316,7 +330,7 @@ export function makeImagesRouter(db: Database.Database, thumbnailDir: string): R
       return;
     }
 
-    const previewPath = getPreviewPath(absolutePath, thumbnailDir);
+    const previewPath = getPreviewPath(portableFileKeyForId(db, id) ?? absolutePath, thumbnailDir);
     const previewMime = 'image/webp';
 
     // Fast path: cached decoded preview already exists.

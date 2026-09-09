@@ -1,4 +1,4 @@
-import { getThumbnailPath, isDirEmpty } from 'common/fs';
+import { getThumbnailPath, isDirEmpty, portableFileKey } from 'common/fs';
 import { runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React, { useEffect, useState } from 'react';
@@ -31,7 +31,9 @@ export const Advanced = observer(() => {
     runInAction(() => {
       for (const f of fileStore.fileList) {
         if (f.thumbnailPath && f.thumbnailPath !== f.absolutePath) {
-          f.setThumbnailPath(getThumbnailPath(f.absolutePath, newDir));
+          f.setThumbnailPath(
+            getThumbnailPath(portableFileKey(f.locationId, f.relativePath), newDir),
+          );
         }
       }
     });

@@ -40,7 +40,9 @@ import platform from 'src/frontend/platform';
 
 /** Normalize an absolute path for map key comparisons. */
 function normalizePath(p: string): string {
-  return platform.path.normalize(p).toLowerCase();
+  // Shared path-identity seam: separators folded to '/', case folded only on
+  // Windows (case-sensitive on Linux/macOS). See platform.normalizePathIdentity.
+  return platform.path.normalizePathIdentity(p);
 }
 
 /**

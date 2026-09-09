@@ -31,6 +31,8 @@ import { mediaJobService } from './media/MediaJobService';
 import { FfmpegRunner } from './media/FfmpegRunner';
 import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subtractClip';
 import { NVENC_H264_VIDEO_ARGS, decideAudioArgs } from './media/audioArgs';
+import { resolveLaunchContext, buildRelaunchCommand } from './portable-launch-context';
+import { driveSupportsRecycleBin as driveSupportsRecycleBin_ } from './trash-policy';
 
 // ---------------------------------------------------------------------------
 // Media job specs — map each job type to its ffmpeg codec/filter args and the
@@ -95,26 +97,58 @@ const MEDIA_JOB_SPECS: Record<MediaJobType, { args: string[]; outputExt: string 
 
 // Portable mode detection — must run before any app.getPath() calls so that
 // app.setPath('userData') takes effect for all subsequent consumers.
-// electron-builder's Windows `portable` target sets PORTABLE_EXECUTABLE_DIR to the
-// directory that holds the running .exe (not the extracted temp dir), so we prefer
-// that when present. This lets shipped portable builds auto-enter portable mode
-// without needing a bundled sentinel file.
-const _portableAppDir =
-  process.env.PORTABLE_EXECUTABLE_DIR ??
-  (app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '..'));
+//
+// The pure resolver in ./portable-launch-context decides the OUTER executable,
+// the writable portable root and the adjacent data/ dir from the packaging
+// FORMAT (Windows electron-builder portable env vars, or the Linux AppImage's
+// APPIMAGE). We hoist the resolved context to module scope so forceRelaunch()
+// re-uses the exact same resolution (the outer .exe / .AppImage the user can
+// relaunch). The resolver is pure — the filesystem opt-in checks and the actual
+// app.setPath() side effects live HERE.
+const launchContext = resolveLaunchContext({
+  env: process.env,
+  execPath: process.execPath,
+  isPackaged: app.isPackaged,
+  projectRoot: path.resolve(__dirname, '..'),
+});
 
+const _portableAppDir = launchContext.portableDir;
+const portableDataDir = launchContext.dataDir;
+
+// Enter portable mode when the packaging FORMAT is portable (Windows portable
+// env var — now surfaced as isPortableFormat — or a Linux AppImage), OR when the
+// non-portable format opts in via a bundled `portable.txt` sentinel or an
+// existing adjacent `data/` directory. The filesystem opt-in checks stay here;
+// the resolver is pure and never touches disk.
 const IS_PORTABLE_MODE =
-  process.env.PORTABLE_EXECUTABLE_DIR !== undefined ||
+  launchContext.isPortableFormat ||
   fse.pathExistsSync(path.join(_portableAppDir, 'portable.txt')) ||
   fse.pathExistsSync(path.join(_portableAppDir, 'data'));
 
 if (IS_PORTABLE_MODE) {
-  const portableDataDir = path.join(_portableAppDir, 'data');
-  // Ensure the data directory and its expected subdirectories exist on first launch.
-  fse.ensureDirSync(portableDataDir);
-  fse.ensureDirSync(path.join(portableDataDir, 'backups'));
-  fse.ensureDirSync(path.join(portableDataDir, 'thumbnails'));
-  fse.ensureDirSync(path.join(portableDataDir, 'themes'));
+  // Create the data directory and its expected subdirectories on first launch.
+  //
+  // Fail LOUD if the portable root is not writable/executable — e.g. an AppImage
+  // run from a read-only or noexec location. Silently falling back to Electron's
+  // default user-data dir would scatter state away from the artifact the user
+  // moved, defeating the whole "state beside the executable" contract; instead
+  // we throw a concrete, actionable filesystem error naming the directory.
+  try {
+    fse.ensureDirSync(portableDataDir);
+    fse.ensureDirSync(path.join(portableDataDir, 'backups'));
+    fse.ensureDirSync(path.join(portableDataDir, 'thumbnails'));
+    fse.ensureDirSync(path.join(portableDataDir, 'themes'));
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `OneFolder could not create its portable data directory at "${portableDataDir}" ` +
+        `(${reason}). The application and its "data" sibling must live in a writable, ` +
+        `executable location. Move the executable (on Linux, the .AppImage) out of any ` +
+        `read-only or noexec path — e.g. a mounted image, /tmp with noexec, or a ` +
+        `read-only volume — and relaunch. OneFolder does not fall back to the system ` +
+        `user-data directory, so portable state always stays beside the executable.`,
+    );
+  }
   app.setPath('userData', portableDataDir);
   // Redirect temp as well so thumbnail directory falls inside the portable data dir.
   app.setPath('temp', portableDataDir);
@@ -147,6 +181,14 @@ const IS_SERVE_MODE = SERVE_ARGS.serve;
 // SAB without the COOP/COEP headers, satisfying both: workers load normally
 // and masonry's shared memory keeps working. See the Electron 41 upgrade notes.
 app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
+
+// On Linux, ask Chromium to auto-select the Ozone platform so a Wayland session
+// stays native (Wayland backend) while an X11 session still works, without
+// globally forcing XWayland or pinning a specific platform. Linux-only: the hint
+// is meaningless on Windows/macOS.
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+}
 
 const basePath = app.getPath('userData');
 
@@ -808,32 +850,32 @@ async function trashWithRetry(absolutePath: string): Promise<void> {
  * Recycle Bin?
  *
  * `shell.trashItem` fails with a generic "Failed to perform delete operation"
- * (no error code) on volumes that lack a `$Recycle.Bin` — e.g. some archive
- * drives, network shares, and removable media. INV-014 confirmed this is the
- * actual cause of the long-standing "can't delete" reports, NOT a held video
+ * (no error code) on Windows volumes that lack a `$Recycle.Bin` — e.g. some
+ * archive drives, network shares, and removable media. INV-014 confirmed this is
+ * the actual cause of the long-standing "can't delete" reports, NOT a held video
  * file handle. When this returns false, the renderer routes the delete to
  * `deleteFilePermanently` instead, after warning the user up-front.
+ *
+ * The platform decision lives in the pure `./trash-policy` module: only Windows
+ * has a `$Recycle.Bin`, so on Linux/macOS this ALWAYS reports recyclable and the
+ * probe below is never reached — trashing is delegated to Electron's
+ * `shell.trashItem`, and a real trash failure continues through `trashWithRetry`
+ * (there is NO auto-fallback to permanent deletion). We keep the real Windows
+ * `$Recycle.Bin` existence probe + per-root cache here and inject them.
  *
  * Cached per drive root — Recycle Bin availability does not change mid-session.
  */
 const recycleBinSupportCache = new Map<string, boolean>();
+function recycleBinProbe(root: string): boolean {
+  return fse.pathExistsSync(path.join(root, '$Recycle.Bin'));
+}
 function driveSupportsRecycleBin(absolutePath: string): boolean {
-  const root = path.parse(absolutePath).root;
-  if (root === '') {
-    return true; // can't determine the volume — let shell.trashItem try
-  }
-  const cached = recycleBinSupportCache.get(root);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let supported: boolean;
-  try {
-    supported = fse.pathExistsSync(path.join(root, '$Recycle.Bin'));
-  } catch {
-    supported = true; // probe failed — don't block, let shell.trashItem try
-  }
-  recycleBinSupportCache.set(root, supported);
-  return supported;
+  return driveSupportsRecycleBin_({
+    absolutePath,
+    platform: process.platform,
+    probe: recycleBinProbe,
+    cache: recycleBinSupportCache,
+  });
 }
 
 /**
@@ -1258,21 +1300,23 @@ function forceRelaunch() {
   // app.exit() gives the new process an independent OS-level lifetime, so exit
   // ordering stops mattering.
   //
-  // For the Windows portable target, PORTABLE_EXECUTABLE_FILE points to the outer
-  // .exe that lives on disk permanently; re-executing it re-enters the normal
-  // portable boot path (including the env-var injection that triggers portable
-  // mode detection). In dev and all other packaged builds, process.execPath is
-  // the right target.
-  const exe = process.env.PORTABLE_EXECUTABLE_FILE ?? process.execPath;
-  // In dev, argv[1] is the app bundle path that electron.exe must be told to
-  // load. Packaged/portable binaries know how to launch themselves.
+  // Derive the relaunch target and args from the SAME launch context resolved at
+  // module scope (part A). For the Windows portable target this is the outer .exe;
+  // for a Linux AppImage it is the outer .AppImage the user can move — either
+  // re-enters the normal portable boot path. In dev/other packaged builds it is
+  // process.execPath. Re-executing the outer artifact (not the inner
+  // squashfs-mounted binary on Linux) is what makes the relaunch survive exit.
   //
-  // The user's own flags MUST be forwarded. Dropping them silently converts a
-  // `--serve` process into a GUI process with no listener the first time any
-  // relaunch path fires (tray menu, the uncaught-exception restart dialog,
-  // onClearDatabase, reload) — the sidecar would simply disappear.
-  const userFlags = process.argv.slice(app.isPackaged ? 1 : 2);
-  const args = app.isPackaged ? [...userFlags] : [process.argv[1], ...userFlags];
+  // buildRelaunchCommand forwards the user's own flags. Dropping them silently
+  // converts a `--serve` process into a GUI process with no listener the first
+  // time any relaunch path fires (tray menu, the uncaught-exception restart
+  // dialog, onClearDatabase, reload) — the sidecar would simply disappear. In
+  // dev it also keeps argv[1] (the app bundle electron.exe must be told to load).
+  const { exe, args } = buildRelaunchCommand({
+    context: launchContext,
+    argv: process.argv,
+    isPackaged: app.isPackaged,
+  });
   spawn(exe, args, {
     detached: true,
     stdio: 'ignore',

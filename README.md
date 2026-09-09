@@ -89,14 +89,44 @@ Builds are automatically published to Github Releases when a tag is created in G
 
 > This fork ships **portable-only** on Windows. Use `yarn package:portable` to produce the portable `.exe` (`yarn package:appimage` for the Linux AppImage). Nothing about the desktop build changed when the headless build below was added — the two are entirely separate build paths from the same codebase.
 
+#### Linux (AppImage)
+
+The Linux target is a single **AppImage** (x86_64 only). Build and verify it on a Linux x86_64 host — the native modules (`better-sqlite3`, `sharp`, `@img/*`) are rebuilt for the target during packaging:
+
+```bash
+yarn package:appimage    # → dist/OneFolder-<version>-x86_64.AppImage (exactly one artifact)
+yarn verify:appimage     # inspect the extracted payload before shipping
+```
+
+`yarn verify:appimage` checks the extracted payload: exact-case resources, executable bits, ELF architecture, desktop metadata, icons, native modules, absence of Windows PE binaries, and an `ffmpeg h264_nvenc` smoke test.
+
+**The portable unit is the `.AppImage` file PLUS a sibling `data/` directory** created beside it on first launch (it holds userData, `backups/`, `thumbnails/`, `themes/`, and the app temp). This mirrors the Windows portable `brave.exe` + `data/` model. To relocate the app, move the `.AppImage` **and** its sibling `data/` together, and do so **only while the app is CLOSED** — SQLite (`better-sqlite3`) holds file locks and helper (ExifTool / ffmpeg) processes must be released first. Close the app, move both, then reopen.
+
+The AppImage plus `data/` must live in a location that is both **writable and executable**. If launched from a read-only or `noexec` path (a still-mounted image, `/tmp` mounted `noexec`, a read-only volume), startup **fails loud** with a concrete error naming the directory — there is **no** fallback to the system user-data directory, by design, so state always stays beside the artifact.
+
+**Dual-boot: one shared library across Windows and Linux.** Put both portable executables (`brave.exe` and the `.AppImage`) and **one shared `data/`** in the same portable directory, with your photos in a subfolder beside them. The same library then opens from either OS with **no per-boot Location Recovery and no thumbnail/preview/visual-hash re-derivation** — file identity is the portable `(locationId, relativePath)` pair (not the per-OS absolute path), location roots inside the portable directory are anchored and resolved per-OS at load, and existing caches are renamed (not rebuilt) to the portable key on first upgrade (the DB is backed up first). One OS at a time (SQLite single-writer lock). Keep the shared tree's case-sensitivity consistent between boots — on a case-sensitive share, `A.jpg`/`a.jpg` stay distinct even when opened from Windows. See [docs/multi-library.md → Dual-boot shared library](docs/multi-library.md#dual-boot-shared-library-one-library-two-oses).
+
+Running an AppImage requires **no installation**. Optional user-level desktop integration (copying/generating a `.desktop` entry, or tools like Gear Lever / AppImageLauncher) is a convenience, not a prerequisite — the build already sets the app identity (`onefolder.desktop`, `Name=OneFolder`, `StartupWMClass=OneFolder`, `Icon=onefolder`), so GNOME under native Wayland associates the correct name, icon, and window class. Do **not** force XWayland; Electron selects Ozone/Wayland automatically (`ozone-platform-hint=auto`). XWayland is only a diagnostic fallback if a specific compositor issue appears.
+
+**Host prerequisites:**
+
+- **Perl** — ExifTool ships as the Perl script `exiftool.pl` and needs `/usr/bin/perl` on the host. The Ubuntu/GNOME baseline includes it; install the `perl` package if it is missing. A missing Perl surfaces as a concrete startup/feature error, never a silent fallback. (Provenance and the exact missing-Perl error text are recorded in [`resources/THIRD_PARTY.md`](resources/THIRD_PARTY.md).)
+- **NVIDIA / NVENC** — media jobs use the bundled ffmpeg's `h264_nvenc` encoder, which requires compatible NVIDIA hardware and drivers. There is **no software-encoder fallback**; it stays fail-loud on unsupported hosts. Linux encoding is not universal.
+
+The bundled Linux `ffmpeg`/`ffprobe` are GPLv3 static builds (BtbN); their provenance, SHA-256, license/redistribution obligations, and build flags are recorded in [`resources/THIRD_PARTY.md`](resources/THIRD_PARTY.md).
+
+Library file **paths are case-sensitive on Linux** — `Clip.mp4` and `clip.mp4` are distinct files (Windows stays case-insensitive). Windows drive-letter library paths (e.g. `X:\...`) are **not** auto-migrated to Linux mount paths; cross-OS library migration is out of scope.
+
+The Linux build **does not** provide Flatpak/Snap/`.deb`/`.rpm` packages, ARM64 or musl/Alpine binaries, a bundled Perl runtime, a software-encoding fallback, automatic updates, or code signing.
+
 ### Build Options
 
 OneFolder builds from a single codebase to two different targets, selected at build time by a webpack "platform seam" (`src/frontend/platform`). The MobX store/component tree is identical in both; only the platform implementation and the backend differ.
 
 | Target | What it is | Build command(s) |
 | --- | --- | --- |
-| **Desktop (Electron)** | The full read/write app. `nodeIntegration` renderer talks to SQLite, the filesystem, and exiftool directly. | `yarn package` / `yarn package:portable` |
-| **Headless (web sidecar)** | A **read-only**, single-user web server that serves a browser SPA so you can browse one library from another device. It is a **mode of the same executable**, not a separate binary. | `yarn package:portable`, then `brave.exe --serve` |
+| **Desktop (Electron)** | The full read/write app. `nodeIntegration` renderer talks to SQLite, the filesystem, and exiftool directly. | `yarn package` / `yarn package:portable` (Windows) · `yarn package:appimage` (Linux) |
+| **Headless (web sidecar)** | A **read-only**, single-user web server that serves a browser SPA so you can browse one library from another device. It is a **mode of the same executable**, not a separate binary. | `yarn package:portable`, then `brave.exe --serve` (Windows) · `yarn package:appimage`, then `./OneFolder-<version>-x86_64.AppImage --serve` (Linux) |
 
 The headless mode is **additive** — it does not affect the desktop app. It is read-only by design (no edits, tagging writeback, deletes, or media jobs). See [`docs/headless-web-build.md`](docs/headless-web-build.md) for the full architecture (seam, endpoints, packaging, security boundary).
 
@@ -104,14 +134,25 @@ The headless mode is **additive** — it does not affect the desktop app. It is 
 
 Serve mode opens the active library's SQLite database **read-only**, serves the SPA, and streams images/metadata over HTTP. It serves on **port `8666`** by default and binds every network interface, so other devices on your network can reach it.
 
-**From the portable build:**
+**From the portable build (Windows):**
 
-```bash
-brave.exe --serve                 # open, no authentication
-brave.exe --serve --port 9000     # custom port
+```bat
+brave.exe --serve                 :: open, no authentication
+brave.exe --serve --port 9000     :: custom port
+
+set ONEFOLDER_AUTH_SECRET=changeme && brave.exe --serve
 ```
 
-Set `ONEFOLDER_AUTH_SECRET` (or `ONEFOLDER_AUTH_USER` + `ONEFOLDER_AUTH_PASSWORD`) before launching to require HTTP Basic authentication. Leave them unset and the server runs open — its startup banner says so, and lists every URL it is reachable on.
+**From the AppImage (Linux):**
+
+```bash
+./OneFolder-<version>-x86_64.AppImage --serve               # open, no authentication
+./OneFolder-<version>-x86_64.AppImage --serve --port 9000   # custom port
+
+ONEFOLDER_AUTH_SECRET=changeme ./OneFolder-<version>-x86_64.AppImage --serve
+```
+
+Set `ONEFOLDER_AUTH_SECRET` (or `ONEFOLDER_AUTH_USER` + `ONEFOLDER_AUTH_PASSWORD`) before launching to require HTTP Basic authentication. Leave them unset and the server runs open — its startup banner says so, and lists every URL it is reachable on. On Linux use POSIX shell syntax (`VAR=value ./OneFolder...AppImage --serve`), **not** Windows `set VAR=`.
 
 **From source (development):**
 
@@ -121,7 +162,7 @@ yarn build:web                             # build the browser SPA into dist-web
 electron ./build/main.bundle.js --serve     # run serve mode from source
 ```
 
-The startup banner is written to stdout **and** to `data\server.log`; on Windows the log file is the reliable record, because a GUI-subsystem binary's stdout does not consistently attach to the console that launched it.
+The startup banner is written to stdout **and** to `data/server.log` (`data\server.log` on Windows); on Windows the log file is the reliable record, because a GUI-subsystem binary's stdout does not consistently attach to the console that launched it. On Linux the AppImage writes the same `data/server.log` beside the artifact.
 
 Then open the URL from the banner on any device on the network.
 

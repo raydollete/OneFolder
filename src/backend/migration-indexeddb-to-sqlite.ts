@@ -19,9 +19,25 @@ import { FileDTO } from '../api/file';
 import { FileSearchDTO } from '../api/file-search';
 import { LocationDTO } from '../api/location';
 import { TagDTO } from '../api/tag';
-import { VisualHashDTO } from '../api/visual-hash';
 import { DB_NAME, dbInit } from './config';
 import { sqliteInit } from './sqlite-config';
+import { portableFileKey } from '../../common/fs';
+
+/**
+ * Legacy on-disk shape of a Dexie visualHashes row (pre portable-shared-library-
+ * caches): keyed on the per-OS absolutePath. Translated to the portable fileKey
+ * during migration. Kept as a local type because the current VisualHashDTO no
+ * longer carries absolutePath.
+ */
+interface LegacyVisualHashRow {
+  absolutePath: string;
+  fileSize: number;
+  dateModified: Date;
+  hashType: string;
+  hash: string;
+  dateComputed: Date;
+  thumbnailPath?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -148,7 +164,9 @@ export async function migrateIfNeeded(sqliteDbPath: string): Promise<boolean> {
     dexieDb.table('locations').toArray() as Promise<LocationDTO[]>,
     dexieDb.table('searches').toArray() as Promise<FileSearchDTO[]>,
     dexieDb.table('dismissedDuplicateGroups').toArray() as Promise<DismissedDuplicateGroupDTO[]>,
-    dexieDb.table('visualHashes').toArray() as Promise<VisualHashDTO[]>,
+    // Legacy visual-hash rows are keyed on the per-OS absolutePath; they are
+    // translated to the portable fileKey below (see LegacyVisualHashRow).
+    dexieDb.table('visualHashes').toArray() as Promise<LegacyVisualHashRow[]>,
   ]);
 
   console.info(
@@ -299,16 +317,28 @@ export async function migrateIfNeeded(sqliteDbPath: string): Promise<boolean> {
       // ---- visualHashes ----
       // The Dexie auto-increment id is intentionally not carried over.
       // SQLite's AUTOINCREMENT on the INTEGER PRIMARY KEY will assign new ids.
+      // Legacy rows are keyed on the per-OS absolutePath; translate each to the
+      // portable fileKey via the migrated files (absolutePath → (locationId,
+      // relativePath)). Rows whose file is gone are skipped — the hash
+      // regenerates lazily under the portable key rather than being carried over
+      // with an unusable key.
+      const absolutePathToFileKey = new Map<string, string>(
+        files.map((f) => [f.absolutePath, portableFileKey(f.locationId, f.relativePath)]),
+      );
       const insertVisualHash = sqliteDb.prepare(`
         INSERT OR IGNORE INTO visualHashes
-          (absolutePath, fileSize, dateModified, hashType, hash, dateComputed, thumbnailPath)
+          (fileKey, fileSize, dateModified, hashType, hash, dateComputed, thumbnailPath)
         VALUES
-          (@absolutePath, @fileSize, @dateModified, @hashType, @hash, @dateComputed, @thumbnailPath)
+          (@fileKey, @fileSize, @dateModified, @hashType, @hash, @dateComputed, @thumbnailPath)
       `);
 
       for (const vh of visualHashes) {
+        const fileKey = absolutePathToFileKey.get(vh.absolutePath);
+        if (fileKey === undefined) {
+          continue;
+        }
         insertVisualHash.run({
-          absolutePath: vh.absolutePath,
+          fileKey,
           fileSize: vh.fileSize,
           dateModified: toIso(vh.dateModified),
           hashType: vh.hashType,

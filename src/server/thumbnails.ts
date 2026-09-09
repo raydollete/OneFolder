@@ -149,43 +149,6 @@ export function isSharpNativeFormat(ext: string): boolean {
   ].includes(ext.toLowerCase());
 }
 
-// ---------------------------------------------------------------------------
-// Preview path helpers (TASK-131)
-// ---------------------------------------------------------------------------
-
-/**
- * Returns the on-disk cache path for a full-size decoded preview of `filePath`.
- *
- * Previews are stored in a `previews/` subdirectory alongside the thumbnail
- * directory.  The filename scheme mirrors getThumbnailPath (basename + hash),
- * but uses the '.webp' extension since previews are always encoded as webp.
- *
- * @param filePath      Absolute path to the source image.
- * @param thumbnailDir  Absolute path to the thumbnail cache directory for the
- *                       active library.  The previews/ dir is derived from this
- *                       by replacing the last segment with 'previews'.
- */
-export function getPreviewPath(filePath: string, thumbnailDir: string): string {
-  const baseFilename = path.basename(filePath, path.extname(filePath));
-  const hash = hashFilePath(filePath);
-  const previewDir = path.join(path.dirname(thumbnailDir), 'previews');
-  return path.join(previewDir, `${baseFilename}-${hash}.webp`);
-}
-
-/**
- * Deterministic hash of a file path for use in cache filenames.
- * Mirrors the hashString() function in common/fs.ts so that the preview cache
- * key is consistent with the thumbnail cache key.
- */
-function hashFilePath(s: string): number {
-  let hash = 0;
-  if (s.length === 0) {
-    return hash;
-  }
-  for (let i = 0; i < s.length; i++) {
-    const chr = s.charCodeAt(i);
-    // eslint-disable-next-line no-bitwise
-    hash = ((hash << 5) - hash + chr) | 0;
-  }
-  return hash;
-}
+// getPreviewPath now lives in common/fs.ts (alongside getThumbnailPath) so the
+// desktop renderer's cache migration and the sidecar derive preview names from
+// the same portable key without importing server-only code.

@@ -166,16 +166,54 @@ describe('MediaReleaseCoordinator', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Path normalization — case-insensitive matching on Windows paths
+  // Path normalization — shared path-identity seam (Task 2.2)
+  //
+  // The coordinator routes register/release keys through
+  // platform.path.normalizePathIdentity, which folds separators on every
+  // desktop and folds case ONLY on Windows. The Jest runner is Linux, so the
+  // default policy here is case-SENSITIVE.
   // -------------------------------------------------------------------------
 
-  it('matches paths case-insensitively', async () => {
+  it('matches separator variants at identical case (cross-platform)', async () => {
     const el = makeMockVideo();
-    coordinator.register('C:\\Videos\\Clip.mp4', el);
+    coordinator.register('C:\\Videos\\clip.mp4', el);
 
-    // Different case + forward slashes
-    await coordinator.releasePaths(['C:/videos/clip.mp4'], { timeoutMs: 0 });
+    // Same case, different separators → must match on every platform.
+    await coordinator.releasePaths(['C:/Videos/clip.mp4'], { timeoutMs: 0 });
     expect(el.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps case-distinct paths DISTINCT on non-Windows (Linux case-sensitivity)', async () => {
+    const el = makeMockVideo();
+    coordinator.register('/videos/Clip.mp4', el);
+
+    // Different case on a case-sensitive filesystem → must NOT match.
+    await coordinator.releasePaths(['/videos/clip.mp4'], { timeoutMs: 0 });
+    expect(el.pause).not.toHaveBeenCalled();
+
+    // Same case → matches, proving the element is registered correctly.
+    await coordinator.releasePaths(['/videos/Clip.mp4'], { timeoutMs: 0 });
+    expect(el.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('matches case variants under the Windows policy (IS_WIN = true)', async () => {
+    jest.resetModules();
+    jest.doMock('common/process', () => ({
+      ...jest.requireActual('common/process'),
+      IS_WIN: true,
+    }));
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { MediaReleaseCoordinator: WinCoordinator } = require('../src/frontend/image/MediaReleaseCoordinator');
+    const winCoordinator = new WinCoordinator();
+    const el = makeMockVideo();
+    winCoordinator.register('C:\\Videos\\Clip.mp4', el);
+
+    // Different case + forward slashes → matches under the Windows policy.
+    await winCoordinator.releasePaths(['C:/videos/clip.mp4'], { timeoutMs: 0 });
+    expect(el.pause).toHaveBeenCalledTimes(1);
+
+    jest.dontMock('common/process');
+    jest.resetModules();
   });
 
   // -------------------------------------------------------------------------

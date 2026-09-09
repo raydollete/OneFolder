@@ -15,9 +15,14 @@ import { shell, webUtils } from 'electron';
 import StreamZip from 'node-stream-zip';
 
 import { encodeFilePath as _encodeFilePath } from 'common/fs';
+import { IS_WIN } from 'common/process';
 import { RendererMessenger } from 'src/ipc/renderer';
 import ExifIO from 'common/ExifIO';
 
+import {
+  normalizePathIdentity as _normalizePathIdentity,
+  getPathIdentityFoldCase,
+} from './index';
 import type {
   Platform,
   PlatformFs,
@@ -71,6 +76,10 @@ const path: PlatformPath = {
   dirname: (p) => nodePath.dirname(p),
   normalize: (p) => nodePath.normalize(p),
   sep: nodePath.sep,
+  // Desktop path-identity: fold separators everywhere; fold case per the library
+  // filesystem probe (set at library open), defaulting to the OS heuristic
+  // (Windows folds) until the probe runs. See getPathIdentityFoldCase.
+  normalizePathIdentity: (p) => _normalizePathIdentity(p, getPathIdentityFoldCase(IS_WIN)),
 };
 
 // ---------------------------------------------------------------------------

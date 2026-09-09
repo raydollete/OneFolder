@@ -1,13 +1,18 @@
 import { action, makeObservable, observable, runInAction } from 'mobx';
 
-import { getThumbnailPath } from 'common/fs';
+import { getThumbnailPath, getPreviewPath, portableFileKey } from 'common/fs';
 import { promiseAllLimit, yieldToEventLoop } from 'common/promise';
 import { perf } from '../perf';
 import {
   buildDbFilesByCreatedDate,
   matchMissingToCreated,
   matchMissingToDbDuplicates,
+  recomputeAbsolutePaths,
+  computeAnchorSegment,
+  resolveAnchoredPath,
+  fileIdentityKey,
 } from './locationReconciliation';
+import { planCacheRenames } from './portableCacheMigration';
 import { DataStorage } from '../../api/data-storage';
 import { OrderDirection } from '../../api/data-storage-search';
 import { FileDTO, IMG_EXTENSIONS, IMG_EXTENSIONS_TYPE } from '../../api/file';
@@ -54,6 +59,22 @@ class LocationStore {
    */
   private readonly suppressedIngestPaths = new Set<string>();
 
+  /**
+   * The portable application directory — `dirname(userData)`. In portable mode
+   * userData is `<portableDir>/data`, so this is `<portableDir>`, the root that
+   * portable-anchored locations are resolved against (and auto-anchored under).
+   * Resolved once in init(); undefined until then, and in non-portable/web
+   * contexts where the probe fails (locations then stay absolute).
+   */
+  private portableDirectory: string | undefined;
+
+  /**
+   * The shared library data directory (`userData`) — where the one-time
+   * portable-cache-migration marker lives. Shared by both OSes of a dual-boot
+   * install, so the marker is OS-discriminated. Undefined on web/probe failure.
+   */
+  private dataDirectory: string | undefined;
+
   constructor(backend: DataStorage, rootStore: RootStore, storageKeyPrefix = '') {
     this.backend = backend;
     this.rootStore = rootStore;
@@ -77,6 +98,20 @@ class LocationStore {
     }
 
     // Get dirs from backend
+    // Resolve the portable directory once (dirname of userData). Portable-anchored
+    // locations resolve their per-OS root against it. Non-fatal: if it can't be
+    // determined (web build / probe failure) anchored resolution is skipped and
+    // locations keep their stored absolute path.
+    try {
+      const userData = await platform.desktop.getPath('userData');
+      this.dataDirectory = userData;
+      this.portableDirectory = platform.path.dirname(userData);
+    } catch (e) {
+      console.warn('[LocationStore] could not resolve portable directory; anchors inactive', e);
+      this.dataDirectory = undefined;
+      this.portableDirectory = undefined;
+    }
+
     const dirs = (await this.backend.fetchLocations()).filter((dir) => {
       // Defensively skip malformed rows with an empty path (from a bad import or
       // a hand-edited DB): they would otherwise become permanent unnamed ghosts.
@@ -97,14 +132,96 @@ class LocationStore {
         new ClientLocation(
           this,
           dir.id,
-          dir.path,
+          // Portable-anchored locations resolve their root per-OS against the
+          // portable directory; unanchored ones keep their stored absolute path.
+          resolveAnchoredPath(this.portableDirectory, dir.path, dir.portableRoot, platform.path.join),
           dir.dateAdded,
           dir.subLocations,
           runInAction(() => Array.from(this.enabledFileExtensions)),
           dir.index ?? i,
+          dir.portableRoot,
         ),
     );
     runInAction(() => this.locationList.replace(locations));
+
+    await this.autoAnchorLocations();
+  }
+
+  /**
+   * One-time migration (idempotent): anchor any not-yet-anchored location whose
+   * current root lies within the portable directory, so the next boot resolves it
+   * per-OS. Persists the anchor for later boots; the in-memory location keeps its
+   * (already valid) resolved path this session. Locations outside the portable
+   * directory (external drives) and already-anchored ones are left untouched.
+   */
+  @action private async autoAnchorLocations(): Promise<void> {
+    const portableDir = this.portableDirectory;
+    if (portableDir === undefined) {
+      return;
+    }
+    for (const loc of this.locationList) {
+      if (loc.portableRoot !== undefined) {
+        continue;
+      }
+      const segment = computeAnchorSegment(portableDir, loc.path, platform.path.normalizePathIdentity);
+      if (segment === undefined) {
+        continue;
+      }
+      await this.backend.saveLocation({ ...loc.serialize(), portableRoot: segment });
+    }
+  }
+
+  /**
+   * One-time (per-OS) rename of existing thumbnail/preview cache files from the
+   * legacy absolute-path key to the portable key, so an upgraded or shared
+   * library reuses its caches instead of regenerating them. Guarded by an
+   * OS-discriminated marker in the shared data directory (two OSes of a dual-boot
+   * install share `data/`, so the marker must not let one suppress the other).
+   * Best-effort: failures are logged, never thrown.
+   */
+  @action private async migratePortableCaches(rawDbFiles: FileDTO[]): Promise<void> {
+    if (platform.isWebBuild || this.dataDirectory === undefined) {
+      return;
+    }
+    const thumbnailDir = runInAction(() => this.rootStore.uiStore.thumbnailDirectory);
+    // thumbnailDirectory is set asynchronously; if it is not ready yet, skip
+    // WITHOUT writing the marker so the migration retries on a later launch.
+    if (!thumbnailDir) {
+      return;
+    }
+    // Windows uses a backslash separator; POSIX a forward slash. Enough to keep
+    // the two OSes' markers distinct in the shared data directory.
+    const osTag = platform.path.sep === '\\' ? 'win' : 'posix';
+    const marker = platform.path.join(this.dataDirectory, `.portable-cache-migrated-${osTag}`);
+    if (platform.fs.existsSync(marker)) {
+      return;
+    }
+
+    const renames = planCacheRenames(
+      rawDbFiles,
+      thumbnailDir,
+      [getThumbnailPath, getPreviewPath],
+      portableFileKey,
+      (p) => platform.fs.existsSync(p),
+    );
+    let renamed = 0;
+    for (const { from, to } of renames) {
+      try {
+        await platform.fs.ensureDir(platform.path.dirname(to));
+        await platform.fs.move(from, to);
+        renamed++;
+      } catch (e) {
+        console.warn('[LocationStore] cache rename failed', from, '->', to, e);
+      }
+    }
+    try {
+      await platform.fs.writeFile(marker, new ArrayBuffer(0));
+    } catch (e) {
+      console.warn('[LocationStore] could not write cache-migration marker', marker, e);
+    }
+    console.info(
+      `[LocationStore] portable cache migration: renamed ${renamed}/${renames.length} entries (${osTag})`,
+    );
   }
 
   save(loc: LocationDTO): void {
@@ -126,10 +243,34 @@ class LocationStore {
     // The startup fetch already loaded every row — reuse those DTOs instead of
     // re-fetching the entire library a second time (falls back to a fetch when
     // the session started on a search view and the cache was never filled).
-    const dbFiles: FileDTO[] =
+    // Recompute each stored file's absolutePath from its location's resolved,
+    // current-OS root before reconciling. On a shared library booted from the
+    // other OS the stored absolutePath values are foreign; normalizing them here
+    // (in memory, no DB sweep) is what keeps the created/missing comparisons
+    // below from flagging the entire library as new+gone. The durable identity
+    // is (locationId, relativePath); this only refreshes the derived column.
+    const rawDbFiles: FileDTO[] =
       this.rootStore.fileStore.consumeStartupFetchDTOs() ??
       (await this.backend.fetchFiles('id', OrderDirection.Asc));
-    const dbFilesPathSet = new Set(dbFiles.map((f) => f.absolutePath));
+
+    // One-time (per-OS) rename of existing thumbnail/preview caches onto the
+    // portable key, using each row's LEGACY stored absolutePath — so an upgraded
+    // library reuses its caches instead of regenerating them. Uses rawDbFiles
+    // (pre-recompute), which still hold the absolute path the caches were named
+    // from. Best-effort and destination-exists-safe (see planCacheRenames).
+    await this.migratePortableCaches(rawDbFiles);
+
+    const dbFiles: FileDTO[] = recomputeAbsolutePaths(rawDbFiles, (locationId, relativePath) => {
+      const loc = this.get(locationId);
+      return loc ? platform.path.join(loc.path, relativePath) : undefined;
+    });
+    // Key created/missing detection on the durable identity (locationId,
+    // relativePath) through the path-identity seam, NOT the per-OS absolutePath:
+    // on a cross-OS boot the stored and on-disk absolute paths differ, but the
+    // identity is stable, so nothing is falsely flagged created or missing.
+    const identityKey = (locationId: ID, relativePath: string): string =>
+      fileIdentityKey(locationId, relativePath, platform.path.normalizePathIdentity);
+    const dbFilesKeySet = new Set(dbFiles.map((f) => identityKey(f.locationId, f.relativePath)));
     const dbFilesByCreatedDate = buildDbFilesByCreatedDate(dbFiles);
     // Per-location grouping so the per-location passes below don't rescan the
     // entire library once per location.
@@ -179,8 +320,16 @@ class LocationStore {
 
       console.groupCollapsed(`Initializing location ${location.name}`);
       const diskFiles = await location.init();
+      // Index disk files by the same portable identity key. Each disk file's
+      // relativePath is derived from the location's resolved root, so the key
+      // matches the DB rows' key regardless of which OS wrote them.
+      const diskFilesWithKey =
+        diskFiles?.map((f) => ({
+          file: f,
+          key: identityKey(location.id, relativePathFromLocation(f.absolutePath, location.path)),
+        })) ?? [];
       const diskFileMap = new Map<string, FileStats>(
-        diskFiles?.map((f) => [f.absolutePath, f]) ?? [],
+        diskFilesWithKey.map(({ file, key }) => [key, file]),
       );
 
       clearTimeout(readyTimeout);
@@ -202,7 +351,9 @@ class LocationStore {
       // Find all files that have been created (those on disk but not in DB).
       // Metadata extraction per created file is I/O-heavy — bounded to 50
       // concurrent (formerly an unbounded Promise.all).
-      const createdPaths = diskFiles.filter((f) => !dbFilesPathSet.has(f.absolutePath));
+      const createdPaths = diskFilesWithKey
+        .filter(({ key }) => !dbFilesKeySet.has(key))
+        .map(({ file }) => file);
       const createdFiles = await promiseAllLimit(
         createdPaths.map((path) => () => pathToIFile(path, location, this.rootStore.imageLoader)),
         50,
@@ -210,7 +361,9 @@ class LocationStore {
 
       // Find all files of this location that have been removed (those in DB but not on disk anymore)
       const locationDbFiles = dbFilesByLocation.get(location.id) ?? [];
-      const missingFiles = locationDbFiles.filter((file) => !diskFileMap.has(file.absolutePath));
+      const missingFiles = locationDbFiles.filter(
+        (file) => !diskFileMap.has(identityKey(file.locationId, file.relativePath)),
+      );
       await yieldToEventLoop();
 
       // Find matches between removed and created images (different name/path
@@ -301,7 +454,7 @@ class LocationStore {
         if (++scanned % 2000 === 0) {
           await yieldToEventLoop();
         }
-        const diskFile = diskFileMap.get(dbFile.absolutePath);
+        const diskFile = diskFileMap.get(identityKey(dbFile.locationId, dbFile.relativePath));
         if (
           diskFile &&
           dbFile.dateLastIndexed.getTime() < diskFile.dateModified.getTime() &&
@@ -315,7 +468,10 @@ class LocationStore {
           };
 
           // Delete thumbnail if size has changed, will be re-created automatically when needed
-          const thumbPath = getThumbnailPath(dbFile.absolutePath, thumbnailDirectory);
+          const thumbPath = getThumbnailPath(
+            portableFileKey(dbFile.locationId, dbFile.relativePath),
+            thumbnailDirectory,
+          );
           platform.fs.remove(thumbPath).catch(console.error);
 
           updatedFiles.push(newFile);
@@ -363,6 +519,13 @@ class LocationStore {
     }));
     await this.backend.saveFiles(files);
 
+    // A manual re-point must update (or clear) the portable anchor so the next
+    // boot's per-OS resolution does not override the user's new root (Finding H):
+    // if newPath is under the portable directory, re-anchor to its segment;
+    // otherwise drop the anchor and keep newPath as a fixed absolute path.
+    const newSegment = this.portableDirectory
+      ? computeAnchorSegment(this.portableDirectory, newPath, platform.path.normalizePathIdentity)
+      : undefined;
     const newLocation = new ClientLocation(
       this,
       location.id,
@@ -371,6 +534,7 @@ class LocationStore {
       location.subLocations,
       runInAction(() => Array.from(this.enabledFileExtensions)),
       this.locationList.length,
+      newSegment,
     );
     runInAction(() => (this.locationList[index] = newLocation));
     await this.initLocation(newLocation);
@@ -392,6 +556,12 @@ class LocationStore {
     if (path.trim() === '') {
       throw new Error('Cannot create a location with an empty path');
     }
+    // Auto-anchor a newly added folder that lives under the portable directory so
+    // it is portable from creation (resolves per-OS on the next boot); folders
+    // outside it stay unanchored (fixed absolute path, e.g. an external drive).
+    const segment = this.portableDirectory
+      ? computeAnchorSegment(this.portableDirectory, path, platform.path.normalizePathIdentity)
+      : undefined;
     const location = new ClientLocation(
       this,
       generateId(),
@@ -400,6 +570,7 @@ class LocationStore {
       [],
       runInAction(() => Array.from(this.enabledFileExtensions)),
       this.locationList.length,
+      segment,
     );
     await this.backend.createLocation(location.serialize());
     runInAction(() => this.locationList.push(location));
@@ -532,7 +703,9 @@ class LocationStore {
 
   /** Normalize an absolute path to the form used for suppression/DB lookups. */
   private static normalizePath(absolutePath: string): string {
-    return absolutePath.replace(/\\/g, '/').toLowerCase();
+    // Shared path-identity seam: separators folded to '/', case folded only on
+    // Windows so Linux/macOS paths remain case-sensitive.
+    return platform.path.normalizePathIdentity(absolutePath);
   }
 
   /**
@@ -564,9 +737,10 @@ class LocationStore {
    */
   @action async ingestFile(absolutePath: string, locationId: ID, tagIds: ID[]): Promise<FileDTO> {
     const fwd = absolutePath.replace(/\\/g, '/');
-    const normalized = fwd.toLowerCase();
+    // Path-identity key via the shared seam (separators + Windows-only case fold).
+    const normalized = platform.path.normalizePathIdentity(absolutePath);
     const findRow = (rows: FileDTO[]): FileDTO | undefined =>
-      rows.find((f) => f.absolutePath.replace(/\\/g, '/').toLowerCase() === normalized);
+      rows.find((f) => platform.path.normalizePathIdentity(f.absolutePath) === normalized);
 
     let dto = findRow(await this.backend.fetchFilesByKey('absolutePath', fwd));
 
@@ -621,7 +795,10 @@ class LocationStore {
       : (await this.backend.fetchFilesByKey('ino', fileStats.ino))[0];
 
     if (match) {
-      if (fileStats.absolutePath === match.absolutePath) {
+      if (
+        platform.path.normalizePathIdentity(fileStats.absolutePath) ===
+        platform.path.normalizePathIdentity(match.absolutePath)
+      ) {
         return;
       }
       fileStore.replaceMovedFile(match, file);
@@ -642,7 +819,10 @@ class LocationStore {
     // Could also mean that a file was renamed or moved, in which case addFile was called already:
     // its path will have changed, so we won't find it here, which is fine, it'll be detected as missing later.
     const fileStore = this.rootStore.fileStore;
-    const clientFile = fileStore.fileList.find((f) => f.absolutePath === path);
+    const target = platform.path.normalizePathIdentity(path);
+    const clientFile = fileStore.fileList.find(
+      (f) => platform.path.normalizePathIdentity(f.absolutePath) === target,
+    );
 
     if (clientFile) {
       fileStore.hideFile(clientFile);
@@ -659,12 +839,22 @@ class LocationStore {
   }
 
   @action async removeSublocationFiles(subLoc: ClientSubLocation): Promise<void> {
-    const crit = new ClientStringSearchCriteria(
-      'absolutePath',
-      subLoc.path,
-      'startsWith',
-    ).toCondition();
-    const files = await this.backend.searchFiles(crit, 'id', OrderDirection.Asc);
+    // Key on the portable identity: the sublocation's path RELATIVE to its
+    // location, scoped by locationId — not the per-OS absolutePath prefix, which
+    // silently matched nothing on a cross-OS boot (Finding F). Append the
+    // separator so a sibling like `/sub/dir2` is not swept when excluding
+    // `/sub/dir`.
+    const location = subLoc.location;
+    const subRelative = relativePathFromLocation(subLoc.path, location.path);
+    const subRelativePrefix = subRelative.endsWith('/') ? subRelative : `${subRelative}/`;
+    const files = await this.backend.searchFiles(
+      [
+        new ClientStringSearchCriteria('locationId', location.id, 'equals').toCondition(),
+        new ClientStringSearchCriteria('relativePath', subRelativePrefix, 'startsWith').toCondition(),
+      ],
+      'id',
+      OrderDirection.Asc,
+    );
     await this.backend.removeFiles(files.map((f) => f.id));
 
     // Splice the removed files out of the in-memory fileList in place rather
@@ -729,10 +919,15 @@ export type FileStats = {
 function relativePathFromLocation(absolutePath: string, locationPath: string): string {
   const absFwd = absolutePath.replace(/\\/g, '/');
   const locFwd = locationPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  if (absFwd.toLowerCase() === locFwd.toLowerCase()) {
+  // Compare via the shared path-identity seam (Windows-only case fold). The seam
+  // only folds case (and separators, already folded above), so lengths are
+  // preserved — slicing absFwd / using locFwd.length below stays index-correct.
+  const absId = platform.path.normalizePathIdentity(absFwd);
+  const locId = platform.path.normalizePathIdentity(locFwd);
+  if (absId === locId) {
     return '';
   }
-  if (absFwd.toLowerCase().startsWith(locFwd.toLowerCase() + '/')) {
+  if (absId.startsWith(locId + '/')) {
     return absFwd.slice(locFwd.length); // keeps the leading '/'
   }
   // Not a prefix (unreconcilable separator/case/drive mismatch): use the basename so

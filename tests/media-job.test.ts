@@ -2,8 +2,11 @@
  * Tests for the media subsystem: getUniqueSiblingPath (path planning), FfmpegRunner (Layer 1
  * argv assembly), and MediaJobService (Layer 2 encode -> place lifecycle).
  *
- * The functional encode tests spawn a real ffmpeg process against a tiny generated video; they
- * are skipped automatically when the bundled ffmpeg binary is not present.
+ * The functional encode tests spawn a real ffmpeg process against a tiny generated video. On
+ * platforms OneFolder ships a bundled ffmpeg for (win32, linux) a missing binary FAILS the suite
+ * loudly rather than skipping — a missing promised helper is a packaging regression, not a reason
+ * to silently skip media verification. On platforms with no bundled binary (e.g. darwin) the
+ * functional block skips.
  *
  * The argv-ordering tests use a spawn mock (the real spawn is forwarded for everything except the
  * `/fake/ffmpeg` and `/fake/ffprobe` sentinels) so they run without a real binary.
@@ -51,16 +54,29 @@ jest.mock('child_process', () => {
 });
 
 const resourcesDir = path.resolve(__dirname, '..', 'resources');
-const ffmpegBin = path.join(
-  resourcesDir,
-  'ffmpeg',
-  process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
-);
-const ffprobeBin = path.join(
-  resourcesDir,
-  'ffmpeg',
-  process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe',
-);
+
+// Platforms for which OneFolder bundles ffmpeg/ffprobe helpers. On these the functional media
+// suite MUST fail loudly (not skip) when the promised binary is absent.
+const SHIP_FFMPEG_PLATFORMS = new Set<NodeJS.Platform>(['win32', 'linux']);
+
+// Resolve the helper binaries at their REAL in-repo locations, using the PACKAGED name per
+// platform. On Linux the packaged name is `ffmpeg`/`ffprobe` (no .exe); in the repo the Linux
+// binaries live under resources/ffmpeg/linux/ and are mapped to resources/ffmpeg/ only at
+// electron-builder package time — so the test must look under linux/ to find them in a checkout.
+function resolveHelper(name: 'ffmpeg' | 'ffprobe'): string {
+  switch (process.platform) {
+    case 'win32':
+      return path.join(resourcesDir, 'ffmpeg', `${name}.exe`);
+    case 'linux':
+      return path.join(resourcesDir, 'ffmpeg', 'linux', name);
+    default:
+      // No bundled binary is shipped for other platforms (e.g. darwin).
+      return path.join(resourcesDir, 'ffmpeg', name);
+  }
+}
+
+const ffmpegBin = resolveHelper('ffmpeg');
+const ffprobeBin = resolveHelper('ffprobe');
 
 function binaryExists(p: string): boolean {
   try {
@@ -254,9 +270,26 @@ describe('FfmpegRunner probeFirstAudioCodec', () => {
 
 describe('MediaJobService functional encode + place', () => {
   if (!FFMPEG_AVAILABLE) {
-    it.skip('ffmpeg binary not found at ' + ffmpegBin + ' — skipping functional tests', () => {
-      /* intentionally empty */
-    });
+    if (SHIP_FFMPEG_PLATFORMS.has(process.platform)) {
+      // OneFolder promises a bundled ffmpeg on this platform, so a missing binary is a packaging
+      // regression — FAIL loudly with the expected path rather than silently skipping the media
+      // verification (bomb-squad finding 4).
+      it(`bundled ffmpeg helper must exist on ${process.platform} (packaging invariant)`, () => {
+        throw new Error(
+          `[media] Bundled ffmpeg helper missing on ${process.platform}. Expected executables at ` +
+            `${ffmpegBin} and ${ffprobeBin}. OneFolder ships ffmpeg for this platform, so a missing ` +
+            `helper is a packaging regression, not a skippable test.`,
+        );
+      });
+    } else {
+      // No bundled binary is shipped for this platform (e.g. darwin) — skipping is acceptable.
+      it.skip(
+        `ffmpeg not bundled on ${process.platform} — skipping functional media tests`,
+        () => {
+          /* intentionally empty */
+        },
+      );
+    }
     return;
   }
 
@@ -706,13 +739,29 @@ describe('FfmpegRunner inactivity timeout (INV-038 / TASK-155)', () => {
         proc.stdout.emit('data', Buffer.from('out_time_ms=1000000\nprogress=continue\n'));
       });
 
-      // Once taskkill fires (tracked via killCalls), close the proc.
-      // We check by polling — under fake timers we need this to run.
+      // A real ffmpeg child dies (emits 'close') when the watchdog hard-kills it. The runner's
+      // kill path is platform-specific: on Linux/macOS it calls child.kill('SIGKILL'); on Windows
+      // it spawns `taskkill` (tracked via killCalls) and never touches child.kill. The fake must
+      // therefore close on BOTH signals or the run promise never settles on non-Windows hosts
+      // (the previous Windows-only fake left Linux CI hanging until the 5s test timeout).
       let closed = false;
-      const closeWhenKilled = () => {
-        if (killCalls.length > 0 && !closed) {
+      const closeOnce = (code: number) => {
+        if (!closed) {
           closed = true;
-          proc.emit('close', 1);
+          proc.emit('close', code);
+        }
+      };
+
+      // Linux/macOS path: the runner calls child.kill('SIGKILL') directly.
+      proc.kill = () => {
+        closeOnce(1);
+        return true;
+      };
+
+      // Windows path: once taskkill fires (tracked via killCalls), close the proc.
+      const closeWhenKilled = () => {
+        if (killCalls.length > 0) {
+          closeOnce(1);
         }
       };
 

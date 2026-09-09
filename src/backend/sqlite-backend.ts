@@ -17,6 +17,37 @@ import { ID } from '../api/id';
 import { LocationDTO } from '../api/location';
 import { ROOT_TAG_ID, TagDTO } from '../api/tag';
 import { VisualHashDTO } from '../api/visual-hash';
+import { portableFileKey } from '../../common/fs';
+
+// ---------------------------------------------------------------------------
+// Pure identity/dedup helpers (extracted so they are unit-testable without a
+// real better-sqlite3 database, which cannot load in the jest environment).
+// ---------------------------------------------------------------------------
+
+/**
+ * Given the portable identity keys already present in the DB and a batch of new
+ * files, returns only the files whose `(locationId, relativePath)` identity is
+ * not already present. Keying on the portable identity — not the per-OS
+ * absolutePath — is what stops a cross-OS boot from re-inserting the whole
+ * library (every absolutePath mismatches on the other OS, but the identity is
+ * stable). Duplicates within the batch itself are also collapsed.
+ */
+export function dedupeNewFilesByIdentity(
+  newFiles: FileDTO[],
+  existingKeys: ReadonlySet<string>,
+): FileDTO[] {
+  const seen = new Set(existingKeys);
+  const result: FileDTO[] = [];
+  for (const file of newFiles) {
+    const key = portableFileKey(file.locationId, file.relativePath);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(file);
+  }
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Row types — what better-sqlite3 returns from each table
@@ -57,6 +88,7 @@ interface LocationRow {
   dateAdded: string;
   subLocations: string;
   index: number;
+  portableRoot: string | null;
 }
 
 interface SearchRow {
@@ -78,7 +110,7 @@ interface DismissedGroupRow {
 
 interface VisualHashRow {
   id?: number;
-  absolutePath: string;
+  fileKey: string;
   fileSize: number;
   dateModified: string;
   hashType: string;
@@ -154,13 +186,19 @@ function tagRowToDTO(row: TagRow): TagDTO {
 
 /** Converts a SQLite location row to LocationDTO. */
 function locationRowToDTO(row: LocationRow): LocationDTO {
-  return {
+  const dto: LocationDTO = {
     id: row.id,
     path: row.path,
     dateAdded: new Date(row.dateAdded),
     subLocations: JSON.parse(row.subLocations),
     index: row.index,
   };
+  // Only surface the anchor when present, so unanchored locations round-trip
+  // identically (no `portableRoot: null` leaking into the DTO).
+  if (row.portableRoot !== null && row.portableRoot !== undefined) {
+    dto.portableRoot = row.portableRoot;
+  }
+  return dto;
 }
 
 /** Converts a SQLite search row to FileSearchDTO. */
@@ -190,7 +228,7 @@ function dismissedGroupRowToDTO(row: DismissedGroupRow): DismissedDuplicateGroup
 function visualHashRowToDTO(row: VisualHashRow): VisualHashDTO {
   return {
     id: row.id !== undefined ? String(row.id) : undefined,
-    absolutePath: row.absolutePath,
+    fileKey: row.fileKey,
     fileSize: row.fileSize,
     dateModified: new Date(row.dateModified),
     hashType: row.hashType as VisualHashDTO['hashType'],
@@ -626,17 +664,26 @@ export default class SQLiteBackend implements DataStorage {
     console.info('SQLite: Creating files from path...', path, files.length);
 
     const insertFiles = this.#db.transaction((newFiles: FileDTO[]) => {
-      // Fetch existing absolute paths under this location directory in one shot
-      const existingRows = this.#db
-        .prepare('SELECT absolutePath FROM files WHERE absolutePath LIKE ?')
-        .all(path + '%') as { absolutePath: string }[];
-      const existingPaths = new Set(existingRows.map((r) => r.absolutePath));
-
-      for (const file of newFiles) {
-        if (existingPaths.has(file.absolutePath)) {
-          continue;
+      // Dedup on the portable identity (locationId, relativePath), NOT the
+      // per-OS absolutePath prefix. The old `absolutePath LIKE path||'%'` prefix
+      // match inserted a full duplicate set on a cross-OS boot (the stored paths
+      // are from the other OS, so none matched the current-OS prefix). Fetch the
+      // existing identities for the locations in this batch in one shot.
+      const locationIds = [...new Set(newFiles.map((f) => f.locationId))];
+      const existingKeys = new Set<string>();
+      if (locationIds.length > 0) {
+        const placeholders = locationIds.map(() => '?').join(', ');
+        const existingRows = this.#db
+          .prepare(
+            `SELECT locationId, relativePath FROM files WHERE locationId IN (${placeholders})`,
+          )
+          .all(...locationIds) as { locationId: string; relativePath: string }[];
+        for (const r of existingRows) {
+          existingKeys.add(portableFileKey(r.locationId, r.relativePath));
         }
+      }
 
+      for (const file of dedupeNewFilesByIdentity(newFiles, existingKeys)) {
         this.#stmtInsertFile.run(fileDTOToRow(file));
 
         for (const tagId of file.tags) {
@@ -660,8 +707,8 @@ export default class SQLiteBackend implements DataStorage {
     this.#db
       .prepare(
         `
-      INSERT INTO locations (id, path, dateAdded, subLocations, "index")
-      VALUES (@id, @path, @dateAdded, @subLocations, @index)
+      INSERT INTO locations (id, path, dateAdded, subLocations, "index", portableRoot)
+      VALUES (@id, @path, @dateAdded, @subLocations, @index, @portableRoot)
     `,
       )
       .run({
@@ -670,6 +717,7 @@ export default class SQLiteBackend implements DataStorage {
         dateAdded: location.dateAdded.toISOString(),
         subLocations: JSON.stringify(location.subLocations),
         index: location.index,
+        portableRoot: location.portableRoot ?? null,
       });
     this.#notifyChange();
   }
@@ -742,8 +790,8 @@ export default class SQLiteBackend implements DataStorage {
     this.#db
       .prepare(
         `
-      INSERT OR REPLACE INTO locations (id, path, dateAdded, subLocations, "index")
-      VALUES (@id, @path, @dateAdded, @subLocations, @index)
+      INSERT OR REPLACE INTO locations (id, path, dateAdded, subLocations, "index", portableRoot)
+      VALUES (@id, @path, @dateAdded, @subLocations, @index, @portableRoot)
     `,
       )
       .run({
@@ -752,6 +800,7 @@ export default class SQLiteBackend implements DataStorage {
         dateAdded: location.dateAdded.toISOString(),
         subLocations: JSON.stringify(location.subLocations),
         index: location.index,
+        portableRoot: location.portableRoot ?? null,
       });
     this.#notifyChange();
   }
@@ -958,15 +1007,15 @@ export default class SQLiteBackend implements DataStorage {
   // Visual hash cache methods
   // -------------------------------------------------------------------------
 
-  async fetchVisualHashes(absolutePaths: string[]): Promise<VisualHashDTO[]> {
-    console.info('SQLite: Fetching visual hashes for', absolutePaths.length, 'files...');
-    if (absolutePaths.length === 0) {
+  async fetchVisualHashes(fileKeys: string[]): Promise<VisualHashDTO[]> {
+    console.info('SQLite: Fetching visual hashes for', fileKeys.length, 'files...');
+    if (fileKeys.length === 0) {
       return [];
     }
-    const placeholders = absolutePaths.map(() => '?').join(', ');
+    const placeholders = fileKeys.map(() => '?').join(', ');
     const rows = this.#db
-      .prepare(`SELECT * FROM visualHashes WHERE absolutePath IN (${placeholders})`)
-      .all(...absolutePaths) as VisualHashRow[];
+      .prepare(`SELECT * FROM visualHashes WHERE fileKey IN (${placeholders})`)
+      .all(...fileKeys) as VisualHashRow[];
     return rows.map(visualHashRowToDTO);
   }
 
@@ -974,14 +1023,14 @@ export default class SQLiteBackend implements DataStorage {
     console.info('SQLite: Saving', hashes.length, 'visual hashes...');
     const upsert = this.#db.prepare(`
       INSERT OR REPLACE INTO visualHashes
-        (absolutePath, fileSize, dateModified, hashType, hash, dateComputed, thumbnailPath)
-      VALUES (@absolutePath, @fileSize, @dateModified, @hashType, @hash, @dateComputed, @thumbnailPath)
+        (fileKey, fileSize, dateModified, hashType, hash, dateComputed, thumbnailPath)
+      VALUES (@fileKey, @fileSize, @dateModified, @hashType, @hash, @dateComputed, @thumbnailPath)
     `);
 
     const saveAll = this.#db.transaction((hashList: VisualHashDTO[]) => {
       for (const h of hashList) {
         upsert.run({
-          absolutePath: h.absolutePath,
+          fileKey: h.fileKey,
           fileSize: h.fileSize,
           dateModified: h.dateModified.toISOString(),
           hashType: h.hashType,
@@ -996,15 +1045,15 @@ export default class SQLiteBackend implements DataStorage {
     this.#notifyChange();
   }
 
-  async removeVisualHashes(absolutePaths: string[]): Promise<void> {
-    console.info('SQLite: Removing visual hashes for', absolutePaths.length, 'files...');
-    if (absolutePaths.length === 0) {
+  async removeVisualHashes(fileKeys: string[]): Promise<void> {
+    console.info('SQLite: Removing visual hashes for', fileKeys.length, 'files...');
+    if (fileKeys.length === 0) {
       return;
     }
-    const placeholders = absolutePaths.map(() => '?').join(', ');
+    const placeholders = fileKeys.map(() => '?').join(', ');
     this.#db
-      .prepare(`DELETE FROM visualHashes WHERE absolutePath IN (${placeholders})`)
-      .run(...absolutePaths);
+      .prepare(`DELETE FROM visualHashes WHERE fileKey IN (${placeholders})`)
+      .run(...fileKeys);
     this.#notifyChange();
   }
 

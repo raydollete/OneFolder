@@ -72,10 +72,10 @@ export interface DataStorage {
   createDismissedDuplicateGroup(dismissedGroup: DismissedDuplicateGroupDTO): Promise<void>;
   removeDismissedDuplicateGroup(groupHash: string): Promise<void>;
 
-  // Visual Hash Cache
-  fetchVisualHashes(absolutePaths: string[]): Promise<VisualHashDTO[]>;
+  // Visual Hash Cache — keyed on the portable fileKey (portableFileKey), not absolutePath.
+  fetchVisualHashes(fileKeys: string[]): Promise<VisualHashDTO[]>;
   saveVisualHashes(hashes: VisualHashDTO[]): Promise<void>;
-  removeVisualHashes(absolutePaths: string[]): Promise<void>;
+  removeVisualHashes(fileKeys: string[]): Promise<void>;
   clearVisualHashCache(): Promise<void>;
 
   /**

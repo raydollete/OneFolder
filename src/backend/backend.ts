@@ -66,9 +66,9 @@ export default class Backend implements DataStorage {
     this.#notifyChange();
   }
 
-  async fetchVisualHashes(absolutePaths: string[]): Promise<VisualHashDTO[]> {
-    console.info('IndexedDB: Fetching visual hashes for', absolutePaths.length, 'files...');
-    return this.#visualHashes.where('absolutePath').anyOf(absolutePaths).toArray();
+  async fetchVisualHashes(fileKeys: string[]): Promise<VisualHashDTO[]> {
+    console.info('IndexedDB: Fetching visual hashes for', fileKeys.length, 'files...');
+    return this.#visualHashes.where('fileKey').anyOf(fileKeys).toArray();
   }
 
   async saveVisualHashes(hashes: VisualHashDTO[]): Promise<void> {
@@ -77,9 +77,9 @@ export default class Backend implements DataStorage {
     this.#notifyChange();
   }
 
-  async removeVisualHashes(absolutePaths: string[]): Promise<void> {
-    console.info('IndexedDB: Removing visual hashes for', absolutePaths.length, 'files...');
-    await this.#visualHashes.where('absolutePath').anyOf(absolutePaths).delete();
+  async removeVisualHashes(fileKeys: string[]): Promise<void> {
+    console.info('IndexedDB: Removing visual hashes for', fileKeys.length, 'files...');
+    await this.#visualHashes.where('fileKey').anyOf(fileKeys).delete();
     this.#notifyChange();
   }
 

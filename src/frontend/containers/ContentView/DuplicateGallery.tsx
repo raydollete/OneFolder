@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { observer } from 'mobx-react-lite';
 import { action } from 'mobx';
 import platform from 'src/frontend/platform';
+import { portableFileKey } from 'common/fs';
 import { Tag, IconSet } from 'widgets';
 import { Menu, MenuItem, MenuDivider, useContextMenu } from 'widgets/menus';
 import { useStore } from '../../contexts/StoreContext';
@@ -1158,17 +1159,20 @@ const DuplicateGallery = observer(({ select }: GalleryProps) => {
 
       // Create cache manager for persistent hash storage
       const cacheManager = {
-        fetchCachedHashes: async (paths: string[]) => {
-          const cachedHashes = await fileStore.fetchVisualHashes(paths);
+        fetchCachedHashes: async (fileKeys: string[]) => {
+          const cachedHashes = await fileStore.fetchVisualHashes(fileKeys);
           return cachedHashes.map((hash) => {
-            // Find the corresponding file to check modification date
-            const file = eligibleFiles.find((f) => f.absolutePath === hash.absolutePath);
+            // Find the corresponding file (by portable identity) to check its
+            // modification date against the cached hash.
+            const file = eligibleFiles.find(
+              (f) => portableFileKey(f.locationId, f.relativePath) === hash.fileKey,
+            );
             const isValid = file
               ? file.dateModified.getTime() <= hash.dateModified.getTime()
               : false;
 
             return {
-              absolutePath: hash.absolutePath,
+              fileKey: hash.fileKey,
               hash: hash.hash,
               hashType: hash.hashType,
               isValid,

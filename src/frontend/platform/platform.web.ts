@@ -14,6 +14,7 @@
  * See INV-034 / TASK-126.
  */
 
+import { normalizePathIdentity as _normalizePathIdentity } from './index';
 import type {
   Platform,
   PlatformFs,
@@ -83,6 +84,11 @@ const path: PlatformPath = {
   normalize(p) {
     // Collapse repeated slashes; does not resolve `..` (out of scope for web stubs)
     return p.replace(/[/\\]+/g, '/');
+  },
+  // Web build has no local filesystem — use POSIX semantics: fold separators to
+  // '/', never fold case (matches `sep: '/'` above).
+  normalizePathIdentity(p) {
+    return _normalizePathIdentity(p, false);
   },
 };
 

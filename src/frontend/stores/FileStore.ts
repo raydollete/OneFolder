@@ -8,7 +8,7 @@ import {
   transaction,
 } from 'mobx';
 
-import { getThumbnailPath, mediaTypeMatches } from 'common/fs';
+import { getThumbnailPath, mediaTypeMatches, portableFileKey } from 'common/fs';
 import { IS_DEV } from 'common/process';
 import { promiseAllLimit, yieldToEventLoop } from 'common/promise';
 import { debounce } from 'common/timeout';
@@ -751,7 +751,10 @@ class FileStore {
       // Move thumbnail
       const { thumbnailDirectory } = this.rootStore.uiStore; // TODO: make a config store for this?
       const oldThumbnailPath = file.thumbnailPath.replace('?v=1', '');
-      const newThumbPath = getThumbnailPath(newData.absolutePath, thumbnailDirectory);
+      const newThumbPath = getThumbnailPath(
+        portableFileKey(newData.locationId, newData.relativePath),
+        thumbnailDirectory,
+      );
       // Fire-and-forget, but fail loud: log a failed thumbnail move instead of
       // swallowing it (a stale thumbnail then quietly points at the old path).
       platform.fs.move(oldThumbnailPath, newThumbPath).catch((err) => {
@@ -965,7 +968,7 @@ class FileStore {
       // calls cleanFileSelection() which performs the same cleanup in bulk.
       for (const file of files) {
         file.dispose();
-        this.removeThumbnail(file.absolutePath);
+        this.removeThumbnail(file.locationId, file.relativePath);
       }
 
       // Splice deleted entries out of fileList in place, update all derived
@@ -986,7 +989,7 @@ class FileStore {
       await this.backend.removeFiles(files.map((f) => f.id));
 
       for (const file of files) {
-        this.removeThumbnail(file.absolutePath);
+        this.removeThumbnail(file.locationId, file.relativePath);
       }
     } catch (e) {
       console.error('Could not delete files bye extension', ext);
@@ -1620,9 +1623,10 @@ class FileStore {
   waitForIngestedFile(absolutePath: string, timeoutMs = 10000): Promise<ClientFile> {
     // Separator-insensitive comparison: paths computed in the main process use win32
     // backslashes, while ingested ClientFile.absolutePath uses forward slashes (the folder
-    // watcher normalizes its watch root for chokidar). Windows paths are case-insensitive,
-    // so compare lowercased as well.
-    const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+    // watcher normalizes its watch root for chokidar). Route through the shared
+    // path-identity seam so case folding is applied only on Windows (Linux stays
+    // case-sensitive) — no hand-rolled clone here.
+    const normalize = (p: string) => platform.path.normalizePathIdentity(p);
     const target = normalize(absolutePath);
     const matches = (f: ClientFile) => normalize(f.absolutePath) === target;
 
@@ -1767,7 +1771,7 @@ class FileStore {
     outputFile.thumbnailPath = platform.isWebBuild
       ? dto.id
       : this.rootStore.imageLoader.needsThumbnail(dto)
-      ? getThumbnailPath(dto.absolutePath, uiStore.thumbnailDirectory)
+      ? getThumbnailPath(portableFileKey(dto.locationId, dto.relativePath), uiStore.thumbnailDirectory)
       : dto.absolutePath;
 
     const sourceIdx = this.index.get(source.id) ?? this.fileList.length;
@@ -1884,8 +1888,11 @@ class FileStore {
     localStorage.removeItem(getFileStorageKey(this.storageKeyPrefix || undefined));
   }
 
-  @action private async removeThumbnail(path: string) {
-    const thumbnailPath = getThumbnailPath(path, this.rootStore.uiStore.thumbnailDirectory);
+  @action private async removeThumbnail(locationId: string, relativePath: string) {
+    const thumbnailPath = getThumbnailPath(
+      portableFileKey(locationId, relativePath),
+      this.rootStore.uiStore.thumbnailDirectory,
+    );
     try {
       if (await platform.fs.pathExists(thumbnailPath)) {
         return platform.fs.remove(thumbnailPath);
@@ -2262,7 +2269,7 @@ class FileStore {
       file.thumbnailPath = platform.isWebBuild
         ? f.id
         : this.rootStore.imageLoader.needsThumbnail(f)
-        ? getThumbnailPath(f.absolutePath, td)
+        ? getThumbnailPath(portableFileKey(f.locationId, f.relativePath), td)
         : f.absolutePath;
       return file;
     });
@@ -2407,10 +2414,10 @@ class FileStore {
 
   /** Fetch cached visual hashes for the given file paths */
   async fetchVisualHashes(
-    absolutePaths: string[],
+    fileKeys: string[],
   ): Promise<import('../../api/visual-hash').VisualHashDTO[]> {
     try {
-      return await this.backend.fetchVisualHashes(absolutePaths);
+      return await this.backend.fetchVisualHashes(fileKeys);
     } catch (error) {
       console.error('Failed to fetch visual hashes:', error);
       return [];
@@ -2428,11 +2435,11 @@ class FileStore {
     }
   }
 
-  /** Remove visual hashes for deleted or moved files */
-  async removeVisualHashes(absolutePaths: string[]): Promise<void> {
+  /** Remove visual hashes for deleted or moved files (keyed on the portable fileKey) */
+  async removeVisualHashes(fileKeys: string[]): Promise<void> {
     try {
-      await this.backend.removeVisualHashes(absolutePaths);
-      console.log('Successfully removed visual hashes for', absolutePaths.length, 'files');
+      await this.backend.removeVisualHashes(fileKeys);
+      console.log('Successfully removed visual hashes for', fileKeys.length, 'files');
     } catch (error) {
       console.error('Failed to remove visual hashes:', error);
       throw error;
