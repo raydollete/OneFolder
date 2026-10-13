@@ -13,7 +13,7 @@
  *
  * Output: dist-web/
  *   The sidecar server no longer resolves this path itself. It runs inside the
- *   Electron main process (`brave.exe --serve`), which passes the directory in
+ *   Electron main process (`OneFolder-<version>-x64.exe --serve`), which passes the directory in
  *   as `spaDir` — `dist-web/` at the repo root when unpackaged, and
  *   `{resourcesPath}/dist-web` when packaged, where electron-builder ships it
  *   via extraResources. See src/main.ts and openspec add-portable-serve-mode.

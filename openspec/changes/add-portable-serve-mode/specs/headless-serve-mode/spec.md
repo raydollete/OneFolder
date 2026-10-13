@@ -6,14 +6,14 @@ The portable executable SHALL start the read-only web sidecar instead of the des
 
 #### Scenario: Launching with the serve flag
 
-- **WHEN** the portable executable is launched as `brave.exe --serve`
+- **WHEN** the portable executable is launched as `OneFolder-<version>-x64.exe --serve`
 - **THEN** no application window and no preview window are created
 - **AND** an HTTP server begins listening on port 8666
 - **AND** the process remains running until it is terminated
 
 #### Scenario: Overriding the port
 
-- **WHEN** the portable executable is launched as `brave.exe --serve --port 9000`
+- **WHEN** the portable executable is launched as `OneFolder-<version>-x64.exe --serve --port 9000`
 - **THEN** the HTTP server listens on port 9000 instead of 8666
 
 #### Scenario: Launching without the flag

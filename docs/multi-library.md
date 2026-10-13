@@ -52,7 +52,7 @@ Thumbnails are written to the system temp directory, namespaced per library:
 
 **Portable unit on each platform.** The portable unit is the executable **plus a sibling `data/` directory** created beside it on first launch:
 
-- **Windows** — the portable `brave.exe` and its sibling `data/`.
+- **Windows** — the portable `OneFolder-<version>-x64.exe` and its sibling `data/`.
 - **Linux** — the `OneFolder-<version>-x86_64.AppImage` file and its sibling `data/`.
 
 `data/` holds the per-library `libraries/` tree, `backups/`, `thumbnails/`, `themes/`, and the app temp. To relocate the app, move the executable **and** its sibling `data/` together, and only **while the app is CLOSED** — SQLite (`better-sqlite3`) holds file locks and helper (ExifTool / ffmpeg) processes must be released first. On Linux the AppImage plus `data/` must live in a **writable and executable** location; launched from a read-only or `noexec` path, startup fails loud naming the directory, with **no** fallback to the system user-data dir (state always stays beside the artifact). See the [README Linux build notes](../README.md#linux-appimage) for the full launch/troubleshooting checklist.
@@ -65,7 +65,7 @@ A single OneFolder library can be **shared across a dual-boot machine**: put bot
 
 ```
 <portable dir>/
-├── brave.exe                          # Windows portable
+├── OneFolder-<version>-x64.exe         # Windows portable
 ├── OneFolder-<version>-x86_64.AppImage # Linux portable
 ├── data/                               # ONE shared data dir (both exes)
 └── Photos/                             # a location under the portable dir

@@ -1,5 +1,5 @@
 /**
- * Unit tests for serve mode — `brave.exe --serve`.
+ * Unit tests for serve mode — `OneFolder-<version>-x64.exe --serve`.
  *
  * Covers the pure logic that decides what serve mode does before any socket is
  * opened: flag parsing, port validation, and the startup banner that discloses
@@ -14,11 +14,11 @@ import { resolvePort, buildStartupBanner, messages, DEFAULT_PORT } from '../src/
 
 describe('parseServeArgs', () => {
   it('reports serve=false for a normal desktop launch', () => {
-    expect(parseServeArgs(['brave.exe'])).toEqual({ serve: false, rawPort: undefined });
+    expect(parseServeArgs(['OneFolder.exe'])).toEqual({ serve: false, rawPort: undefined });
   });
 
   it('detects --serve in a packaged argv', () => {
-    expect(parseServeArgs(['brave.exe', '--serve']).serve).toBe(true);
+    expect(parseServeArgs(['OneFolder.exe', '--serve']).serve).toBe(true);
   });
 
   it('detects --serve in a dev argv (electron.exe main.bundle.js --serve)', () => {
@@ -26,19 +26,23 @@ describe('parseServeArgs', () => {
   });
 
   it('reads a space-separated --port', () => {
-    expect(parseServeArgs(['brave.exe', '--serve', '--port', '9000']).rawPort).toBe('9000');
+    expect(parseServeArgs(['OneFolder.exe', '--serve', '--port', '9000']).rawPort).toBe('9000');
   });
 
   it('reads an equals-separated --port', () => {
-    expect(parseServeArgs(['brave.exe', '--serve', '--port=9000']).rawPort).toBe('9000');
+    expect(parseServeArgs(['OneFolder.exe', '--serve', '--port=9000']).rawPort).toBe('9000');
   });
 
   it('does not treat --headless as serve mode (it collides with a Chromium switch)', () => {
-    expect(parseServeArgs(['brave.exe', '--headless']).serve).toBe(false);
+    expect(parseServeArgs(['OneFolder.exe', '--headless']).serve).toBe(false);
   });
 
   it('ignores unrelated Chromium switches', () => {
-    const args = parseServeArgs(['brave.exe', '--enable-features=SharedArrayBuffer', '--serve']);
+    const args = parseServeArgs([
+      'OneFolder.exe',
+      '--enable-features=SharedArrayBuffer',
+      '--serve',
+    ]);
     expect(args).toEqual({ serve: true, rawPort: undefined });
   });
 });

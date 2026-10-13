@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx webpack:*)",
+      "Bash(node:*)",
+      "Bash(npx electron-rebuild:*)",
+      "Bash(yarn tsc *)",
+      "Bash(mv TASK-015_PLANNED_OTHER_document-multi-library-architecture.md TASK-016_PLANNED_OTHER_document-multi-library-architecture.md)",
+      "Bash(mv TASK-015_PLANNED_BACKEND_multi-library-infrastructure-tests.md TASK-017_PLANNED_BACKEND_multi-library-infrastructure-tests.md)",
+      "Bash(mv TASK-015_PLANNED_ELECTRON_library-delete-on-disk-cleanup.md TASK-018_PLANNED_ELECTRON_library-delete-on-disk-cleanup.md)",
+      "Read(//d/d/Dev/OneFolder/docs/TODO/backlog/**)",
+      "Bash(yarn build *)",
+      "Bash(git --no-pager diff HEAD~1..HEAD -- src/main.ts)",
+      "Bash(git --no-pager diff HEAD~1..HEAD --stat)",
+      "Bash(git mv *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(npx eslint *)",
+      "Bash(npx jest *)",
+      "Bash(npx tsc *)",
+      "Bash(grep -E \"src[\\\\\\\\/]\\(main|ipc|frontend\\)\")",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-CimInstance *)",
+      "PowerShell(Get-ChildItem -Path D:\\\\Dev\\\\OneFolder\\\\dist\\\\data -Recurse -Depth 2 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'onefolder|\\\\.db|\\\\.log|\\\\.json' } | Select-Object FullName, Length, LastWriteTime | Sort-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path X:\\\\_OneFolder\\\\data -Recurse -Depth 3 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'onefolder|\\\\.db|\\\\.wal|\\\\.shm|\\\\.log|libraries|active-library' } | Select-Object FullName, Length, LastWriteTime | Sort-Object FullName | Format-Table -AutoSize -Wrap)",
+      "PowerShell(Get-Volume *)"
+    ]
+  },
+  "enabledPlugins": {
+    "hindsight-memory@hindsight": true
+  },
+  "autoMemoryEnabled": true
+}

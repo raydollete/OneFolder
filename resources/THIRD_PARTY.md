@@ -3,13 +3,19 @@
 This directory bundles pre-built third-party executables that OneFolder ships and
 invokes at runtime. This file records, for every vendored helper, its upstream
 name and version, the exact source it was obtained from, a SHA-256 of each
-committed file (with the command to reproduce it), its license and the
+file (with the command to reproduce it), its license and the
 redistribution obligations that license imposes, and the material build flags
 that describe what the binary is capable of.
 
 Windows helpers are shipped for the desktop build on Windows; the Linux FFmpeg
 helpers are shipped for the portable Linux build. ExifTool is a
 platform-independent Perl script used on every platform that has Perl.
+
+The Windows helpers and ExifTool are committed to this repository. The Linux
+FFmpeg helpers are **not tracked in git** (each is over GitHub's 100 MB file
+limit): they are downloaded before `yarn package:appimage`, as described in the
+README's "Portable builds → Linux (AppImage)" steps. Whoever builds and
+distributes an AppImage containing them must meet their license terms.
 
 ## Reproducing the checksums
 
@@ -32,8 +38,10 @@ For the ExifTool script and config:
 sha256sum resources/exiftool/exiftool.pl resources/exiftool/.ExifTool_config
 ```
 
-A committed file matches this record when its `sha256sum` output equals the value
-listed for it here.
+A file matches this record when its `sha256sum` output equals the value listed
+for it here. The Linux FFmpeg source URL is BtbN's moving `latest` build, so a
+fresh download may not match; when it differs, update the Linux entries below to
+the build you are shipping.
 
 ---
 
@@ -106,20 +114,36 @@ The flags that matter for OneFolder:
 
 ## FFmpeg / FFprobe — Windows x86_64 (`resources/ffmpeg/ffmpeg.exe`, `resources/ffmpeg/ffprobe.exe`)
 
-- **Upstream:** FFmpeg
-- **Distributor:** pre-existing vendored Windows binaries (shipped with the
-  Windows desktop build; unchanged by this change)
+- **Upstream:** FFmpeg 8.1.1
+- **Build:** `8.1.1-essentials_build-www.gyan.dev` (Windows x64 static build by
+  Gyan Doshi, www.gyan.dev), unmodified. Reproduce with
+  `strings resources/ffmpeg/ffmpeg.exe | grep -m1 'version 8.1.1-essentials_build-www.gyan.dev'`;
+  the full build configuration is printed by `ffmpeg -buildconf`.
 - **Files and SHA-256:**
   - `resources/ffmpeg/ffmpeg.exe` — SHA-256 `228d7a8556258de907fdb55f36850078ebc7680b84ec30d84ea02e99bec1d1eb`
   - `resources/ffmpeg/ffprobe.exe` — SHA-256 `0fde260f5abd35c9cafd96f594cc76365a780c1b73a90e35b6a3409ea1db1bf0`
-- **License:** FFmpeg (GPL/LGPL depending on the original build); the same GPL
-  source-availability obligation applies if these are GPL builds.
+- **Used by:** the inspector's Re-encode (x264) tool; see
+  [docs/reencode-x264.md](../docs/reencode-x264.md).
 
-> Note: the Windows binaries predate this record and are out of scope for this
-> change (they are not modified by it). The SHA-256 values above are of the
-> currently committed files, reproduced with the command in the "Reproducing the
-> checksums" section; they are recorded here to document that these are vendored
-> third-party helpers subject to FFmpeg's license.
+### License and redistribution obligations (Windows FFmpeg / FFprobe)
+
+These are **GPL** builds, configured with `--enable-gpl --enable-version3` and
+statically linking GPL components including libx264 and libx265. There is no
+`--enable-nonfree`. The binaries are therefore licensed under the **GNU General
+Public License, version 3 or later**. Because this repository is public,
+committing them distributes them:
+
+- **License text.** The GPLv3 text is in this repository's [LICENSE](../LICENSE)
+  file and at https://www.gnu.org/licenses/gpl-3.0.html. FFmpeg's own licensing
+  summary is at https://ffmpeg.org/legal.html.
+- **Corresponding Source:**
+  - FFmpeg 8.1.1 source: https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz
+  - Build details and component library versions: https://www.gyan.dev/ffmpeg/builds/
+  - Release archive for gyan.dev builds: https://github.com/GyanD/codexffmpeg/releases
+
+  If any of these locations stops providing the source for this exact build,
+  open an issue on this repository and the maintainer will provide it.
+- **Replacing the binaries** requires updating this section in the same commit.
 
 ---
 

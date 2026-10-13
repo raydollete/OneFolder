@@ -1,5 +1,5 @@
 /**
- * Serve mode — `brave.exe --serve` starts the read-only web sidecar instead of
+ * Serve mode — `OneFolder-<version>-x64.exe --serve` starts the read-only web sidecar instead of
  * the desktop GUI, in the same portable context.
  *
  * This module is the ONLY glue between Electron and the server library. It

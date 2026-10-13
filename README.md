@@ -3,8 +3,10 @@
   <img alt="Text changing depending on mode. Light: 'So light!' Dark: 'So dark!'" src="https://github.com/OneFolderApp/OneFolder/assets/27826950/b6291e54-daf9-42c1-8649-ec14532d79c7">
 </picture>
 
-- Website: https://onefolder.app/
-- Roadmap: https://onefolder.canny.io/feedback
+> **This is a personal fork of [OneFolderApp/OneFolder](https://github.com/OneFolderApp/OneFolder)**, modified by Ray Dollete starting 2026-04-04 and distributed under the same [GPL-3.0](LICENSE) license. It is not affiliated with or endorsed by the upstream project. The deviations from upstream are documented in [docs/personal-fork-notes.md](docs/personal-fork-notes.md). The website, roadmap, and contributor form below belong to upstream. Bundled third-party binaries carry their own notices (see [resources/THIRD_PARTY.md](resources/THIRD_PARTY.md)).
+
+- Upstream website: https://onefolder.app/
+- Upstream roadmap: https://onefolder.canny.io/feedback
 
 ## What is it?
 
@@ -57,7 +59,7 @@ There is many ways people can help:
 - Detect new communities for growth
 - Coding
 
-If you are interested here is a form so we can reach out:
+If you are interested in helping upstream OneFolder, here is their form so they can reach out:
 https://forms.gle/TpU1NxBQSreadki18
 
 ## Documentation
@@ -82,29 +84,55 @@ Then run the following commands to get started:
 2. Run `yarn dev` to build the project files to the `/build` directory. This will keep running to immediately build changed files when they are updated.
 3. In a second terminal, run `yarn start` to start the application. Refresh the window (Ctrl/Cmd + R) after modifying a file to load the updated build files.
 
-### Release Build
+### Portable builds
 
-An installable executable can be built using `yarn package` for your platform in the `/dist` folder. The building is performed using the [electron-builder](https://www.electron.build/) package, and is configured by a section in the `package.json` file.
-Builds are automatically published to Github Releases when a tag is created in GitHub.
+This fork exists specifically for **portable builds**. It produces exactly two artifacts — one Windows portable `.exe` and one Linux `.AppImage` — and each keeps all of its state (libraries, preferences, thumbnails, backups) in a sibling `data/` directory beside the file. There are no installers, no auto-update, and no code signing. Packaging uses [electron-builder](https://www.electron.build/), configured by the `build` section of `package.json`. Build each artifact on its own OS: native modules (`better-sqlite3`, `sharp`, `@img/*`) are compiled for the build host.
 
-> This fork ships **portable-only** on Windows. Use `yarn package:portable` to produce the portable `.exe` (`yarn package:appimage` for the Linux AppImage). Nothing about the desktop build changed when the headless build below was added — the two are entirely separate build paths from the same codebase.
+Both builds need Node.js ≥ 22.12 and Yarn 1.22.
+
+#### Windows (portable .exe)
+
+Build on a Windows x64 host:
+
+1. `yarn install`
+2. `yarn build`
+3. `yarn package:portable` → `dist/OneFolder-<version>-x64.exe` (the only artifact; no installer)
+
+**Set up a portable directory:** copy `OneFolder-<version>-x64.exe` into any writable folder and run it. A `data/` directory is created beside it on first launch. To move the app, close it and move the `.exe` **and** `data/` together. Windows Task Manager shows the running process as `OneFolder.exe`.
+
+**Upgrade an existing portable directory** (including one from an older build that shipped as `brave.exe`):
+
+1. Close the app.
+2. Delete the previous `.exe` from the directory.
+3. Drop the new `OneFolder-<version>-x64.exe` in its place.
+4. Keep `data/` — the new build opens the same libraries, preferences, and thumbnails.
 
 #### Linux (AppImage)
 
-The Linux target is a single **AppImage** (x86_64 only). Build and verify it on a Linux x86_64 host — the native modules (`better-sqlite3`, `sharp`, `@img/*`) are rebuilt for the target during packaging:
+The Linux target is a single **AppImage** (x86_64 only). Build and verify it on a Linux x86_64 host:
 
-```bash
-yarn package:appimage    # → dist/OneFolder-<version>-x86_64.AppImage (exactly one artifact)
-yarn verify:appimage     # inspect the extracted payload before shipping
-```
+1. `yarn install`
+2. Fetch the Linux `ffmpeg`/`ffprobe`. They are **not tracked in git** (each is well over GitHub's 100 MB file limit). Download the BtbN archive named in [`resources/THIRD_PARTY.md`](resources/THIRD_PARTY.md), place its `bin/ffmpeg` and `bin/ffprobe` in `resources/ffmpeg/linux/` with mode 0755, and compare their checksums with that record:
+
+   ```bash
+   curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz
+   tar -xJf ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz -C resources/ffmpeg/linux \
+     --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'
+   chmod 0755 resources/ffmpeg/linux/ffmpeg resources/ffmpeg/linux/ffprobe
+   sha256sum resources/ffmpeg/linux/ffmpeg resources/ffmpeg/linux/ffprobe
+   ```
+
+   The `latest` URL is a moving target. If the checksums differ, BtbN has published a newer build: update the version, sizes, and SHA-256 values in `resources/THIRD_PARTY.md` to match what you are shipping.
+3. `yarn package:appimage` → `dist/OneFolder-<version>-x86_64.AppImage` (exactly one artifact)
+4. `yarn verify:appimage` — inspect the extracted payload before shipping
 
 `yarn verify:appimage` checks the extracted payload: exact-case resources, executable bits, ELF architecture, desktop metadata, icons, native modules, absence of Windows PE binaries, and an `ffmpeg h264_nvenc` smoke test.
 
-**The portable unit is the `.AppImage` file PLUS a sibling `data/` directory** created beside it on first launch (it holds userData, `backups/`, `thumbnails/`, `themes/`, and the app temp). This mirrors the Windows portable `brave.exe` + `data/` model. To relocate the app, move the `.AppImage` **and** its sibling `data/` together, and do so **only while the app is CLOSED** — SQLite (`better-sqlite3`) holds file locks and helper (ExifTool / ffmpeg) processes must be released first. Close the app, move both, then reopen.
+**The portable unit is the `.AppImage` file PLUS a sibling `data/` directory** created beside it on first launch (it holds userData, `backups/`, `thumbnails/`, `themes/`, and the app temp). This mirrors the Windows portable `OneFolder-<version>-x64.exe` + `data/` model. To relocate the app, move the `.AppImage` **and** its sibling `data/` together, and do so **only while the app is CLOSED** — SQLite (`better-sqlite3`) holds file locks and helper (ExifTool / ffmpeg) processes must be released first. Close the app, move both, then reopen.
 
 The AppImage plus `data/` must live in a location that is both **writable and executable**. If launched from a read-only or `noexec` path (a still-mounted image, `/tmp` mounted `noexec`, a read-only volume), startup **fails loud** with a concrete error naming the directory — there is **no** fallback to the system user-data directory, by design, so state always stays beside the artifact.
 
-**Dual-boot: one shared library across Windows and Linux.** Put both portable executables (`brave.exe` and the `.AppImage`) and **one shared `data/`** in the same portable directory, with your photos in a subfolder beside them. The same library then opens from either OS with **no per-boot Location Recovery and no thumbnail/preview/visual-hash re-derivation** — file identity is the portable `(locationId, relativePath)` pair (not the per-OS absolute path), location roots inside the portable directory are anchored and resolved per-OS at load, and existing caches are renamed (not rebuilt) to the portable key on first upgrade (the DB is backed up first). One OS at a time (SQLite single-writer lock). Keep the shared tree's case-sensitivity consistent between boots — on a case-sensitive share, `A.jpg`/`a.jpg` stay distinct even when opened from Windows. See [docs/multi-library.md → Dual-boot shared library](docs/multi-library.md#dual-boot-shared-library-one-library-two-oses).
+**Dual-boot: one shared library across Windows and Linux.** Put both portable executables (`OneFolder-<version>-x64.exe` and the `.AppImage`) and **one shared `data/`** in the same portable directory, with your photos in a subfolder beside them. The same library then opens from either OS with **no per-boot Location Recovery and no thumbnail/preview/visual-hash re-derivation** — file identity is the portable `(locationId, relativePath)` pair (not the per-OS absolute path), location roots inside the portable directory are anchored and resolved per-OS at load, and existing caches are renamed (not rebuilt) to the portable key on first upgrade (the DB is backed up first). One OS at a time (SQLite single-writer lock). Keep the shared tree's case-sensitivity consistent between boots — on a case-sensitive share, `A.jpg`/`a.jpg` stay distinct even when opened from Windows. See [docs/multi-library.md → Dual-boot shared library](docs/multi-library.md#dual-boot-shared-library-one-library-two-oses).
 
 Running an AppImage requires **no installation**. Optional user-level desktop integration (copying/generating a `.desktop` entry, or tools like Gear Lever / AppImageLauncher) is a convenience, not a prerequisite — the build already sets the app identity (`onefolder.desktop`, `Name=OneFolder`, `StartupWMClass=OneFolder`, `Icon=onefolder`), so GNOME under native Wayland associates the correct name, icon, and window class. Do **not** force XWayland; Electron selects Ozone/Wayland automatically (`ozone-platform-hint=auto`). XWayland is only a diagnostic fallback if a specific compositor issue appears.
 
@@ -126,7 +154,7 @@ OneFolder builds from a single codebase to two different targets, selected at bu
 | Target | What it is | Build command(s) |
 | --- | --- | --- |
 | **Desktop (Electron)** | The full read/write app. `nodeIntegration` renderer talks to SQLite, the filesystem, and exiftool directly. | `yarn package` / `yarn package:portable` (Windows) · `yarn package:appimage` (Linux) |
-| **Headless (web sidecar)** | A **read-only**, single-user web server that serves a browser SPA so you can browse one library from another device. It is a **mode of the same executable**, not a separate binary. | `yarn package:portable`, then `brave.exe --serve` (Windows) · `yarn package:appimage`, then `./OneFolder-<version>-x86_64.AppImage --serve` (Linux) |
+| **Headless (web sidecar)** | A **read-only**, single-user web server that serves a browser SPA so you can browse one library from another device. It is a **mode of the same executable**, not a separate binary. | `yarn package:portable`, then `OneFolder-<version>-x64.exe --serve` (Windows) · `yarn package:appimage`, then `./OneFolder-<version>-x86_64.AppImage --serve` (Linux) |
 
 The headless mode is **additive** — it does not affect the desktop app. It is read-only by design (no edits, tagging writeback, deletes, or media jobs). See [`docs/headless-web-build.md`](docs/headless-web-build.md) for the full architecture (seam, endpoints, packaging, security boundary).
 
@@ -137,10 +165,10 @@ Serve mode opens the active library's SQLite database **read-only**, serves the 
 **From the portable build (Windows):**
 
 ```bat
-brave.exe --serve                 :: open, no authentication
-brave.exe --serve --port 9000     :: custom port
+OneFolder-<version>-x64.exe --serve                 :: open, no authentication
+OneFolder-<version>-x64.exe --serve --port 9000     :: custom port
 
-set ONEFOLDER_AUTH_SECRET=changeme && brave.exe --serve
+set ONEFOLDER_AUTH_SECRET=changeme && OneFolder-<version>-x64.exe --serve
 ```
 
 **From the AppImage (Linux):**

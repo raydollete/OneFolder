@@ -26,8 +26,6 @@
       "PowerShell(Get-Volume *)"
     ]
   },
-  "enabledPlugins": {
-    "hindsight-memory@hindsight": true
-  },
+  "enabledPlugins": {},
   "autoMemoryEnabled": true
 }

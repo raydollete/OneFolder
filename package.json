@@ -75,7 +75,7 @@
       ]
     },
     "win": {
-      "executableName": "brave",
+      "executableName": "OneFolder",
       "target": [
         "portable"
       ],
@@ -98,7 +98,7 @@
       }
     ],
     "portable": {
-      "artifactName": "brave.${ext}",
+      "artifactName": "OneFolder-${version}-x64.${ext}",
       "requestExecutionLevel": "user"
     },
     "files": [

@@ -9,7 +9,7 @@
  * this module is a pure consumer of what it resolved.
  *
  * The caller today is serve mode (`src/serve-mode.ts`), reached via
- * `brave.exe --serve`. Startup failures REJECT the returned promise; this
+ * `OneFolder-<version>-x64.exe --serve`. Startup failures REJECT the returned promise; this
  * module never calls process.exit(), because the process it is running in may
  * be the desktop application.
  *

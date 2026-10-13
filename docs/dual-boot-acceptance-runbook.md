@@ -53,7 +53,7 @@ row count / fresh `dateComputed` (visual hashes).
 
    ```
    <portable dir>/
-   ├── brave.exe                             # Windows portable (yarn package:portable)
+   ├── OneFolder-<version>-x64.exe           # Windows portable (yarn package:portable)
    ├── OneFolder-<version>-x86_64.AppImage   # Linux portable (yarn package:appimage)
    ├── data/                                 # ONE shared data dir — created on first launch
    └── Photos/                               # a location UNDER the portable dir
@@ -143,7 +143,7 @@ and after a boot = caches were reused, not regenerated.**
 
 ### Phase 0 — Build the library on OS A (Windows)
 
-1. Launch `brave.exe`. Add the `Photos/` folder (under the portable dir) as a
+1. Launch `OneFolder-<version>-x64.exe`. Add the `Photos/` folder (under the portable dir) as a
    location. Let indexing and thumbnail generation finish.
 2. Open a handful of photos so thumbnails (and, for HEIC/TIFF/PSD/etc. via serve
    mode if used, previews) and visual hashes are generated and cached.
@@ -174,7 +174,7 @@ and after a boot = caches were reused, not regenerated.**
 
 ### Phase 2 — Back to OS A (Windows)
 
-9. Reboot into Windows. Launch `brave.exe`.
+9. Reboot into Windows. Launch `OneFolder-<version>-x64.exe`.
 10. Location healthy, no recovery prompt. → **Screenshot** (SCREENSHOT-A2).
 11. Close the app. **Capture SNAPSHOT-A2** (Windows commands).
 

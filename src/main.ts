@@ -158,7 +158,7 @@ if (IS_PORTABLE_MODE) {
 setPortableMode(IS_PORTABLE_MODE);
 
 // ---------------------------------------------------------------------------
-// Serve mode detection — `brave.exe --serve` starts the read-only web sidecar
+// Serve mode detection — `OneFolder-<version>-x64.exe --serve` starts the read-only web sidecar
 // instead of the desktop GUI, in this same portable context.
 //
 // Parsed HERE, at module scope, because the single-instance lock further down

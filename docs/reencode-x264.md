@@ -388,18 +388,16 @@ The following scenarios require a real ffmpeg encode and cannot be automated:
 
 ## GPL / Licensing Caveat
 
-The bundled ffmpeg binary is compiled with `--enable-gpl --enable-libx264` and
-NVENC support.  libx264 is licensed under the GPL v2+; NVENC is a proprietary NVIDIA
-encoder and requires the NVENC SDK license (free for bundled use).  Distributing a
-GPL binary imposes obligations: source offer, license notice, and binary linking
-attribution.
+The bundled ffmpeg binary is an unmodified gyan.dev FFmpeg 8.1.1 build compiled
+with `--enable-gpl --enable-version3 --enable-libx264` and NVENC support
+(`--enable-nvenc`, via the MIT-licensed ffnvcodec headers; no `--enable-nonfree`).
+The binary as a whole is licensed GPLv3.  Because this repository is public,
+the committed binary is distributed with it.
 
-**This build is a private, single-user fork and is not distributed publicly.**
-The GPL caveat is therefore acceptable under personal-use terms.  If this fork
-is ever distributed more widely, the ffmpeg bundling and licensing situation
-must be reviewed and the appropriate source-offer obligations satisfied before
-distribution.  This mirrors the `brave.exe` rename caveat in
-`docs/personal-fork-notes.md`.
+The license notice and Corresponding Source pointers live in
+[`resources/THIRD_PARTY.md`](../resources/THIRD_PARTY.md).  Replacing the
+binaries requires updating that record in the same commit.  See also the
+licensing section of `docs/personal-fork-notes.md`.
 
 ---
 

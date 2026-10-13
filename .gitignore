@@ -33,3 +33,7 @@ data/
 # Scratch/agent task output files
 task*-stdout.txt
 task*-stderr.txt
+
+# Linux ffmpeg helpers: over GitHub's 100 MB limit, fetched before packaging (README → Portable builds → Linux)
+resources/ffmpeg/linux/ffmpeg
+resources/ffmpeg/linux/ffprobe

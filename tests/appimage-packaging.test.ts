@@ -115,9 +115,10 @@ describe('build.asarUnpack native modules', () => {
 });
 
 describe('Windows/mac targets stay byte-compatible', () => {
-  it('keeps the Windows portable brave.exe identity', () => {
-    expect(pkg.build.win.executableName).toBe('brave');
-    expect(pkg.build.portable.artifactName).toBe('brave.${ext}');
+  it('keeps the Windows portable OneFolder identity', () => {
+    expect(pkg.build.win.executableName).toBe('OneFolder');
+    expect(pkg.build.portable.artifactName).toBe('OneFolder-${version}-x64.${ext}');
+    expect(pkg.build.win.target).toEqual(['portable']);
   });
 
   it('keeps Windows PE helpers only on the Windows target', () => {
@@ -153,14 +154,19 @@ describe('git-tracked Linux source binaries', () => {
     }
   }
 
-  it.each([
-    ['resources/ffmpeg/linux/ffmpeg'],
-    ['resources/ffmpeg/linux/ffprobe'],
-    ['resources/exiftool/exiftool.pl'],
-  ])('%s exists and is git-tracked executable (100755)', (rel) => {
+  it('resources/exiftool/exiftool.pl exists and is git-tracked executable (100755)', () => {
+    const rel = 'resources/exiftool/exiftool.pl';
     expect(fs.existsSync(path.join(ROOT, rel))).toBe(true);
     expect(gitMode(rel)).toBe('100755');
   });
+
+  // Over GitHub's 100 MB limit: downloaded before `yarn package:appimage` (README, Linux build).
+  it.each([['resources/ffmpeg/linux/ffmpeg'], ['resources/ffmpeg/linux/ffprobe']])(
+    '%s is not git-tracked',
+    (rel) => {
+      expect(gitMode(rel)).toBeNull();
+    },
+  );
 
   it('ships the exact-case exiftool config source file', () => {
     expect(fs.existsSync(path.join(ROOT, 'resources/exiftool/.ExifTool_config'))).toBe(true);

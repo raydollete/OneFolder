@@ -12,14 +12,15 @@ schema: spec-driven
 
 context: |
   Quality rules here are canonical and shared across repos (radflow).
-  Binding repo-specific constraints live in this repo's CLAUDE.md (and any
-  docs it points to) and must be restated inline in artifacts when relevant —
-  especially in tasks, which must be executable without re-deriving them.
+  Binding repo-specific constraints live in this repo's agent memory file
+  (CLAUDE.md / AGENTS.md, and any docs it points to) and must be restated
+  inline in artifacts when relevant — especially in tasks, which must be
+  executable without re-deriving them.
   Artifact skeletons live at openspec/templates/ — start every proposal.md,
   design.md, tasks.md, and verification.md from its skeleton instead of
   deriving the structure from these rules.
   These rules are mechanically enforced by ~/dev/radflow/bin/radflow-lint
-  (in-session via Claude Code hooks, and as a blocking gate on
+  (in-session via your harness's hooks, and as a blocking gate on
   `openspec archive`) — artifacts that violate them will be bounced back.
   `openspec archive` additionally requires a verification.md whose Verdict is
   not FAIL — run /opsx-verify before archiving.

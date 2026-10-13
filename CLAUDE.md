@@ -61,7 +61,7 @@ yarn build:web          # production web SPA build (also run by `yarn build`)
 ```
 
 The sidecar server is **not a separate binary**. It runs inside the portable
-executable: `brave.exe --serve [--port <n>]` starts the read-only web server in
+executable: `OneFolder-<version>-x64.exe --serve [--port <n>]` starts the read-only web server in
 the same portable context instead of opening the desktop GUI. Authentication is
 optional — with no `ONEFOLDER_AUTH_SECRET` / `ONEFOLDER_AUTH_USER` +
 `ONEFOLDER_AUTH_PASSWORD` configured the server runs open, binds all interfaces,
