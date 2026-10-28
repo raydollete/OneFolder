@@ -66,6 +66,16 @@ export class ClientFile {
   // Is undefined until existence check has been completed
   @observable isBroken?: boolean;
 
+  // Probed codec facts (change: support-mov-playback). null/undefined = not probed
+  // yet — the gallery/player must never render an absent verdict as unplayable.
+  @observable videoCodec?: string | null;
+  @observable audioCodec?: string | null;
+  @observable codecVersion?: string | null;
+  // Probed container fact (change: support-mkv-ts-playback): ffprobe
+  // format_name, e.g. 'matroska,webm', 'mpegts'. null/undefined = not probed
+  // yet — same never-a-verdict discipline as the codec facts above.
+  @observable formatName?: string | null;
+
   constructor(store: FileStore, fileProps: FileDTO, exifTool: ExifIO) {
     this.store = store;
     this.exifTool = exifTool;
@@ -83,6 +93,10 @@ export class ClientFile {
     this.dateLastIndexed = fileProps.dateLastIndexed;
     this.name = fileProps.name;
     this.extension = fileProps.extension;
+    this.videoCodec = fileProps.videoCodec ?? null;
+    this.audioCodec = fileProps.audioCodec ?? null;
+    this.codecVersion = fileProps.codecVersion ?? null;
+    this.formatName = fileProps.formatName ?? null;
 
     const location = store.getLocation(this.locationId);
     this.absolutePath = platform.path.join(location.path, this.relativePath);
@@ -248,6 +262,26 @@ export class ClientFile {
     this.markDirty();
   }
 
+  /**
+   * Record a fresh probe result from the background codec pass (desktop main
+   * process) and schedule persistence. Facts only — playability is derived at
+   * render time (src/frontend/image/playability.ts), never stored.
+   */
+  @action.bound setCodecFacts(
+    videoCodec: string | null,
+    audioCodec: string | null,
+    codecVersion: string,
+    formatName?: string | null,
+  ): void {
+    this.videoCodec = videoCodec;
+    this.audioCodec = audioCodec;
+    this.codecVersion = codecVersion;
+    // Optional trailing parameter so pre-container callers keep working; an
+    // absent argument leaves a stored container fact intact, never erases it.
+    if (formatName !== undefined) this.formatName = formatName;
+    this.markDirty();
+  }
+
   serialize(): FileDTO {
     return {
       id: this.id,
@@ -266,6 +300,10 @@ export class ClientFile {
       name: this.name,
       extension: this.extension,
       annotations: this.annotations, // serialize annotations object to string
+      videoCodec: this.videoCodec ?? null,
+      audioCodec: this.audioCodec ?? null,
+      codecVersion: this.codecVersion ?? null,
+      formatName: this.formatName ?? null,
     };
   }
 

@@ -44,6 +44,9 @@ const FormatHandlers: Record<IMG_EXTENSIONS_TYPE, FormatHandlerType> = {
   mp4: 'web',
   webm: 'web',
   ogg: 'web',
+  mov: 'web',
+  mkv: 'web',
+  ts: 'web',
 };
 
 type ObjectURL = string;

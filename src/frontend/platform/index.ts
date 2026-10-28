@@ -30,6 +30,8 @@ import type {
   MediaJobProgressMessage,
   MediaJobStartResult,
   MediaJobCommitResult,
+  VideoProbeCandidate,
+  VideoProbeUpdate,
   DeleteLibraryAndFilesResult,
   LibraryDiskPaths,
   WindowSystemButtonPress,
@@ -304,6 +306,14 @@ export interface PlatformDesktop {
   commitMediaJob(jobId: string): Promise<MediaJobCommitResult>;
   onMediaJobProgress(cb: (msg: MediaJobProgressMessage) => void): () => void;
   cancelMediaJob(jobId: string): void;
+  /**
+   * Background video codec probe pass (support-mov-playback). Desktop-only:
+   * main stats each candidate and spawns ffprobe only for stale
+   * (path, size, mtime)/MOV_CODEC_VERSION keys; probe failures are logged
+   * there and never returned. The web platform rejects — the read-only
+   * sidecar never probes or writes.
+   */
+  probeVideoCodecs(candidates: VideoProbeCandidate[]): Promise<VideoProbeUpdate[]>;
 }
 
 // ---------------------------------------------------------------------------

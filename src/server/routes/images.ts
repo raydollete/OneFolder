@@ -5,9 +5,10 @@
  *
  *   GET /api/original/:id
  *     Resolves the file ID to its absolute path via path-resolver, asserts the
- *     extension is a web-loadable format (jpg/jpeg/png/webp/gif/bmp), then
- *     streams the file with the correct Content-Type and CORP headers.
- *     Non-web formats (HEIC/PSD/TIFF/EXR/…) receive a 415 response pointing
+ *     extension is a web-loadable image format (jpg/jpeg/png/webp/gif/bmp) or a
+ *     served video container (mkv, ts, mov, mp4, webm, ogg), then streams the
+ *     file with the correct Content-Type and CORP headers.
+ *     Everything else (HEIC/PSD/TIFF/EXR/…) receives a 415 response pointing
  *     to /api/preview/:id.
  *
  *   GET /api/thumb/:id
@@ -23,7 +24,8 @@
  *     Decodes a non-web format (HEIC/PSD/TIFF/EXR) server-side to webp and
  *     returns the full-size decoded image.  Decoded previews are cached on disk
  *     in a `previews/` directory sibling to the thumbnail cache.  Web formats
- *     are served directly (same as /original) since they don't require decoding.
+ *     are served directly (same as /original, the mkv/ts containers included)
+ *     since they don't require decoding.
  *
  * Security
  * --------
@@ -83,6 +85,41 @@ function webMimeType(filePath: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// MIME type map for the served video containers — support-mkv-ts-playback.
+//
+// Deliberately a SECOND map, kept apart from WEB_FORMAT_MIME: that one is the
+// image-only gate used by /thumb and /preview, which must never hand out a
+// video (a `<video>` element loads the original, never a decoded preview).
+// ---------------------------------------------------------------------------
+
+const VIDEO_FORMAT_MIME: Record<string, string> = {
+  // The containers this change adds to the lane.
+  mkv: 'video/x-matroska',
+  ts: 'video/mp2t',
+  // The containers the video lane already recognised. They used to fall through
+  // to 415 here, which left the sidecar streaming some web-loadable formats and
+  // refusing others; /original serves all of them now.
+  mov: 'video/quicktime',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  ogg: 'video/ogg',
+};
+
+/**
+ * Returns the MIME type for a served video-container extension, or null when
+ * the extension is not one of the containers the sidecar streams.
+ *
+ * A `.ts` reaching this map already has a database row: plain TypeScript
+ * sources are never ingested as video, so they fail earlier at the
+ * path-resolver lookup with 404 rather than being streamed here.
+ */
+function videoMimeType(filePath: string): string | null {
+  const ext = path.extname(filePath).replace(/^\./, '').toLowerCase();
+  // Cast through unknown to allow undefined lookup on a Record<string, string>.
+  return (VIDEO_FORMAT_MIME as Record<string, string | undefined>)[ext] ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -129,8 +166,9 @@ export function makeImagesRouter(db: Database.Database, thumbnailDir: string): R
   // -------------------------------------------------------------------------
   // GET /original/:id
   //
-  // Streams a web-format original file (jpg/jpeg/png/webp/gif/bmp).
-  // Non-web formats return 415 with a hint to use /api/preview/:id (TASK-131).
+  // Streams a web-format original file (jpg/jpeg/png/webp/gif/bmp) or a served
+  // video container (mkv/ts, plus the lane's mov/mp4/webm/ogg).
+  // Everything else returns 415 with a hint to use /api/preview/:id (TASK-131).
   // -------------------------------------------------------------------------
   router.get('/original/:id', async (req: Request, res: Response) => {
     // Express types params as string | string[]; route params are always string.
@@ -143,7 +181,10 @@ export function makeImagesRouter(db: Database.Database, thumbnailDir: string): R
     }
 
     const { absolutePath } = resolved;
-    const mimeType = webMimeType(absolutePath);
+    // Rasters go through the image-only map; the new containers go through the
+    // video map. webMimeType itself stays raster-only — the image endpoints
+    // never serve a video, and the video lane never serves a raster.
+    const mimeType = webMimeType(absolutePath) ?? videoMimeType(absolutePath);
 
     if (!mimeType) {
       // Non-web format — TASK-131 will handle these via /api/preview/:id.
@@ -310,11 +351,14 @@ export function makeImagesRouter(db: Database.Database, thumbnailDir: string): R
     const sourceExt = path.extname(absolutePath).replace(/^\./, '').toLowerCase();
 
     // ---
-    // Web formats — serve directly (no decode needed).
+    // Web formats and the served video containers — stream the original, no
+    // decode. The web seam routes every full-size media request (video elements
+    // included) here, so the containers ride the same map chain as /original.
+    // webMimeType itself stays raster-only.
     // ---
-    const webMime = webMimeType(absolutePath);
-    if (webMime) {
-      setImageHeaders(res, webMime);
+    const directMime = webMimeType(absolutePath) ?? videoMimeType(absolutePath);
+    if (directMime) {
+      setImageHeaders(res, directMime);
       res.sendFile(absolutePath);
       return;
     }

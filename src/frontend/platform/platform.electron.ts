@@ -171,6 +171,7 @@ const desktop: PlatformDesktop = {
   commitMediaJob: (jobId) => RendererMessenger.commitMediaJob(jobId),
   onMediaJobProgress: (cb) => RendererMessenger.onMediaJobProgress(cb),
   cancelMediaJob: (jobId) => RendererMessenger.cancelMediaJob(jobId),
+  probeVideoCodecs: (candidates) => RendererMessenger.probeVideoCodecs(candidates),
 };
 
 // ---------------------------------------------------------------------------

@@ -192,9 +192,18 @@ class RootStore {
       // initial view for the renderer thread.
       .then(() => rootStore.locationStore.watchLocations())
       .then((foundNewFiles) => {
+        // Codec triage AFTER reconciliation and after the post-ingest
+        // refetch completes — the previous trigger fired before this
+        // startup's ingest, so fresh clips stayed unprobed forever.
+        // Candidates are DB rows (see startCodecProbePass), so the pass
+        // covers existing rows, the progressive-load tail, and this
+        // startup's new files alike.
         if (foundNewFiles) {
-          rootStore.fileStore.refetch();
+          return rootStore.fileStore.refetch().then(() =>
+            rootStore.locationStore.startCodecProbePass(),
+          );
         }
+        rootStore.locationStore.startCodecProbePass();
       })
       .catch(console.error);
 

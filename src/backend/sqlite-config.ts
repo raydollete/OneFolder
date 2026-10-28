@@ -14,7 +14,9 @@ export const SQLITE_DB_FILENAME = 'onefolder.db';
 // Core tables that mirror the 6 existing Dexie collections.
 // Tags stored in FileDTO.tags (ID[]) are extracted into a file_tags junction
 // table so that tag filtering can use indexed lookups instead of full scans.
-const SQL_CREATE_TABLES = `
+// Exported for tests/sqlite-codec-migration.test.ts, which runs the real DDL
+// against node:sqlite (better-sqlite3 is Electron-ABI and unloadable in jest).
+export const SQL_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS files (
     id             TEXT    PRIMARY KEY,
     ino            TEXT,
@@ -174,11 +176,41 @@ type Migration = {
   sql: string;
 };
 
-const MIGRATIONS: Migration[] = [
+// Exported for the codec-migration test (tests/sqlite-codec-migration.test.ts):
+// the migration SQL must run against a real SQLite engine, and better-sqlite3
+// (Electron ABI) does not load under jest.
+export const MIGRATIONS: Migration[] = [
   {
     version: 1,
     description: 'Initial schema: core tables, compound indexes, FTS5 virtual table, sync triggers',
     sql: SQL_CREATE_TABLES + SQL_CREATE_INDEXES + SQL_CREATE_FTS,
+  },
+  // The codec columns deliberately live ONLY in this migration, not in
+  // SQL_CREATE_TABLES: a brand-new database runs v1 then v2 in one pass, so
+  // putting them in both would fail the ALTER with "duplicate column" on
+  // every fresh install, while the migration alone serves new and
+  // already-created databases identically.
+  {
+    version: 2,
+    description:
+      'MOV playback: nullable videoCodec/audioCodec/codecVersion columns on files',
+    sql: `
+      ALTER TABLE files ADD COLUMN videoCodec TEXT;
+      ALTER TABLE files ADD COLUMN audioCodec TEXT;
+      ALTER TABLE files ADD COLUMN codecVersion TEXT;
+    `,
+  },
+  // Same precedent as the v2 codec columns: the container fact lives ONLY in
+  // this migration, never in SQL_CREATE_TABLES. A brand-new database runs v1 →
+  // v2 → v3 in one pass, so declaring it in both would fail the ALTER with
+  // "duplicate column" on every fresh install.
+  {
+    version: 3,
+    description:
+      'MKV/TS playback: nullable formatName column on files',
+    sql: `
+      ALTER TABLE files ADD COLUMN formatName TEXT;
+    `,
   },
 ];
 
@@ -302,6 +334,58 @@ export function migratePortableSchema(db: Database.Database): void {
 // Public initialization function
 // ---------------------------------------------------------------------------
 
+/** The minimum surface both better-sqlite3's Database and node:sqlite's
+ *  DatabaseSync satisfy — exec plus a row-returning prepare (PRAGMA reads). */
+export interface MigrationTarget {
+  exec(sql: string): unknown;
+  prepare(sql: string): { get(...params: unknown[]): unknown };
+}
+
+/**
+ * Apply every pending MIGRATIONS entry and record the TRUE maximum applied
+ * version in PRAGMA user_version, so re-runs on an already-migrated database
+ * are no-ops (the highest of what was already stored and what we just ran —
+ * on a shared `data/` this must reflect reality so the other OS's launch does
+ * not re-run or skip migrations based on a stale constant).
+ *
+ * The version is re-read INSIDE a BEGIN IMMEDIATE: Electron boots two renderer
+ * windows that each open the same DB file; a window that read user_version
+ * before the other's migration committed must WAIT for the write lock (paired
+ * with the busy_timeout set by sqliteInit), then see the committed version and
+ * skip — otherwise it prepares statements against the mid-migration schema and
+ * dies with a SqliteError ("no such column: f.videoCodec"). The immediate
+ * transaction ensures a partial failure leaves the database at its previous
+ * clean version.
+ *
+ * Exported for tests/sqlite-codec-migration.test.ts, which drives this same
+ * apply loop through node:sqlite: better-sqlite3's native binary is built
+ * against the Electron ABI and cannot load under plain node/jest.
+ */
+export function applyMigrations(db: MigrationTarget): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const row = db.prepare('PRAGMA user_version').get() as
+      | { user_version: number }
+      | undefined;
+    const storedVersion = row?.user_version ?? 0;
+    const pendingMigrations = MIGRATIONS.filter((m) => m.version > storedVersion);
+    if (pendingMigrations.length === 0) {
+      db.exec('COMMIT');
+      return;
+    }
+    for (const migration of pendingMigrations) {
+      console.info(`SQLite: applying migration v${migration.version} — ${migration.description}`);
+      db.exec(migration.sql);
+    }
+    const appliedMax = Math.max(storedVersion, ...pendingMigrations.map((m) => m.version));
+    db.exec(`PRAGMA user_version = ${appliedMax}`);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 /**
  * Opens (or creates) the SQLite database at `dbPath`, applies any pending
  * schema migrations, and returns the ready-to-use `better-sqlite3` Database
@@ -314,6 +398,11 @@ export function migratePortableSchema(db: Database.Database): void {
 export function sqliteInit(dbPath: string): Database.Database {
   const db = new Database(dbPath);
 
+  // Busy timeout FIRST so every statement below (and the migration's BEGIN
+  // IMMEDIATE) waits out a concurrent window's write lock instead of throwing
+  // SQLITE_BUSY — Electron boots two renderers against this same file.
+  db.pragma('busy_timeout = 5000');
+
   // WAL mode gives significantly better read/write concurrency in Electron
   // where the renderer and main process may access the file simultaneously.
   db.pragma('journal_mode = WAL');
@@ -321,28 +410,9 @@ export function sqliteInit(dbPath: string): Database.Database {
   // Enforce referential integrity (e.g. file_tags.fileId -> files.id CASCADE).
   db.pragma('foreign_keys = ON');
 
-  // Read the version recorded in the database (0 for a brand-new file).
-  const currentVersion = db.pragma('user_version', { simple: true }) as number;
-
-  // Apply every migration whose version number exceeds the stored version.
-  // Wrapping the whole sequence in a single transaction ensures that a
-  // partial failure leaves the database at the previous clean version.
-  const pendingMigrations = MIGRATIONS.filter((m) => m.version > currentVersion);
-
-  if (pendingMigrations.length > 0) {
-    db.transaction(() => {
-      for (const migration of pendingMigrations) {
-        console.info(`SQLite: applying migration v${migration.version} — ${migration.description}`);
-        db.exec(migration.sql);
-      }
-      // Record the TRUE maximum applied migration version (not a hand-maintained
-      // constant): the highest of what was already stored and what we just ran.
-      // On a shared `data/` this must reflect reality so the other OS's launch
-      // does not re-run or skip migrations based on a stale constant.
-      const appliedMax = Math.max(currentVersion, ...pendingMigrations.map((m) => m.version));
-      db.pragma(`user_version = ${appliedMax}`);
-    })();
-  }
+  // Apply every migration whose version number exceeds the stored version
+  // (version re-read under the write lock — see applyMigrations).
+  applyMigrations(db);
 
   // Portable-shared-library schema transform: idempotent and independent of
   // user_version (it targets pre-portable databases created before this schema,

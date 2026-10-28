@@ -114,7 +114,7 @@ class ExifIO {
    * @returns true if the file is a video file
    */
   private isVideoFile(filepath: string): boolean {
-    return filepath.toLowerCase().match(/\.(mp4|webm|ogg)$/) !== null;
+    return filepath.toLowerCase().match(/\.(mp4|webm|ogg|mov|mkv|ts)$/) !== null;
   }
 
   /**

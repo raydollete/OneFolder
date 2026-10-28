@@ -87,8 +87,12 @@ export async function isDirEmpty(dir: string) {
   return dirContents.length === 0 || (dirContents.length === 1 && dirContents[0] === '.DS_Store');
 }
 
+/** The single authoritative video-extension list (discovery only — NEVER a
+ *  playability test; playability is src/frontend/image/playability.ts). */
+const VIDEO_FILE_EXTENSIONS: readonly string[] = ['webm', 'mp4', 'ogg', 'mov', 'mkv', 'ts'];
+
 export function isFileExtensionVideo(fileExtension: string) {
-  return fileExtension === 'webm' || fileExtension === 'mp4' || fileExtension === 'ogg';
+  return VIDEO_FILE_EXTENSIONS.includes(fileExtension);
 }
 
 /** Tri-state gallery media-type display filter. `'all'` shows everything, `'video'` only

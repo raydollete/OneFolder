@@ -29,6 +29,7 @@ import { MainMessenger } from './ipc/main';
 import { WindowSystemButtonPress, MediaJobType, MediaJobStartResult } from './ipc/messages';
 import { mediaJobService } from './media/MediaJobService';
 import { FfmpegRunner } from './media/FfmpegRunner';
+import { runVideoCodecProbePass } from './ipc/videoProbePass';
 import { buildSubtractClipArgs, SUBTRACT_CLIP_CROSSFADE_SEC } from './media/subtractClip';
 import { NVENC_H264_VIDEO_ARGS, decideAudioArgs } from './media/audioArgs';
 import { resolveLaunchContext, buildRelaunchCommand } from './portable-launch-context';
@@ -1080,6 +1081,20 @@ MainMessenger.onCancelMediaJob((jobId) => {
 // suppressed the watcher for finalPath. Moves tempPath → finalPath (single move); the renderer
 // is the sole ingester of the result.
 MainMessenger.onCommitMediaJob((jobId) => mediaJobService.place(jobId));
+
+// PROBE_VIDEO_CODECS: the renderer's background codec triage pass after a
+// location load (support-mov-playback). Low priority — one ffprobe at a time,
+// yielding between files — and gated on the (path, size, mtime) + 
+// MOV_CODEC_VERSION cache key inside the pass, so fresh verdicts spawn nothing.
+// Probe failures are logged there and never surface as a verdict (rows stay
+// NULL); the pass deliberately does NOT hook addFile/ingestFile or
+// MediaJobService.place (watcher race red lines, CONCERNS.md:55-65).
+MainMessenger.onProbeVideoCodecs((candidates) =>
+  runVideoCodecProbePass(candidates, {
+    runner: _probeRunner,
+    stat: (p) => fse.stat(p).then((s) => ({ size: s.size, mtimeMs: s.mtimeMs })),
+  }),
+);
 
 // Library management IPC handlers
 MainMessenger.onGetLibraries(() => registry.getLibraries());

@@ -13,6 +13,7 @@ import { usePromise } from '../../hooks/usePromise';
 import { CommandDispatcher, MousePointerEvent } from './Commands';
 import { ITransform } from './Masonry/layout-helpers';
 import { GalleryVideoPlaybackMode } from 'src/frontend/stores/UiStore';
+import { derivePlayability, usesContainerReason } from 'src/frontend/image/playability';
 
 interface ItemProps {
   file: ClientFile;
@@ -288,7 +289,12 @@ export const Thumbnail = observer(
             videoProps.autoPlay = true;
           }
 
-          return <video ref={setThumbnailRef} {...videoProps} />;
+          return (
+            <>
+              <video ref={setThumbnailRef} {...videoProps} />
+              <UnplayableBadge file={file} />
+            </>
+          );
         }
 
         return (
@@ -313,11 +319,40 @@ export const Thumbnail = observer(
 
 const getThumbnail = action((file: ClientFile) => file.thumbnailPath);
 
+/**
+ * "Not playable" lozenge over a video thumbnail (changes: support-mov-playback,
+ * support-mkv-ts-playback).
+ *
+ * Renders only when the STORED codec/container facts on the file derive an
+ * `unplayable` verdict. Playable, unprobed, and probe-errored rows render
+ * nothing — an unknown verdict is never disclosed as a verdict (INV-032
+ * mirror). The lozenge is `pointer-events: none`, so selection, drag, and
+ * hover-playback keep being handled by the enclosing `.thumbnail` exactly as
+ * before.
+ */
+export const UnplayableBadge = observer(({ file }: { file: ClientFile }) => {
+  if (derivePlayability(file.videoCodec, file.audioCodec, file.formatName) !== 'unplayable') {
+    return null;
+  }
+  // Container-driven verdicts state the reason only (UI review: remediation
+  // belongs to the banner); codec-driven verdicts name the codec and point at
+  // the Tools panel's existing Re-encode (x264) tool. The container test is
+  // the derivation's own predicate — badge and verdict can never drift.
+  const containerDriven = usesContainerReason(file.formatName);
+  const tooltip = containerDriven
+    ? 'MPEG-TS is not demuxable in this app'
+    : `${file.videoCodec!.toUpperCase()} is not decodable in this app — use "Re-encode (x264)" in the Tools panel`;
+  return (
+    <span className="unplayable-badge" role="note" aria-hidden={false} title={tooltip}>
+      <Tag text="Not playable" tooltip={tooltip} />
+    </span>
+  );
+});
+
 export const ThumbnailTags = observer(
   ({ file, eventManager }: { file: ClientFile; eventManager: CommandDispatcher }) => {
     return (
       <span
-        className="thumbnail-tags"
         onClick={eventManager.select}
         onDoubleClick={eventManager.preview}
         onContextMenu={eventManager.showContextMenu}

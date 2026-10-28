@@ -24,6 +24,10 @@ import { getMetaData, getMetaDataWithTags, mergeMovedFile } from '../entities/Fi
 import { ClientLocation, ClientSubLocation } from '../entities/Location';
 import { ClientStringSearchCriteria } from '../entities/SearchCriteria';
 import ImageLoader from '../image/ImageLoader';
+import {
+  applyProbeUpdatesToRows,
+  buildProbeCandidatesFromRows,
+} from 'src/ipc/videoProbePass';
 import RootStore from './RootStore';
 import TagStore from './TagStore';
 
@@ -659,8 +663,84 @@ class LocationStore {
     await this.rootStore.fileStore.refetch();
     await this.rootStore.fileStore.refetchFileCounts();
 
+    // Background codec triage for the freshly loaded files (support-mov-playback).
+    this.startCodecProbePass();
+
     // No need for separate readTagsFromFiles() call - tags are already processed during file creation!
     // This eliminates the redundant ExifTool reads that were making location loading slow
+  }
+
+  /** In-flight guard so overlapping triggers (init + watch) run one pass. */
+  private codecProbeInFlight = false;
+
+  /**
+   * Kick off the background video codec probe pass (support-mov-playback).
+   *
+   * Desktop build only — the read-only sidecar never probes and never writes
+   * (platform seam contract: platform.web rejects this call outright). The
+   * renderer only offers recognized-video files; the main process stats each
+   * file and spawns ffprobe only when the (path, size, mtime) cache key or the
+   * MOV_CODEC_VERSION stamp is stale, so a fresh verdict costs zero spawns.
+   * Probe failures are logged loudly in main and leave the row NULL — an
+   * absent verdict NEVER renders as unplayable.
+   *
+   * Deliberately not called from addFile/ingestFile or media-job placement:
+   * probing there races the folder watcher (.planning/codebase/CONCERNS.md:55-65).
+   */
+  @action.bound startCodecProbePass(): void {
+    if (IS_WEB_BUILD || this.codecProbeInFlight) {
+      return;
+    }
+    this.codecProbeInFlight = true;
+    (async () => {
+      // Candidates come from the DB's canonical rows, NOT from
+      // fileStore.fileList: the gallery materializes progressively and the
+      // old trigger fired BEFORE this startup's ingest, so fresh clips were
+      // (observed) never probed — every fact stayed NULL.
+      const rows = await this.backend.fetchFiles('id', OrderDirection.Asc);
+      const candidates = buildProbeCandidatesFromRows(rows, (row) => {
+        const loc = this.get(row.locationId);
+        return loc ? platform.path.join(loc.path, row.relativePath) : undefined;
+      });
+      if (candidates.length === 0) {
+        return;
+      }
+      const updates = await platform.desktop.probeVideoCodecs(candidates);
+      if (updates.length === 0) {
+        return;
+      }
+      const byId = new Map(updates.map((u) => [u.id, u]));
+      const materialized = new Set<string>();
+      runInAction(() => {
+        for (const file of this.rootStore.fileStore.fileList) {
+          const update = byId.get(file.id);
+          if (update !== undefined) {
+            materialized.add(file.id);
+            // Observable write → the gallery badge/banner re-derive; the
+            // markDirty inside persists videoCodec/audioCodec/formatName/
+            // codecVersion. formatName is passed explicitly (its parameter is
+            // optional: omitting it would preserve a stale container fact).
+            file.setCodecFacts(
+              update.videoCodec,
+              update.audioCodec,
+              update.codecVersion,
+              update.formatName,
+            );
+          }
+        }
+      });
+      // Rows not yet materialized as ClientFiles: persist the facts directly,
+      // or this probe is silently wasted for the progressive-load tail.
+      const unmaterialized = rows.filter((row) => !materialized.has(row.id));
+      const toPersist = applyProbeUpdatesToRows(unmaterialized, updates);
+      if (toPersist.length > 0) {
+        await this.backend.saveFiles(toPersist);
+      }
+    })()
+      .catch((err) => console.error('Video codec probe pass failed', err))
+      .finally(() => {
+        this.codecProbeInFlight = false;
+      });
   }
 
   @action.bound async delete(location: ClientLocation): Promise<void> {

@@ -1,7 +1,7 @@
 ---
 title: Media-Type Filter — Persistent Display Filter
 author: @system
-last_updated: 2026-07-03
+last_updated: 2026-10-27
 scope: feature
 aliases: ["video-only", "media-type-filter", "mediaTypeFilter", "images-only", "showVideosOnly"]
 ---
@@ -22,7 +22,7 @@ The Search toolbar hosts a dropdown with three mutually exclusive options:
 | ---------------- | ------------------------- | -------------------------------------------------- |
 | Show All Media   | `'all'` (default)         | No filtering — every file is shown.                |
 | Images Only      | `'images'`                | Hides recognized video files (shows everything else). |
-| Video Only       | `'video'`                 | Shows only recognized video files (`mp4`, `webm`, `ogg`). |
+| Video Only       | `'video'`                 | Shows only recognized video files (`mp4`, `webm`, `ogg`, `mov`, `mkv`, `ts`). |
 
 - **Default state:** `'all'` — all media types are shown.
 - **Scope:** per-library, persisted across restarts like every other UI preference.
@@ -100,7 +100,7 @@ const [newClientFiles, reusedStatus] = this.filesFromBackend(backendFiles);
 Key points:
 
 - **Classifier:** `mediaTypeMatches(filter, extension)` from `common/fs.ts`, built on the single
-  authoritative video-extension list `isFileExtensionVideo` (`mp4 | webm | ogg`). `'images'` is its
+  authoritative video-extension list `isFileExtensionVideo` (`mp4 | webm | ogg | mov | mkv | ts`). `'images'` is its
   complement. Hard-coding extensions inline is avoided so future format additions are picked up
   automatically.
 - **Nothing downstream materializes:** because excluded files are removed from the `FileDTO[]`, no

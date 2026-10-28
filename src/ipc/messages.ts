@@ -208,3 +208,35 @@ export type MediaJobCommitResult = {
  * references fail at compile time with a clear name mismatch rather than silently.
  */
 export type MediaJobResult = MediaJobStartResult;
+
+//////////////// Video codec probe pass (support-mov-playback) ////////////////
+export const PROBE_VIDEO_CODECS = 'PROBE_VIDEO_CODECS';
+
+/**
+ * A recognized-video file the renderer offers for codec triage. Only the
+ * stored probe stamp travels: main stats the file itself and decides staleness
+ * on the (path, size, mtime) cache key + MOV_CODEC_VERSION, so a fresh
+ * verdict costs zero spawns.
+ */
+export type VideoProbeCandidate = {
+  id: ID;
+  absolutePath: string;
+  /** Stored probe stamp "MOV_CODEC_VERSION:size:mtimeMs"; null = never probed. */
+  codecVersion: string | null;
+};
+
+/**
+ * A fresh probe verdict for one row, to be written by the renderer's store.
+ * `formatName` is the container identity (ffprobe format format_name: 'mpegts',
+ * 'matroska,webm', 'mov,mp4,m4a,3gp,3g2,mj2', …) or null when the probe ran
+ * successfully but its format section carried none — null, never omitted, so
+ * the store writes an explicit container fact beside the codecs.
+ */
+export type VideoProbeUpdate = {
+  id: ID;
+  videoCodec: string;
+  audioCodec: string | null;
+  formatName: string | null;
+  /** The new stamp: "MOV_CODEC_VERSION:size:mtimeMs" at probe time. */
+  codecVersion: string;
+};

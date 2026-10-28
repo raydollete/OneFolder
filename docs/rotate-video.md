@@ -1,7 +1,7 @@
 ---
 title: Rotate CW / Rotate CCW Feature
 author: @rjdollete
-last_updated: 2026-06-22
+last_updated: 2026-10-27
 scope: feature
 ---
 
@@ -49,8 +49,9 @@ user can review and keep the result.
    reveals the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
 **Tool scope:** the buttons are shown only for files where
-`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
-`ogg` (the three formats the HTML5 `<video>` player can render in SlideMode).
+`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, `ogg`,
+`mov`, `mkv`, and `ts` (the recognized video containers; the player renders those
+whose container and codecs Chromium can handle in SlideMode).
 For any other file type the Tools section shows the neutral caption "No tools
 available for this file type."
 

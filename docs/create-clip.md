@@ -1,7 +1,7 @@
 ---
 title: Create Clip Feature (Mark Start / Mark End / Create Clip)
 author: @rjdollete
-last_updated: 2026-06-22
+last_updated: 2026-10-27
 scope: feature
 ---
 
@@ -86,8 +86,11 @@ review and keep the result.
    the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
 **Tool scope:** all three controls are shown only for files where
-`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
-`ogg` (the three formats the HTML5 `<video>` player renders in SlideMode).
+`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, `ogg`,
+`mov`, `mkv`, and `ts` (the recognized video containers; the player only renders
+those whose container Chromium can demux and whose codecs it can decode). The
+output stays `.mp4` regardless of the source container, so the stream-copy
+caveats below apply to any source whose streams MP4 cannot carry.
 
 ---
 

@@ -1,5 +1,6 @@
 import { ipcRenderer } from 'electron';
 import path from 'path';
+import { PROBE_VIDEO_CODECS, VideoProbeCandidate, VideoProbeUpdate } from './messages';
 import {
   CLEAR_DATABASE,
   CLOSED_PREVIEW_WINDOW,
@@ -280,4 +281,16 @@ export class RendererMessenger {
 
   /** Send a cancel request for the given jobId. */
   static cancelMediaJob = (jobId: string): void => ipcRenderer.send(CANCEL_MEDIA_JOB, jobId);
+
+  /**
+   * Ask main to run the background video codec probe pass over these
+   * recognized-video files (support-mov-playback). Main stats each file and
+   * spawns ffprobe ONLY for stale (path, size, mtime)/MOV_CODEC_VERSION keys;
+   * probe errors are logged there and simply never appear in the result —
+   * the rows stay NULL (unprobed), never "unplayable". Desktop-only: the
+   * read-only sidecar's platform rejects this call outright.
+   */
+  static probeVideoCodecs = (
+    candidates: VideoProbeCandidate[],
+  ): Promise<VideoProbeUpdate[]> => ipcRenderer.invoke(PROBE_VIDEO_CODECS, candidates);
 }

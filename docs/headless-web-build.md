@@ -1,7 +1,7 @@
 ---
 title: Headless / Sidecar Web Build
 author: @system
-last_updated: 2026-06-22
+last_updated: 2026-10-27
 scope: feature
 aliases: ["headless", "sidecar", "web-build", "remote-browse", "INV-034"]
 ---
@@ -109,12 +109,12 @@ All image endpoints are ID-based. The client **never** supplies a filesystem pat
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/original/:id` | Streams a web-format original (jpg/png/webp/gif/bmp). Non-web formats return HTTP 415 with a hint to use `/api/preview/:id`. |
-| GET | `/api/thumb/:id` | Returns a cached thumbnail (webp, max 600 px). Generates via Sharp on first request. Non-web formats are decoded first via `decode.ts` then resized. Cached on disk. |
-| GET | `/api/preview/:id` | Full-size server-decoded preview for non-web formats (HEIC/HEIF/TIFF/PSD/EXR → webp). Cached on disk alongside thumbnails. Web formats are served directly. |
+| GET | `/api/original/:id` | Streams a web-format original (jpg/png/webp/gif/bmp) or a recognized video container — `mp4`/`webm`/`ogg`/`mov`/`mkv`/`ts` via `VIDEO_FORMAT_MIME` (`video/mp4`, `video/webm`, `video/ogg`, `video/quicktime`, `video/x-matroska`, `video/mp2t`). Everything else returns HTTP 415 with a hint to use `/api/preview/:id`. |
+| GET | `/api/thumb/:id` | Returns a cached thumbnail (webp, max 600 px). Generates via Sharp on first request. Non-web image formats are decoded first via `decode.ts` then resized. Cached on disk. Video containers have no path here at all (`501`, as for `mov`): the desktop `ImageLoader.needsThumbnail` never asks for a video thumbnail, and the web gallery renders video tiles as `<video>` elements — no frame extraction exists on either side. |
+| GET | `/api/preview/:id` | Full-size server-decoded preview for non-web image formats (HEIC/HEIF/TIFF/PSD/EXR → webp). Cached on disk alongside thumbnails. Web image formats and the served video containers stream their original directly with the correct `Content-Type` (raster map `WEB_FORMAT_MIME`, video map `VIDEO_FORMAT_MIME`). |
 
 All three endpoints send:
-- `Content-Type: image/<format>`
+- `Content-Type: image/<format>`, or `video/<format>` for a served video container
 - `Cross-Origin-Resource-Policy: same-origin` (required under COEP for `<img>` to load)
 - `Cache-Control` (thumbnails/previews: `public, max-age=86400, immutable`; originals: `public, max-age=3600`)
 

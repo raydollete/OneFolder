@@ -32,6 +32,17 @@ export type FileDTO = {
 
   /** file annotations in W3C WebAnnotation model. */
   annotations: string;
+  /** ffprobe codec_name of the first video stream (v:0), e.g. 'h264', 'hevc'. null/undefined = not probed. */
+  videoCodec?: string | null;
+  /** ffprobe codec_name of the first audio stream (a:0), e.g. 'aac', 'mp3', 'opus', 'vorbis'. null/undefined = not probed or no audio stream. */
+  audioCodec?: string | null;
+  /** Probe stamp recorded alongside the codecs: `MOV_CODEC_VERSION:size:mtimeMs`
+   *  captured at probe time; null/undefined = not probed. Stale when the version
+   *  prefix differs from MOV_CODEC_VERSION or the size/mtime components differ
+   *  from the live stat — the background pass re-probes only stale rows. */
+  codecVersion?: string | null;
+  /** ffprobe format format_name of the container, e.g. 'mov', 'matroska,webm', 'mpegts'. null = not probed. */
+  formatName?: string | null;
 };
 
 export const IMG_EXTENSIONS = [
@@ -59,5 +70,13 @@ export const IMG_EXTENSIONS = [
   'mp4',
   'webm',
   'ogg',
+  'mov',
+  'mkv',
+  'ts',
 ] as const;
+
+/** Version of the codec table used for playability derivation; bumping it
+ *  invalidates stored probe stamps (FileDTO.codecVersion). */
+export const MOV_CODEC_VERSION = 1;
+
 export type IMG_EXTENSIONS_TYPE = (typeof IMG_EXTENSIONS)[number];

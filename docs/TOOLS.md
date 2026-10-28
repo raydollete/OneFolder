@@ -1,7 +1,7 @@
 ---
 title: Creating Inspector Tools
 author: @rjdollete
-last_updated: 2026-06-22
+last_updated: 2026-10-27
 scope: architecture
 ---
 
@@ -453,6 +453,66 @@ encoder requires an NVIDIA GPU; no software fallback is provided (matches
 
 See [rotate-video.md](rotate-video.md), INV-030, and INV-032 for the full feature doc.
 
+### Example 6 — The unplayable banner (read-path capability gate over an existing job)
+
+The playability lane adds **no new job type and no new button**: it gates an
+unplayable clip on the READ path and points the user at the existing
+`reencode-x264` job, whose button the Tools panel already ships.
+
+`.mov` opened this lane; `.mkv` and `.ts` extended it with no new layer — one
+extra stored fact (`formatName`) and one extra rule in the pure derivation.
+
+- **Ingest first** — a new video format enters the app exactly at
+  `IMG_EXTENSIONS` (`src/api/file.ts`) and `isFileExtensionVideo`
+  (`common/fs.ts`, the single authoritative predicate); `mov` joined both, then
+  `mkv` and `ts`. Extension recognition is a discovery trigger, never a
+  playability test — which is exactly what lets one `.ts` extension cover both
+  MPEG-TS video and TypeScript source code.
+- **Facts in the DB** — a low-priority background probe pass after
+  location load (`src/ipc/videoProbePass.ts`, `PROBE_VIDEO_CODECS` IPC,
+  `FfmpegRunner.probeFirstVideoCodec`) persists the first video/audio codec
+  names, the container (`ffprobe` format `format_name`), and a
+  `MOV_CODEC_VERSION:size:mtimeMs` stamp in nullable columns (migrations v2 and
+  v3) — all from a **single** ffprobe spawn (`-show_entries
+  format=format_name:stream=codec_type,codec_name -of json`). Fresh cache keys
+  spawn nothing; probe errors log loud and leave the row NULL — an unknown is
+  never shown as "not playable" (INV-032 discipline on the read side).
+- **Verdict derived, never stored** — `src/frontend/image/playability.ts`
+  (pure; consults stored facts only, never the extension): no probed video
+  stream → unprobed **first**, so a TypeScript-source `.ts` is never badged;
+  `mpegts` container → unplayable whatever the codecs (Chromium has no MPEG-TS
+  demuxer); otherwise playable iff the first video stream is `h264`, `vp8`,
+  `vp9`, or `av1` (Chromium decodes all four natively — VP8/VP9/AV1 are WebM's
+  native codecs) AND audio is absent or `aac`/`mp3`/`opus`/`vorbis` —
+  `matroska,webm` (`.mkv`) rides that codec table unchanged. Surfaces: gallery
+  `Not playable` lozenge, whose tooltip names the remedy (`<CODEC> is not
+  decodable in this app — use "Re-encode (x264)" in the Tools panel`, or the
+  reason-only `MPEG-TS is not demuxable in this app`), and the SlideMode inline
+  banner `<Reason> — not playable here` (Reason = the probed codec, or
+  `MPEG-TS`), whose body quotes the same remedy. Both are text-only. The web
+  build shows `Not playable in this browser` with no write affordance.
+- **One line of job code** — the single `Re-encode (x264)` button calls
+  `mediaQueueStore.enqueue(file, 'reencode-x264')`, exactly like its siblings;
+  the unplayable surfaces add no enqueue call of their own; because the job is
+  the same one, queue progress, cancel, tag copy, auto-open, and the Keep prompt
+  come free. The NVENC-only loud-failure contract is inherited unchanged —
+  no NVENC means a `Failed` row, never a software fallback — and the original
+  `.mov`/`.mkv`/`.ts` is never modified.
+- **Sidecar streaming** — `/original` and `/preview` take their `Content-Type`
+  from `VIDEO_FORMAT_MIME` (`src/server/routes/images.ts`): `video/x-matroska`,
+  `video/mp2t`, `video/quicktime`, `video/mp4`, `video/webm`, `video/ogg`. It is
+  deliberately a second map beside the raster-only `webMimeType`, so image
+  endpoints never hand out a video and `/thumb` never extracts a video frame
+  (`501` for `mkv`/`ts`, as for `mov`). A `.ts` original streams with the
+  correct type but renders as the existing gallery placeholder: video tiles are
+  `<video>` elements (`ImageLoader.needsThumbnail` is false for every recognized
+  video extension), so no frame is ever extracted and Chromium simply cannot
+  paint MPEG-TS.
+
+See [reencode-x264.md](reencode-x264.md) (§MOV, MKV and TS files, the
+probed-codec badge, and the unplayable banner) for the codec/container table
+and the full feature doc.
+
 ---
 
 ## Related
@@ -461,6 +521,7 @@ See [rotate-video.md](rotate-video.md), INV-030, and INV-032 for the full featur
 - [Compress & Normalize Audio](normalize-audio.md) — the second worked example confirming layers 3–6 are reusable
 - [Create Clip](create-clip.md) — the third worked example, introducing pre-input args and per-invocation parameters
 - [Rotate CW / Rotate CCW](rotate-video.md) — the fifth/sixth consumers; the simplest tool (static spec only, no preInputArgs, no clip payload, no handler branch)
+- [Re-encode (x264)](reencode-x264.md) §MOV, MKV and TS files — the probed-codec badge, the codec + container → playability table, and the NVENC-only contract the unplayable banner points the user at
 - [Personal Fork Notes](personal-fork-notes.md) — bundled binaries and licensing
 - INV-018 — original investigation, behavioral spec, and design rejections
 - INV-020 — Compress & Normalize Audio investigation and the parameterized media-job stack

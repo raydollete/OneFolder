@@ -89,6 +89,7 @@ const ImageTools = observer(({ file }: ImageToolsProps) => {
             >
               {IconSet.PLAY}Re-encode (x264)
             </button>
+
             <button
               onClick={() => mediaQueueStore.enqueue(file, 'normalize-audio')}
               title="Compress dynamic range, then normalize loudness (ffmpeg acompressor + loudnorm)"

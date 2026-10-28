@@ -17,7 +17,22 @@ import os from 'os';
 import fse from 'fs-extra';
 import { execFileSync } from 'child_process';
 
-const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+const spawnCalls: Array<{ cmd: string; args: string[]; opts?: object }> = [];
+// Controllable stdout/exit code for probeFirstVideoCodec calls (identified by
+// `-of json` in argv — the video probe carries NO -select_streams); tests set these before each call.
+const videoProbe = { stdout: '', exitCode: 0 };
+
+// Builds ffprobe `-of json` shaped stdout for the probeFirstVideoCodec mock: format.format_name
+// is the container fact ('mpegts', 'matroska,webm', …) and streams[] carries the codec pairs.
+function videoProbeJson(
+  formatName: string | null,
+  streams: Array<{ codec_type: string; codec_name: string }>,
+): string {
+  return JSON.stringify({
+    streams,
+    format: formatName === null ? { filename: '/videos/source.mkv' } : { filename: '/videos/source.mkv', format_name: formatName },
+  });
+}
 
 jest.mock('child_process', () => {
   const real = jest.requireActual<typeof import('child_process')>('child_process');
@@ -25,7 +40,7 @@ jest.mock('child_process', () => {
     ...real,
     spawn: (cmd: string, args: string[], opts?: object) => {
       if (cmd === '/fake/ffmpeg' || cmd === '/fake/ffprobe') {
-        spawnCalls.push({ cmd, args: args ?? [] });
+        spawnCalls.push({ cmd, args: args ?? [], opts });
         const { EventEmitter: EE } = require('events') as typeof import('events');
         const proc = new EE() as NodeJS.EventEmitter & {
           stdout: InstanceType<typeof EE>;
@@ -37,10 +52,31 @@ jest.mock('child_process', () => {
         proc.pid = 99999;
         // For probeFirstAudioCodec calls (identified by '-select_streams' + 'a:0' in argv),
         // emit a codec name line on stdout so the { kind: 'codec' } path is exercised.
-        // All other fake invocations emit close 0 with no stdout (probeDuration returns undefined).
+        // For probeFirstVideoCodec calls (identified by `-of json` in argv — the audio
+        // probe keeps the legacy nokey/noprint format, so json is the discriminator;
+        // the video probe deliberately carries NO -select_streams: repeated selectors
+        // clobber on the bundled ffprobe), emit the controllable videoProbe.stdout —
+        // a `-of json` document with a format section and a streams array — and close
+        // with videoProbe.exitCode so every branch (codec / no-video / error) can be
+        // exercised. All other fake invocations emit close 0 with no stdout
+        // (probeDuration returns undefined).
+        const isVideoProbe =
+          cmd === '/fake/ffprobe' &&
+          args.includes('-of') &&
+          args[args.indexOf('-of') + 1] === 'json';
         const isAudioProbe =
-          cmd === '/fake/ffprobe' && args.includes('-select_streams') && args.includes('a:0');
+          !isVideoProbe &&
+          cmd === '/fake/ffprobe' &&
+          args.includes('-select_streams') &&
+          args.includes('a:0');
         setImmediate(() => {
+          if (isVideoProbe) {
+            if (videoProbe.stdout !== '') {
+              proc.stdout.emit('data', Buffer.from(videoProbe.stdout));
+            }
+            proc.emit('close', videoProbe.exitCode);
+            return;
+          }
           if (isAudioProbe) {
             proc.stdout.emit('data', Buffer.from('aac\n'));
           }
@@ -54,6 +90,70 @@ jest.mock('child_process', () => {
 });
 
 const resourcesDir = path.resolve(__dirname, '..', 'resources');
+// ---------------------------------------------------------------------------
+// NVENC GPU pinning (owner 2026-10-27: the workstation GPU is reserved for
+// other workloads — the encoder must default to the consumer GeForce card)
+// ---------------------------------------------------------------------------
+describe('NVENC device pinning', () => {
+  const saved = process.env.ONEFOLDER_NVENC_GPU;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ONEFOLDER_NVENC_GPU;
+    else process.env.ONEFOLDER_NVENC_GPU = saved;
+    spawnCalls.length = 0;
+  });
+
+  it('prefers the first GeForce card over a workstation GPU listed first', () => {
+    const { pickPreferredGpuUuid } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const csv =
+      'GPU-aaaa, NVIDIA RTX PRO 6000 Blackwell Workstation Edition\n' +
+      'GPU-bbbb, NVIDIA GeForce RTX 5060 Ti\n';
+    expect(pickPreferredGpuUuid(csv)).toBe('GPU-bbbb');
+  });
+
+  it('matches GeForce case-insensitively', () => {
+    const { pickPreferredGpuUuid } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    expect(pickPreferredGpuUuid('GPU-X, nVIDIA GEFORCE RTX 3060')).toBe('GPU-X');
+  });
+
+  it('returns undefined when no GeForce exists (default device is correct)', () => {
+    const { pickPreferredGpuUuid } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    expect(
+      pickPreferredGpuUuid('GPU-a, NVIDIA RTX PRO 6000\nGPU-b, NVIDIA RTX 6000 Ada\n'),
+    ).toBeUndefined();
+    expect(pickPreferredGpuUuid('garbage without commas')).toBeUndefined();
+    expect(pickPreferredGpuUuid('')).toBeUndefined();
+  });
+
+  it('ONEFOLDER_NVENC_GPU override wins and reaches the ffmpeg spawn env', async () => {
+    process.env.ONEFOLDER_NVENC_GPU = 'GPU-TEST-OVERRIDE';
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    await runner.run({ input: '/videos/in.mkv', output: '/videos/out.mp4', args: ['-c:v', 'h264_nvenc'] });
+    const call = spawnCalls.find((c) => c.cmd === '/fake/ffmpeg');
+    expect(call).toBeDefined();
+    const env = (call!.opts as { env?: NodeJS.ProcessEnv }).env;
+    expect(env?.CUDA_VISIBLE_DEVICES).toBe('GPU-TEST-OVERRIDE');
+  });
+
+  it('on this machine (a GeForce host) auto-detection pins the GeForce GPU', async () => {
+    if (!SHIP_FFMPEG_PLATFORMS.has(process.platform)) {
+      return; // no bundled helper host guarantees
+    }
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    await runner.run({ input: '/videos/in.mkv', output: '/videos/out.mp4', args: ['-c:v', 'h264_nvenc'] });
+    const call = spawnCalls.find((c) => c.cmd === '/fake/ffmpeg');
+    const env = (call!.opts as { env?: NodeJS.ProcessEnv }).env;
+    // Dev/CI hosts here carry a GeForce (the operator's workstation does);
+    // the pin must resolve to a GPU UUID, never the reserved default device.
+    expect(env?.CUDA_VISIBLE_DEVICES ?? '').toMatch(/^GPU-/);
+  });
+});
 
 // Platforms for which OneFolder bundles ffmpeg/ffprobe helpers. On these the functional media
 // suite MUST fail loudly (not skip) when the promised binary is absent.
@@ -265,8 +365,251 @@ describe('FfmpegRunner probeFirstAudioCodec', () => {
 });
 
 // ---------------------------------------------------------------------------
+// FfmpegRunner.probeFirstVideoCodec — argv shape + codec/no-video/error
+// ---------------------------------------------------------------------------
+
+describe('FfmpegRunner probeFirstVideoCodec', () => {
+  beforeEach(() => {
+    spawnCalls.length = 0;
+    videoProbe.stdout = '';
+    videoProbe.exitCode = 0;
+  });
+
+  it('spawns ffprobe once with NO -select_streams (repeated selectors clobber), format/stream entries and json output', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    const call = spawnCalls.find((c) => c.cmd === '/fake/ffprobe');
+    expect(call).toBeDefined();
+    const argv = call!.args;
+
+    // Regression (observed with the REAL bundled ffprobe n8.1.3): repeated
+    // -select_streams options CLOBBER each other — only the last survives —
+    // so the v:0 selector vanished, the video stream was invisible, and every
+    // clip was misclassified no-video (all facts NULL, no badge ever). All
+    // streams are selected; the parser picks the first video/first audio.
+    expect(argv.filter((a) => a === '-select_streams')).toHaveLength(0);
+    // ONE -show_entries carrying the container format_name alongside the stream codec fields
+    expect(argv.filter((a) => a === '-show_entries')).toHaveLength(1);
+    expect(argv[argv.indexOf('-show_entries') + 1]).toBe(
+      'format=format_name:stream=codec_type,codec_name',
+    );
+    // JSON output so the format and stream sections parse unambiguously
+    expect(argv.filter((a) => a === '-of')).toHaveLength(1);
+    expect(argv[argv.indexOf('-of') + 1]).toBe('json');
+    // Input is the last arg
+    expect(argv[argv.length - 1]).toBe('/videos/source.mov');
+    // Codecs AND container come from the SAME single spawn — no second ffprobe call
+    expect(spawnCalls.filter((c) => c.cmd === '/fake/ffprobe')).toHaveLength(1);
+    // The mock emits no stdout with exit 0 for video probes → no video stream found
+    expect(result).toEqual({ kind: 'no-video' });
+  });
+
+  it('resolves codec with video, audio AND container formatName for a matroska fixture', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson('matroska,webm', [
+      { codec_type: 'video', codec_name: 'h264' },
+      { codec_type: 'audio', codec_name: 'aac' },
+    ]);
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mkv');
+
+    expect(result).toEqual({
+      kind: 'codec',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      formatName: 'matroska,webm',
+    });
+  });
+
+  it('resolves codec with video, audio AND container formatName for an mpegts fixture', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson('mpegts', [
+      { codec_type: 'video', codec_name: 'h264' },
+      { codec_type: 'audio', codec_name: 'aac' },
+    ]);
+
+    const result = await runner.probeFirstVideoCodec('/videos/clip.ts');
+
+    expect(result).toEqual({
+      kind: 'codec',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      formatName: 'mpegts',
+    });
+  });
+
+  it('resolves codec with null audioCodec for a video-only source', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson('mov,mp4,m4a,3gp,3g2,mj2', [
+      { codec_type: 'video', codec_name: 'hevc' },
+    ]);
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    expect(result).toEqual({
+      kind: 'codec',
+      videoCodec: 'hevc',
+      audioCodec: null,
+      formatName: 'mov,mp4,m4a,3gp,3g2,mj2',
+    });
+  });
+
+  it('resolves codec with null formatName when the format section carries no format_name', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson(null, [
+      { codec_type: 'video', codec_name: 'h264' },
+    ]);
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    expect(result).toEqual({
+      kind: 'codec',
+      videoCodec: 'h264',
+      audioCodec: null,
+      formatName: null,
+    });
+  });
+
+  it('resolves no-video when only an audio stream is emitted', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson('mpegts', [
+      { codec_type: 'audio', codec_name: 'aac' },
+    ]);
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    expect(result).toEqual({ kind: 'no-video' });
+  });
+
+  it('resolves error (NOT no-video) on non-zero exit — INV-032 fail-loud', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = videoProbeJson('matroska,webm', [
+      { codec_type: 'video', codec_name: 'h264' },
+    ]);
+    videoProbe.exitCode = 1;
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    expect(result.kind).toBe('error');
+    expect(result.kind).not.toBe('no-video');
+  });
+
+  it('resolves error (NOT no-video) when exit 0 output is unparseable — INV-032 fail-loud', async () => {
+    const { FfmpegRunner } =
+      require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+    const runner = new FfmpegRunner('/fake/ffmpeg', '/fake/ffprobe');
+    videoProbe.stdout = 'video\nh264\naudio\naac\n';
+
+    const result = await runner.probeFirstVideoCodec('/videos/source.mov');
+
+    expect(result.kind).toBe('error');
+    expect(result.kind).not.toBe('no-video');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MediaJobService — functional encode -> place lifecycle (requires real ffmpeg)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// probeFirstVideoCodec — REAL bundled binary (argv contract regression)
+// ---------------------------------------------------------------------------
+// The mock suite above asserts the argv SHAPE against synthetic fixtures: the
+// old argv (repeated -select_streams v:0 then a:0) passed every mock
+// assertion while the REAL bundled ffprobe (n8.1.3) clobbers repeated
+// selectors — only a:0 survived, video streams were invisible, and every
+// clip in the packaged AppImage was misclassified no-video (all codec facts
+// NULL, no badge/banner ever — the defect the operator observed). These tests
+// pin the probe contract against the binary that actually ships.
+describe('FfmpegRunner probeFirstVideoCodec (real bundled ffprobe)', () => {
+  if (!FFMPEG_AVAILABLE || !binaryExists(ffprobeBin)) {
+    if (SHIP_FFMPEG_PLATFORMS.has(process.platform)) {
+      it(`bundled ffmpeg/ffprobe helpers must exist on ${process.platform} (packaging invariant)`, () => {
+        throw new Error(
+          `[media] Bundled helper missing on ${process.platform}: ${ffmpegBin} / ${ffprobeBin}.`,
+        );
+      });
+    } else {
+      it.skip(`ffmpeg not bundled on ${process.platform}`, () => {
+        /* intentionally empty */
+      });
+    }
+    return;
+  }
+
+  const { FfmpegRunner } =
+    require('../src/media/FfmpegRunner') as typeof import('../src/media/FfmpegRunner');
+  const srcVideo = ['-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10'];
+  const srcAudio = ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'];
+  let tmpDir: string;
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'onefolder-probe-real-'));
+  });
+  afterEach(async () => {
+    await fse.remove(tmpDir);
+  });
+
+  function encode(outFile: string, inputArgs: string[], codecArgs: string[]): string {
+    const out = path.join(tmpDir, outFile);
+    execFileSync(ffmpegBin, ['-y', ...inputArgs, ...codecArgs, out], { stdio: 'ignore' });
+    return out;
+  }
+
+  it('reports h264 + aac + matroska container for a real h264+aac .mkv', async () => {
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+    const mkv = encode(
+      'clip.mkv',
+      [...srcVideo, ...srcAudio],
+      ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest'],
+    );
+    const result = await runner.probeFirstVideoCodec(mkv);
+    expect(result.kind).toBe('codec');
+    if (result.kind === 'codec') {
+      expect(result.videoCodec).toBe('h264');
+      expect(result.audioCodec).toBe('aac');
+      expect(result.formatName).toContain('matroska');
+    }
+  });
+
+  it('reports h264 + aac + mpegts container for a real .ts clip', async () => {
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+    const ts = encode(
+      'clip.ts',
+      [...srcVideo, ...srcAudio],
+      ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-f', 'mpegts'],
+    );
+    const result = await runner.probeFirstVideoCodec(ts);
+    expect(result.kind).toBe('codec');
+    if (result.kind === 'codec') {
+      expect(result.videoCodec).toBe('h264');
+      expect(result.formatName).toBe('mpegts');
+    }
+  });
+
+  it('errors — never no-video — on a non-media file (INV-032 fail-loud)', async () => {
+    const runner = new FfmpegRunner(ffmpegBin, ffprobeBin);
+    const bogus = path.join(tmpDir, 'typescript-source.ts');
+    await fse.writeFile(bogus, 'export const x = 1;');
+    const result = await runner.probeFirstVideoCodec(bogus);
+    expect(result.kind).toBe('error');
+  });
+});
 
 describe('MediaJobService functional encode + place', () => {
   if (!FFMPEG_AVAILABLE) {
@@ -680,6 +1023,9 @@ describe('FfmpegRunner inactivity timeout (INV-038 / TASK-155)', () => {
   beforeEach(() => {
     fakeChildFactories = [];
     killCalls = [];
+    // Skip the async nvidia-smi probe: under fake timers it would delay the
+    // spawn past the test's synchronous mock-data emissions.
+    process.env.ONEFOLDER_NVENC_GPU = 'fake-test-device';
     jest.useFakeTimers();
 
     // Spy on the child_process module's spawn. jest.spyOn wraps the existing
@@ -839,6 +1185,9 @@ describe('FfmpegRunner inactivity timeout (INV-038 / TASK-155)', () => {
       inactivityTimeoutMs,
     });
 
+    // Flush the NVENC-pin await (one microtask) so the spawn — and its
+    // setImmediate emissions — exist before the timer sweep.
+    await Promise.resolve();
     // Fire all timers — child emits progress and closes normally.
     jest.runAllTimers();
     await Promise.resolve();

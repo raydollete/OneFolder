@@ -9,6 +9,8 @@ import platform from 'src/frontend/platform';
 import { usePromise } from 'src/frontend/hooks/usePromise';
 import { isFileExtensionVideo } from 'common/fs';
 import { attachVideoFreezeRecovery } from 'src/frontend/image/videoFreezeRecovery';
+import { derivePlayability } from 'src/frontend/image/playability';
+import { UnplayableBanner } from './UnplayableBanner';
 import { Button, IconSet, Split } from 'widgets';
 import { UpscaleMode } from '../../../stores/UiStore';
 import Inspector from '../../Inspector';
@@ -573,44 +575,59 @@ const ZoomableImage: React.FC<ZoomableImageProps> = observer(
 
       // Alternative case for videos
       if (isFileExtensionVideo(file.extension)) {
+        // Verdict derived from STORED codec/container facts only
+        // (support-mov-playback, support-mkv-ts-playback); unprobed/error rows
+        // never get the banner — never badge an unknown.
+        const isUnplayable =
+          derivePlayability(file.videoCodec, file.audioCodec, file.formatName) === 'unplayable';
         return (
-          <ZoomPan
-            position="center"
-            initialScale="fit"
-            mediaType="video"
-            doubleTapBehavior="zoomOrReset"
-            imageDimension={dimension}
-            containerDimension={createDimension(width, height)}
-            minScale={minScale}
-            maxScale={5}
-            transitionStart={transitionStart}
-            transitionEnd={transitionEnd}
-            onClose={onClose}
-            upscaleMode={upscaleMode}
-          >
-            {(props) => (
-              <video
-                {...props}
-                // Key by the media resource so React REMOUNTS the element when the file changes
-                // (e.g. the source -> freshly-encoded-output swap after a media job). Without a
-                // key, React reuses the same already-playing <video> and only mutates `src`, which
-                // a buffered/looping element does not reliably reload — it keeps presenting the
-                // previous file. This is most visible for Compress & Normalize Audio, whose output
-                // has identical video frames (-c:v copy), so a stale element looks exactly like the
-                // original. Remounting guarantees a fresh load of the new file. (INV-026 follow-up)
-                key={file.absolutePath}
-                ref={setSlideVideoRef}
-                src={platform.encodeFilePath(src)}
-                width={dimension[0]}
-                height={dimension[1]}
-                controls
-                autoPlay
-                loop
-                muted={uiStore.videoMuted}
-                onVolumeChange={(e) => uiStore.setVideoMuted(e.currentTarget.muted)}
-              />
+          <>
+            <ZoomPan
+              position="center"
+              initialScale="fit"
+              mediaType="video"
+              doubleTapBehavior="zoomOrReset"
+              imageDimension={dimension}
+              containerDimension={createDimension(width, height)}
+              minScale={minScale}
+              maxScale={5}
+              transitionStart={transitionStart}
+              transitionEnd={transitionEnd}
+              onClose={onClose}
+              upscaleMode={upscaleMode}
+            >
+              {(props) => (
+                <video
+                  {...props}
+                  // Key by the media resource so React REMOUNTS the element when the file changes
+                  // (e.g. the source -> freshly-encoded-output swap after a media job). Without a
+                  // key, React reuses the same already-playing <video> and only mutates `src`, which
+                  // a buffered/looping element does not reliably reload — it keeps presenting the
+                  // previous file. This is most visible for Compress & Normalize Audio, whose output
+                  // has identical video frames (-c:v copy), so a stale element looks exactly like the
+                  // original. Remounting guarantees a fresh load of the new file. (INV-026 follow-up)
+                  key={file.absolutePath}
+                  ref={setSlideVideoRef}
+                  src={platform.encodeFilePath(src)}
+                  width={dimension[0]}
+                  height={dimension[1]}
+                  controls
+                  autoPlay
+                  loop
+                  muted={uiStore.videoMuted}
+                  onVolumeChange={(e) => uiStore.setVideoMuted(e.currentTarget.muted)}
+                />
+              )}
+            </ZoomPan>
+            {isUnplayable && (
+              // Inline disclosure, not a blocking overlay: the <video> stays
+              // mounted behind it. The banner names the remedy — the Tools
+              // panel's existing Re-encode (x264) tool — and offers no
+              // duplicate write button of its own (owner decision
+              // 2026-10-27); the web build shows the explanation only.
+              <UnplayableBanner file={file} />
             )}
-          </ZoomPan>
+          </>
         );
       }
 

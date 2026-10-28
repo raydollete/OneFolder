@@ -1,7 +1,7 @@
 ---
 title: Re-encode (x264) Feature
 author: @rjdollete
-last_updated: 2026-06-22
+last_updated: 2026-10-27
 scope: feature
 ---
 
@@ -44,11 +44,130 @@ adds a row to the media queue drawer where the user can review and keep the resu
 5. If the encode fails, the drawer row shows `Failed` (clicking the status
    reveals the ffmpeg stderr tail); actions become `[Retry] [Dismiss]`.
 
-**Tool scope:** the button is shown only for files where
-`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, and
-`ogg` (the three formats the HTML5 `<video>` player can render in SlideMode).
+**Tool scope:** the video tools are shown only for files where
+`isFileExtensionVideo(file.extension)` is true — currently `mp4`, `webm`, `ogg`,
+`mov`, `mkv`, and `ts` (the recognized video containers; the HTML5 `<video>`
+player renders those whose container Chromium can demux *and* whose codecs it can
+decode — see the codec table below). Every recognized video file gets the same
+Tools section, `Re-encode (x264)` included: playability never gates a button.
 For any other file type the Tools section shows the neutral caption "No tools
 available for this file type."
+
+---
+
+## MOV, MKV and TS files, the probed-codec badge, and the unplayable banner
+
+`.MOV` (Apple QuickTime container) is ingested as a recognized video file:
+`mov` sits in `IMG_EXTENSIONS` (`src/api/file.ts`) and in the single
+authoritative predicate `isFileExtensionVideo` (`common/fs.ts`). Extension
+recognition is a **file-discovery trigger only — never a playability test**:
+a QuickTime file may carry H.264 (plays fine) or HEVC/ProRes/PCM audio (the
+`<video>` element cannot decode them).
+
+`.MKV` (Matroska) and `.TS` (MPEG-TS) ride the identical lane: `mkv` and `ts`
+joined `IMG_EXTENSIONS` (`src/api/file.ts`) and `isFileExtensionVideo`
+(`common/fs.ts`), so they are watched, ingested, listed, media-type filtered,
+hovered, and opened exactly like `mp4`/`webm`/`ogg`/`mov`. The same rule holds —
+extension is a discovery trigger, never a playability test — but the two
+containers differ in what the probe may conclude: Matroska is demuxable by
+Chromium, so an `.mkv` verdict comes from its codecs (`h264`, `vp8`, `vp9`,
+`av1` play; HEVC/ProRes do not); MPEG-TS is not demuxable by Chromium at all,
+so a `.ts` **with a probed video stream** is never playable no matter how
+healthy its codec strings look — a perfectly healthy `vp9` inside an MPEG-TS
+container is still not playable.
+
+**Codec triage (facts, not verdicts).** After a location load, the desktop
+main process runs a low-priority background pass
+(`src/ipc/videoProbePass.ts`, `PROBE_VIDEO_CODECS` IPC) that ffprobes each
+recognized-video file's first video stream, first audio stream, **and
+container** from ONE spawn (`FfmpegRunner.probeFirstVideoCodec`: `-show_entries
+format=format_name:stream=codec_type,codec_name -of json`) and stores the raw
+facts in the nullable `videoCodec`/`audioCodec`/`formatName` columns plus a
+`codecVersion` probe stamp (`MOV_CODEC_VERSION:size:mtimeMs`; schema migrations
+v2 and v3, `src/backend/sqlite-config.ts`). `MOV_CODEC_VERSION` stayed at 1 for
+the container fact: no existing row's verdict depends on it, so a bump would
+re-probe healthy rows for zero verdict change. A file whose stamp still matches
+its live size+mtime spawns nothing; an ffprobe failure is logged loudly and the
+row stays NULL — **a probe error is never presented as "not playable"**. The
+read-only web sidecar never probes or writes; it renders badges from the
+columns the desktop app persisted.
+
+**Playability derivation** (`src/frontend/image/playability.ts`, evaluated at
+render time so a codec-table change re-derives without re-probing; the three
+stored facts are passed together —
+`derivePlayability(videoCodec, audioCodec, formatName)`):
+
+| Stored facts (`videoCodec`, `audioCodec`, `formatName`) | Derived verdict |
+|---|---|
+| No probed video stream — NULL/blank `videoCodec`: pass pending, probe errored, or ffprobe reported no video stream (**includes a TypeScript source named `.ts`**) | unprobed — **no badge, no banner, ever** |
+| `formatName` containing `mpegts` (`.ts`) **and** a probed video stream | **Not playable** — regardless of codec names (Chromium ships no MPEG-TS demuxer), `vp9` included: the container rule wins |
+| `matroska,webm` (`.mkv`) — or any other container — with video `h264`, `vp8`, `vp9`, or `av1` + audio absent, `aac`, `mp3`, `opus`, or `vorbis` | playable |
+| Video `hevc` (the modern iPhone MOV/MKV default), `prores`, or any other codec | **Not playable** |
+| Any video + audio `pcm_s16le`, `ac-3`, `flac`, or any other codec | **Not playable** |
+
+VP8/VP9/AV1 join H.264 as the playable video codecs: they are WebM's native
+codecs and Chromium decodes all three natively, so a `vp9` clip is badge-free.
+They were missing from the first cut of this table, which badged a playing VP9
+clip `VP9 — not playable here` (operator observation, 2026-10-27).
+
+Evaluation order is fixed and is the reason a folder of TypeScript sources
+survives `.ts` becoming a recognized video extension: the **unprobed gate is
+evaluated first**, so the container rule can only ever badge a file whose video
+stream ffprobe actually confirmed. The derivation is pure and reads stored facts
+only — never the extension or filename — so the desktop renderer and the
+read-only sidecar render identical badges.
+
+**Surfaces** (one vocabulary everywhere):
+
+- Gallery tile: amber **`Not playable`** lozenge over the thumbnail corner, with
+  a tooltip naming the reason — `<CODEC> is not decodable in this app — use
+  "Re-encode (x264)" in the Tools panel` for a codec-driven verdict, or the
+  reason-only `MPEG-TS is not demuxable in this app` for the container-driven
+  verdict. A `.ts` tile renders the app's existing
+  **placeholder**: tiles for recognized video are `<video>` elements and video
+  files never request a thumbnail (`ImageLoader.needsThumbnail` is false for
+  them), so nothing extracts an MPEG-TS frame — the element fails and the tile
+  falls to its placeholder path. Hover-playback, selection, and the media-type
+  filter are unchanged.
+- SlideMode: an **inline banner** (the `<video>` element stays mounted) titled
+  `<Reason> — not playable here`, where Reason is the probed codec (`HEVC`,
+  `ProRes`, …) or `MPEG-TS` for the container-driven verdict — there the banner
+  names the container and never a codec. The banner is **text-only**: the body
+  names the remedy rather than duplicating it — `<Cause>. Use "Re-encode
+  (x264)" in the Tools panel to create a playable H.264 .mp4 copy next to the
+  original — the original is never modified.`, where Cause is `<Codec> is not
+  decodable in this app` or `MPEG-TS is not demuxable in this app`. It offers
+  no button of its own.
+- Inspector **Tools** section: one remediation affordance, the pre-existing
+  **`Re-encode (x264)`** button — the gallery badge's and the banner's shared
+  path to action. The Tools section is identical for playable and unplayable
+  clips: no button appears or disappears with the verdict.
+- Read-only web build: the banner states `Not playable in this browser` — the
+  explanation only, with **no button and no remedy line**, because the sidecar
+  never offers a write affordance it cannot perform and never converts. The
+  sidecar does stream video: `/original` and `/preview` resolve `Content-Type` from
+  `VIDEO_FORMAT_MIME` (`src/server/routes/images.ts`) once the raster-only
+  `webMimeType` misses — `mkv` → `video/x-matroska`, `ts` → `video/mp2t`,
+  `mov` → `video/quicktime`, `mp4` → `video/mp4`, `webm` → `video/webm`,
+  `ogg` → `video/ogg`. `webMimeType` itself stays raster-only, so the image
+  endpoints never hand out a video and `/thumb` has no video path at all. A
+  `.ts` original therefore reaches the browser with the correct type; painting
+  it is Chromium's limitation, which is why the tile shows the placeholder
+  rather than a still.
+
+**The remedy is this tool.** `Re-encode (x264)` enqueues the EXISTING
+`reencode-x264` job through the same media-job IPC the Tools section already
+uses — auto-incremented `.mp4` sibling, ffprobe-driven audio decision, tag
+copy to DB + XMP, drawer progress with Cancel, auto-open of the output, and
+the Keep New / Keep Original / Keep Both prompt, all unchanged. The job has no
+input-extension gate, so `.MOV`, `.MKV`, and `.TS` sources enqueue identically,
+and the output is always `.mp4` — the container Chromium accepts. It inherits
+this feature's **NVENC-only contract verbatim**: no NVIDIA GPU means the
+drawer shows a `Failed` row with the ffmpeg stderr tail — there is **no
+software-encode fallback** (INV-032). There is **no auto-conversion**
+anywhere: the original `.MOV`/`.MKV`/`.TS` is never modified or deleted by this
+feature; conversion is opt-in per clip and the Keep prompt is the
+storage-growth control.
 
 ---
 
@@ -73,7 +192,7 @@ first audio stream (see Audio Handling below):
 |---|---|
 | `-hide_banner` | Suppress the ffmpeg version/config banner on stderr |
 | `-i <input>` | Source file |
-| `-c:v h264_nvenc` | Re-encode video with NVIDIA NVENC H.264; requires an NVIDIA GPU; **no software fallback** — fails loudly if NVENC is unavailable |
+| `-c:v h264_nvenc` | Re-encode video with NVIDIA NVENC H.264; requires an NVIDIA GPU; **no software fallback** — fails loudly if NVENC is unavailable. On multi-GPU machines the encoder is pinned to the first **GeForce** card (workstation GPUs such as an RTX PRO are typically reserved for other workloads with their VRAM committed — encoding there crawls); no GeForce found → ffmpeg's default device; override with `ONEFOLDER_NVENC_GPU` (a CUDA_VISIBLE_DEVICES value: GPU UUID or index) (`FfmpegRunner.nvencDeviceEnv`) |
 | `-preset p7` | Slowest/best-quality NVENC preset |
 | `-tune hq` | High-quality NVENC tuning mode |
 | `-cq 21` | Constant-quality target (lower = better; 21 is visually transparent) |

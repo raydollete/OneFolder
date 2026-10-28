@@ -1,6 +1,8 @@
 export type OrderBy<T> =
   | {
-      [K in keyof T]: K extends string ? K : never;
+      // `-?` strips optional modifiers: an optional property (e.g. FileDTO.videoCodec)
+      // would otherwise fold `undefined` into the key union.
+      [K in keyof T]-?: K extends string ? K : never;
     }[keyof T]
   | 'random'
   | 'tagCountRandom';

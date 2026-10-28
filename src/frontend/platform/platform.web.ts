@@ -36,6 +36,8 @@ import type {
   MediaJobProgressMessage,
   MediaJobStartResult,
   MediaJobCommitResult,
+  VideoProbeCandidate,
+  VideoProbeUpdate,
   DeleteLibraryAndFilesResult,
   LibraryDiskPaths,
   WindowSystemButtonPress,
@@ -743,6 +745,14 @@ const desktop: PlatformDesktop = {
   },
   cancelMediaJob(_jobId: string): void {
     noOp();
+  },
+  // Desktop-only background codec probe (support-mov-playback): the sidecar
+  // neither spawns ffprobe nor writes the DB — the web UI never calls this
+  // (callers guard on IS_WEB_BUILD); the reject is the loud seam contract.
+  probeVideoCodecs(_candidates: VideoProbeCandidate[]): Promise<VideoProbeUpdate[]> {
+    return Promise.reject(
+      new Error('[platform.web] probeVideoCodecs: not supported in the read-only web build'),
+    );
   },
 };
 

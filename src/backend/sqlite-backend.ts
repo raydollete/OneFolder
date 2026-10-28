@@ -69,6 +69,12 @@ interface FileRow {
   dateCreated: string;
   dateLastIndexed: string;
   annotations: string;
+  // Probed codec facts (change: support-mov-playback). NULL = never probed.
+  videoCodec: string | null;
+  audioCodec: string | null;
+  codecVersion: string | null;
+  // ffprobe container format_name (change: support-mkv-ts-playback). NULL = never probed.
+  formatName: string | null;
   // populated by GROUP_CONCAT in queries that join file_tags
   tagIds?: string | null;
 }
@@ -127,7 +133,9 @@ interface VisualHashRow {
  * Converts a SQLite file row (ISO date strings, comma-separated tagIds) to
  * the FileDTO that the rest of the application expects.
  */
-function fileRowToDTO(row: FileRow): FileDTO {
+// Exported for tests/sqlite-codec-migration.test.ts (round-trip against
+// node:sqlite — better-sqlite3 is Electron-ABI, unloadable in jest).
+export function fileRowToDTO(row: FileRow): FileDTO {
   return {
     id: row.id,
     ino: row.ino,
@@ -144,6 +152,10 @@ function fileRowToDTO(row: FileRow): FileDTO {
     dateCreated: new Date(row.dateCreated),
     dateLastIndexed: new Date(row.dateLastIndexed),
     annotations: row.annotations,
+    videoCodec: row.videoCodec,
+    audioCodec: row.audioCodec,
+    codecVersion: row.codecVersion,
+    formatName: row.formatName,
     tags: row.tagIds ? row.tagIds.split(',') : [],
   };
 }
@@ -152,7 +164,7 @@ function fileRowToDTO(row: FileRow): FileDTO {
  * Converts a FileDTO into the column values used when writing to the files
  * table. Tags are excluded — they live in file_tags and are handled separately.
  */
-function fileDTOToRow(dto: FileDTO): Omit<FileRow, 'tagIds'> {
+export function fileDTOToRow(dto: FileDTO): Omit<FileRow, 'tagIds'> {
   return {
     id: dto.id,
     ino: dto.ino,
@@ -169,6 +181,10 @@ function fileDTOToRow(dto: FileDTO): Omit<FileRow, 'tagIds'> {
     dateCreated: dto.dateCreated.toISOString(),
     dateLastIndexed: dto.dateLastIndexed.toISOString(),
     annotations: dto.annotations,
+    videoCodec: dto.videoCodec ?? null,
+    audioCodec: dto.audioCodec ?? null,
+    codecVersion: dto.codecVersion ?? null,
+    formatName: dto.formatName ?? null,
   };
 }
 
@@ -247,16 +263,37 @@ function visualHashRowToDTO(row: VisualHashRow): VisualHashDTO {
  * all tag IDs from the file_tags junction table into a comma-separated string
  * that fileRowToDTO() splits back into an array.
  */
-const FILE_SELECT = `
+export const FILE_SELECT = `
   SELECT
     f.id, f.ino, f.locationId, f.relativePath, f.absolutePath,
     f.name, f.extension, f.size, f.width, f.height,
     f.dateAdded, f.dateModified, f.dateCreated, f.dateLastIndexed,
     f.annotations,
+    f.videoCodec, f.audioCodec, f.codecVersion,
+    f.formatName,
     GROUP_CONCAT(ft.tagId) AS tagIds
   FROM files f
   LEFT JOIN file_tags ft ON f.id = ft.fileId
 `;
+
+/**
+ * Column/value lists shared by the two file INSERT sites (the constructor's
+ * hot-path insert and saveFiles' upsert) so the codec and container columns can
+ * never drift between them. Exported for tests/sqlite-codec-migration.test.ts,
+ * which runs the real SQL against node:sqlite.
+ */
+const FILE_INSERT_COLUMNS = `(id, ino, locationId, relativePath, absolutePath, name, extension, size,
+         width, height, dateAdded, dateModified, dateCreated, dateLastIndexed, annotations,
+         videoCodec, audioCodec, codecVersion,
+         formatName)`;
+const FILE_INSERT_VALUES = `(@id, @ino, @locationId, @relativePath, @absolutePath, @name, @extension, @size,
+         @width, @height, @dateAdded, @dateModified, @dateCreated, @dateLastIndexed, @annotations,
+         @videoCodec, @audioCodec, @codecVersion,
+         @formatName)`;
+/** Plain INSERT — used by createFilesFromPath for files known to be new. */
+export const FILE_INSERT = `INSERT INTO files ${FILE_INSERT_COLUMNS} VALUES ${FILE_INSERT_VALUES}`;
+/** INSERT OR REPLACE — used by saveFiles. */
+export const FILE_UPSERT = `INSERT OR REPLACE INTO files ${FILE_INSERT_COLUMNS} VALUES ${FILE_INSERT_VALUES}`;
 
 const FILE_GROUP_BY = 'GROUP BY f.id';
 
@@ -429,14 +466,7 @@ export default class SQLiteBackend implements DataStorage {
 
     // Prepare hot-path statements at construction time so that SQLite compiles
     // each query plan only once rather than on every call.
-    this.#stmtInsertFile = db.prepare(`
-      INSERT INTO files
-        (id, ino, locationId, relativePath, absolutePath, name, extension, size,
-         width, height, dateAdded, dateModified, dateCreated, dateLastIndexed, annotations)
-      VALUES
-        (@id, @ino, @locationId, @relativePath, @absolutePath, @name, @extension, @size,
-         @width, @height, @dateAdded, @dateModified, @dateCreated, @dateLastIndexed, @annotations)
-    `);
+    this.#stmtInsertFile = db.prepare(FILE_INSERT);
 
     this.#stmtDeleteFileTagsByFileId = db.prepare('DELETE FROM file_tags WHERE fileId = ?');
 
@@ -468,7 +498,9 @@ export default class SQLiteBackend implements DataStorage {
     const tagCount = (db.prepare('SELECT COUNT(*) AS cnt FROM tags').get() as { cnt: number }).cnt;
     if (tagCount === 0) {
       db.prepare(
-        `INSERT INTO tags (id, name, dateAdded, color, subTags, isHidden)
+        // OR IGNORE: two renderer windows boot concurrently and both may see an
+        // empty tags table; the second insert of the root tag must not throw.
+        `INSERT OR IGNORE INTO tags (id, name, dateAdded, color, subTags, isHidden)
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).run(ROOT_TAG_ID, 'Root', new Date().toISOString(), '', '[]', 0);
     }
@@ -761,14 +793,7 @@ export default class SQLiteBackend implements DataStorage {
   async saveFiles(files: FileDTO[]): Promise<void> {
     console.info('SQLite: Saving files...', files.length);
 
-    const upsertStmt = this.#db.prepare(`
-      INSERT OR REPLACE INTO files
-        (id, ino, locationId, relativePath, absolutePath, name, extension, size,
-         width, height, dateAdded, dateModified, dateCreated, dateLastIndexed, annotations)
-      VALUES
-        (@id, @ino, @locationId, @relativePath, @absolutePath, @name, @extension, @size,
-         @width, @height, @dateAdded, @dateModified, @dateCreated, @dateLastIndexed, @annotations)
-    `);
+    const upsertStmt = this.#db.prepare(FILE_UPSERT);
 
     const saveAll = this.#db.transaction((filesToSave: FileDTO[]) => {
       for (const file of filesToSave) {

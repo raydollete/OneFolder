@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain, WebContents } from 'electron';
+import { PROBE_VIDEO_CODECS, VideoProbeCandidate, VideoProbeUpdate } from './messages';
 import {
   ADD_TAGS_TO_FILE,
   CLEAR_DATABASE,
@@ -258,4 +259,15 @@ export class MainMessenger {
    */
   static onCommitMediaJob = (cb: (jobId: string) => Promise<MediaJobCommitResult>) =>
     ipcMain.handle(COMMIT_MEDIA_JOB, (_, jobId: string) => cb(jobId));
+
+  /**
+   * Register the handler for PROBE_VIDEO_CODECS invoke calls (support-mov-playback).
+   * The renderer offers recognized-video candidates after a location load; main runs
+   * the low-priority probe pass (see src/ipc/videoProbePass.ts) and resolves with
+   * only the rows whose codecs changed. Errors are logged there, never thrown here:
+   * a failed probe must leave its row unprobed, not fail the pass.
+   */
+  static onProbeVideoCodecs = (
+    cb: (candidates: VideoProbeCandidate[]) => Promise<VideoProbeUpdate[]>,
+  ) => ipcMain.handle(PROBE_VIDEO_CODECS, (_, candidates: VideoProbeCandidate[]) => cb(candidates));
 }
