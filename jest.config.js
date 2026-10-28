@@ -9,6 +9,7 @@ module.exports = {
     'fake-indexeddb/auto',
     // Crypto module is not stable in the node version we use, nor can we use the browser.
     '<rootDir>/tests/setup/jest.crypto.js',
+    '<rootDir>/tests/setup/globals.js',
   ],
   transform: {
     // Enable esModuleInterop so that `import foo from 'bar'` works for CommonJS

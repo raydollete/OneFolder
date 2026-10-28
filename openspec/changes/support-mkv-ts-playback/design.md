@@ -25,15 +25,15 @@ Rejected pattern: per-container bespoke UI (e.g. a separate "container not suppo
 - "Not playable" lozenge (gallery tile) — governs: visibility of unplayable clips before opening
   ON:  (derived verdict = unplayable — a probed file whose container fact is `mpegts`, or whose codecs are outside the Chromium-decodable table incl. `.mkv` with HEVC) amber lozenge with tooltip stating the reason (codec name, or `MPEG-TS` for the container case); hover-playback and selection otherwise unchanged
   OFF: (playable / unprobed / error / no probed video stream — incl. every not-yet-probed `.ts` and TypeScript-source `.ts`) no lozenge; tile renders exactly as today
-- "Create playable copy" button (SlideMode banner + inspector Tools section) — governs: enqueueing the re-encode job
-  ON:  (verdict = unplayable, desktop build) inline banner with explanation + button; click enqueues reencode-x264 (same job, produces the .mp4 sibling), drawer progress with cancel, output auto-opens, Keep prompt unchanged
-  OFF: (playable, or web build) no banner, no button — sidecar is read-only
+- Remediation affordance: the pre-existing inspector Tools **`Re-encode (x264)`** button — governs: enqueueing the re-encode job (owner decision 2026-10-27, recorded on tasks 1.6/1.9: the separate `Create playable copy` button was removed as a duplicate of it; the banner is text-only and names this tool). The Tools section is identical for playable and unplayable clips — surfaces are verdict-gated, no button is.
+  ON:  (verdict = unplayable, desktop build) inline text-only banner with explanation pointing at `Re-encode (x264)` in the Tools panel; using that tool enqueues reencode-x264 (same job, produces the .mp4 sibling), drawer progress with cancel, output auto-opens, Keep prompt unchanged
+  OFF: (playable, or web build) no banner; the web sidecar has no write affordance — sidecar is read-only
 
 ### Display strings
 
-- Gallery lozenge: `Not playable` (codec-driven tooltip kept verbatim from the mov lane: `<CODEC> is not decodable in this app — create a playable copy from the player`; container-driven `.ts` tooltip states the reason only, per UI review: `MPEG-TS is not demuxable in this app`)
+- Gallery lozenge: `Not playable` (codec-driven tooltip names the codec and points at the Tools panel's `Re-encode (x264)` — retargeted from the mov lane's 'create a playable copy from the player' wording by the owner decision 2026-10-27: `<CODEC> is not decodable in this app — use "Re-encode (x264)" in the Tools panel`; container-driven `.ts` tooltip states the reason only, per UI review: `MPEG-TS is not demuxable in this app`)
 - SlideMode banner title: `<Reason> — not playable here` where Reason is the probed codec (HEVC, ProRes, …) or `MPEG-TS` for `.ts`
-- Action button (banner and Tools section, identical label): `Create playable copy`
+- Remedy label (banner body text and the Tools button, matching wording): `Re-encode (x264)` — the banner itself carries no button (owner decision 2026-10-27)
 - Web build (verdict unplayable, no action): `Not playable in this browser`
 
 ### Information Hierarchy
@@ -45,8 +45,8 @@ SlideMode video area
 |- video element
 \- inline banner (when unplayable)
    \- codec/container explanation line
-Inspector Tools section (when unplayable file selected)
-\- Create playable copy button
+Inspector Tools section (shown for every recognized video file, not verdict-gated)
+\- Re-encode (x264) button (the sole remediation affordance; owner decision 2026-10-27)
 
 ### Conventions consulted
 

@@ -462,11 +462,13 @@ export class FfmpegRunner {
   }
 
   /**
-   * Probe the codec names of the first video stream (v:0), the first audio stream (a:0) AND
-   * the container identity of `input` with ONE ffprobe spawn — `-select_streams v:0
-   * -select_streams a:0 -show_entries format=format_name:stream=codec_type,codec_name
-   * -of json`. JSON output (instead of the wrapper-stripping default format) so the format
-   * section and the stream section parse unambiguously from the same process; no extra spawn.
+   * Probe the codec names of the first video stream and the first audio stream AND
+   * the container identity of `input` with ONE ffprobe spawn — `-show_entries
+   * format=format_name:stream=codec_type,codec_name -of json`, and deliberately NO
+   * `-select_streams` (repeated selectors clobber on the bundled ffprobe n8.1.3; the
+   * parser below picks the first video and first audio stream). JSON output (instead of
+   * the wrapper-stripping default format) so the format section and the stream section
+   * parse unambiguously from the same process; no extra spawn.
    * Returns a THREE-state result:
    *
    *   { kind: 'codec', videoCodec, audioCodec, formatName } — exit 0 + a video stream found

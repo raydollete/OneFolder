@@ -7,7 +7,7 @@ Two lists, one background probe, codec facts in the DB, one button — all encod
 1. **Ingest**: add `'mov'` to `IMG_EXTENSIONS` (src/api/file.ts:37) and to `isFileExtensionVideo` (common/fs.ts:90); add `mov: 'web'` to `FormatHandlers` (src/frontend/image/ImageLoader.ts:25) and `mov` to the `isVideoFile` regex (common/ExifIO.ts:117). Gallery hover, media-type filter, SlideMode playback/preload/freeze-recovery, and `needsThumbnail` (no thumbnail; `<video>` renders the file directly) follow automatically — the propagation is the declared contract of the single source of truth (common/fs.ts:98-100).
 2. **Triage**: new `FfmpegRunner.probeFirstVideoCodec` modeled on `probeFirstAudioCodec` (src/media/FfmpegRunner.ts:304): ffprobe first-stream `codec_name` for video and audio, four-state result `codec | no-video | error | unprobed`. Runs on a **low-priority background pass** after location load, never synchronously on the load path: for recognized-video files the persisted verdict is refreshed only when the cache key (path + size + mtime) changed, and ffprobe being missing or failing yields `error`/`unprobed` — which NEVER renders as unplayable (fail-loud, logged; the native `<video>` gets its chance). Extension recognition is a file-discovery trigger, not a playability test; playability is a separate derivation from stored codec facts.
 3. **Persistence**: store codec FACTS, not a verdict — nullable `videoCodec`/`audioCodec` columns (ffprobe names) stamped with a `MOV_CODEC_VERSION` constant, via the existing versioned migration array + `PRAGMA user_version` (src/backend/sqlite-config.ts:168, ADD COLUMN precedent :241). Mirrored on `FileDTO` (src/api/file.ts:24), `ClientFile`, and the http-backend DTO mapping so the read-only sidecar gallery renders from the DB (the web build cannot probe locally). Playability = table lookup `codec ∈ {h264} × audio ∈ {aac, mp3, opus, vorbis, none}` evaluated at render time against the current `MOV_CODEC_VERSION`, so a future codec-table change re-derives without re-probing.
-4. **Surfaces**: gallery tile badge (`Not playable` lozenge, tooltip = codec explanation) when the derived verdict is unplayable (mount point src/frontend/containers/ContentView/GalleryItem.tsx:278). SlideMode: an inline banner (not a blocking full-frame overlay) over the letterboxed video area carries the codec explanation; the action button "Create playable copy" — the operator's button on the unplayable clip — sits in the banner AND in the inspector Tools section whenever an unplayable file is selected (the gallery's path to action), enqueuing the EXISTING `reencode-x264` job (src/main.ts:43): temp staging, `-c:a aac` via `decideAudioArgs`, tag copy to DB + XMP, auto-open of the output, Keep/Delete-original prompt, media-queue drawer progress and cancellation — all inherited, zero new encode code. Web build: explanation only, never a write affordance (sidecar is read-only).
+4. **Surfaces**: gallery tile badge (`Not playable` lozenge, tooltip = codec explanation pointing at the Tools tool) when the derived verdict is unplayable (mount point src/frontend/containers/ContentView/GalleryItem.tsx:278). SlideMode: an inline banner (not a blocking full-frame overlay) over the letterboxed video area carries the codec explanation and names the remedy — the inspector Tools section's EXISTING `Re-encode (x264)` button, which is the operator's button on the unplayable clip (owner decision 2026-10-27: no separate `Create playable copy` button; one tool one label, tasks.md 1.6/1.7 discovery) — enqueuing the EXISTING `reencode-x264` job (src/main.ts:44): temp staging, `-c:a aac` via `decideAudioArgs`, tag copy to DB + XMP, auto-open of the output, Keep/Delete-original prompt, media-queue drawer progress and cancellation — all inherited, zero new encode code. Web build: explanation only, never a write affordance (sidecar is read-only).
 5. **No auto-conversion.** The original `.MOV` is never modified or deleted by this feature; conversion is the pre-existing opt-in job, and the Keep/Delete-original prompt is the storage-growth control.
 
 ## UX / Requirements
@@ -24,15 +24,15 @@ Rejected pattern: modal dialog on open — rejected because it interrupts browsi
 - "Not playable" lozenge (gallery tile) — governs: visibility of unplayable clips before opening
   ON:  (derived verdict = unplayable) amber lozenge over the thumbnail corner with tooltip explaining the codec; hover-playback and selection otherwise unchanged
   OFF: (playable / unprobed / error) no lozenge; tile renders exactly as mp4/webm/ogg do today
-- "Create playable copy" button (SlideMode banner + inspector Tools section) — governs: enqueueing the re-encode job
-  ON:  (verdict = unplayable, desktop build) inline banner with codec explanation + button; click enqueues reencode-x264, drawer shows progress with cancel, output auto-opens
-  OFF: (playable, or web build) no banner, no button — sidecar is read-only and NEVER offers a write affordance it cannot perform
+- "Re-encode (x264)" tool (the inspector Tools section's EXISTING button; src/frontend/components/ImageTools.tsx:87) — governs: enqueueing the re-encode job. The SlideMode banner names it as the remedy and carries no duplicate button (owner decision 2026-10-27, one tool one label).
+  ON:  (desktop build, unplayable verdict) inline banner with codec explanation pointing at the tool; the tool click enqueues reencode-x264, drawer shows progress with cancel, output auto-opens
+  OFF: (playable / unprobed / error, or web build) no banner; the sidecar is read-only and NEVER offers a write affordance it cannot perform
 
 ### Display strings
 
-- Gallery lozenge: `Not playable` (tooltip: `HEVC is not decodable in this app — create a playable copy from the player`)
+- Gallery lozenge: `Not playable` (tooltip: `<CODEC> is not decodable in this app — use "Re-encode (x264)" in the Tools panel`; container-driven verdicts state `MPEG-TS is not demuxable in this app`)
 - SlideMode banner title: `HEVC — not playable here` (codec name from the probe: HEVC, ProRes, PCM audio, …)
-- Action button (banner and Tools section, identical label): `Create playable copy`
+- Remedy line (banner body, desktop build): `… Use "Re-encode (x264)" in the Tools panel to create a playable H.264 .mp4 copy next to the original — the original is never modified.` (owner decision 2026-10-27: no separate `Create playable copy` button; the Tools tool is the single label)
 - Web build (verdict unplayable, no action): `Not playable in this browser`
 
 ### Information Hierarchy
@@ -44,8 +44,8 @@ SlideMode video area
 |- video element
 \- inline banner (when unplayable)
    \- codec explanation line
-Inspector Tools section (when unplayable file selected)
-\- Create playable copy button
+Inspector Tools section (existing tools for the selected file)
+\- Re-encode (x264) button (the remedy the banner names)
 
 ### Conventions consulted
 
