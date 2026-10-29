@@ -1,0 +1,14 @@
+- generic [active] [ref=e1]:
+  - heading "Directory listing for /" [level=1] [ref=e2]
+  - separator [ref=e3]
+  - list [ref=e4]:
+    - listitem [ref=e5]:
+      - link "ctrl.mp4" [ref=e6] [cursor=pointer]:
+        - /url: ctrl.mp4
+    - listitem [ref=e7]:
+      - link "film.mkv" [ref=e8] [cursor=pointer]:
+        - /url: film.mkv
+    - listitem [ref=e9]:
+      - link "vp9.mkv" [ref=e10] [cursor=pointer]:
+        - /url: vp9.mkv
+  - separator [ref=e11]

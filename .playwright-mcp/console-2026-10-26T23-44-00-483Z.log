@@ -1,0 +1,30 @@
+[     238ms] [INFO] ImageLoader: tif init... @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     239ms] [INFO] ImageLoader: exr init... @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     239ms] [INFO] ImageLoader: psd init... @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     239ms] [INFO] ImageLoader: heic init... @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     239ms] [WARNING] [LocationStore] could not resolve portable directory; anchors inactive Error: [platform.web] getPath: not available in the web build
+    at Object.getPath (http://127.0.0.1:8791/renderer.bundle.js:2:2927079)
+    at oY.init (http://127.0.0.1:8791/renderer.bundle.js:2:4585748)
+    at ct (http://127.0.0.1:8791/renderer.bundle.js:2:2406611)
+    at oY.init (http://127.0.0.1:8791/renderer.bundle.js:2:2406176)
+    at KY.main (http://127.0.0.1:8791/renderer.bundle.js:2:4619310)
+    at async http://127.0.0.1:8791/renderer.bundle.js:2:4625154
+    at async http://127.0.0.1:8791/renderer.bundle.js:2:4625118 @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     239ms] [INFO] ImageLoader: tif init done @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     251ms] [INFO] ImageLoader: exr init done @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     266ms] [INFO] ImageLoader: psd init done @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     322ms] [INFO] ImageLoader: heic init done @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     322ms] [INFO] Successfully initialized OneFolder! @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     369ms] Error: [HttpBackend] "saveLocation" is not supported in the read-only web build. This backend is intentionally read-only — write operations must not be called from the web SPA (INV-034).
+    at nQ (http://127.0.0.1:8791/renderer.bundle.js:2:4621431)
+    at rQ.saveLocation (http://127.0.0.1:8791/renderer.bundle.js:2:4623895)
+    at oY.save (http://127.0.0.1:8791/renderer.bundle.js:2:4587831)
+    at zf.refreshSublocations (http://127.0.0.1:8791/renderer.bundle.js:2:3332728)
+    at async zf.init (http://127.0.0.1:8791/renderer.bundle.js:2:3331118)
+    at async oY.watchLocations (http://127.0.0.1:8791/renderer.bundle.js:2:4589101)
+[     381ms] [ERROR] [platform.web] encodeFilePath: received an absolute disk path in the web build. All image URLs must be ID-based (/api/original/:id or /api/thumb/:id). Call site must be updated to pass the file ID instead of the absolute path. Offending path: f1 @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     383ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8791/api/original/invalid-path-not-an-id:0
+[     480ms] [ERROR] [platform.web] encodeFilePath: received an absolute disk path in the web build. All image URLs must be ID-based (/api/original/:id or /api/thumb/:id). Call site must be updated to pass the file ID instead of the absolute path. Offending path: f3 @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     480ms] [ERROR] [platform.web] encodeFilePath: received an absolute disk path in the web build. All image URLs must be ID-based (/api/original/:id or /api/thumb/:id). Call site must be updated to pass the file ID instead of the absolute path. Offending path: f2 @ http://127.0.0.1:8791/renderer.bundle.js:1
+[     483ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8791/api/original/invalid-path-not-an-id:0
+[     483ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8791/api/original/invalid-path-not-an-id:0
